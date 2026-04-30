@@ -41,3 +41,4 @@ if(SPATIAL_ENGINE_RT_ASSERTS)
     target_link_libraries(test_p1_rt_no_alloc PRIVATE spe_core)
     add_test(NAME p1_rt_no_alloc COMMAND test_p1_rt_no_alloc)
 endif()
+

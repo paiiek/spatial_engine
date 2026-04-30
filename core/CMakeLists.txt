@@ -35,6 +35,7 @@ endif()
 # --- spe_util ------------------------------------------------------------
 set(SPE_UTIL_SOURCES
     src/util/RtAssertNoAlloc.cpp
+    src/util/ClickDetectorFFT.cpp
 )
 add_library(spe_util STATIC ${SPE_UTIL_SOURCES})
 target_include_directories(spe_util PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -72,6 +73,7 @@ set(SPE_CORE_SOURCES
     src/geometry/SpeakerLayout.cpp
     src/geometry/LayoutLoader.cpp
     src/render/LayoutCompatibilityChecker.cpp
+    src/render/AlgorithmAnalyticReference.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)
