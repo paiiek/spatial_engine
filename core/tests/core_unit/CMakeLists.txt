@@ -100,3 +100,11 @@ add_executable(test_p4_vst3stub test_p4_vst3stub.cpp)
 target_link_libraries(test_p4_vst3stub PRIVATE spe_core)
 add_test(NAME p4_vst3stub COMMAND test_p4_vst3stub)
 
+add_executable(test_p4_flood_valid test_p4_flood_valid.cpp)
+target_link_libraries(test_p4_flood_valid PRIVATE spe_core)
+add_test(NAME p4_flood_valid COMMAND test_p4_flood_valid)
+
+add_executable(test_p4_flood_malformed test_p4_flood_malformed.cpp)
+target_link_libraries(test_p4_flood_malformed PRIVATE spe_core)
+add_test(NAME p4_flood_malformed COMMAND test_p4_flood_malformed)
+
