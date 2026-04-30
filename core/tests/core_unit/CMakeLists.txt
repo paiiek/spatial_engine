@@ -59,3 +59,15 @@ add_executable(test_p3_compat_rules test_p3_compat_rules.cpp)
 target_link_libraries(test_p3_compat_rules PRIVATE spe_core)
 add_test(NAME p3_compat_rules COMMAND test_p3_compat_rules)
 
+add_executable(test_p3_distance_hf test_p3_distance_hf.cpp)
+target_link_libraries(test_p3_distance_hf PRIVATE spe_core)
+add_test(NAME p3_distance_hf COMMAND test_p3_distance_hf)
+
+add_executable(test_p3_gainramp_click test_p3_gainramp_click.cpp)
+target_link_libraries(test_p3_gainramp_click PRIVATE spe_core spe_util)
+add_test(NAME p3_gainramp_click COMMAND test_p3_gainramp_click)
+
+add_executable(test_p3_propdelay_sweep test_p3_propdelay_sweep.cpp)
+target_link_libraries(test_p3_propdelay_sweep PRIVATE spe_core spe_util)
+add_test(NAME p3_propdelay_sweep COMMAND test_p3_propdelay_sweep)
+
