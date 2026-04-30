@@ -96,3 +96,7 @@ add_executable(test_p4_heartbeat_miss test_p4_heartbeat_miss.cpp)
 target_link_libraries(test_p4_heartbeat_miss PRIVATE spe_core)
 add_test(NAME p4_heartbeat_miss COMMAND test_p4_heartbeat_miss)
 
+add_executable(test_p4_vst3stub test_p4_vst3stub.cpp)
+target_link_libraries(test_p4_vst3stub PRIVATE spe_core)
+add_test(NAME p4_vst3stub COMMAND test_p4_vst3stub)
+

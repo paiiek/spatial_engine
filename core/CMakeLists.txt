@@ -83,6 +83,8 @@ set(SPE_CORE_SOURCES
     src/ipc/StateModel.cpp
     src/ipc/HeartbeatPublisher.cpp
     src/ipc/HeartbeatMonitor.cpp
+    src/ipc/OSCBackend.cpp
+    src/ipc/VST3ControlStub.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)
