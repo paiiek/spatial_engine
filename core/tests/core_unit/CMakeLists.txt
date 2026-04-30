@@ -84,3 +84,11 @@ add_executable(test_p4_command_decode test_p4_command_decode.cpp)
 target_link_libraries(test_p4_command_decode PRIVATE spe_core)
 add_test(NAME p4_command_decode COMMAND test_p4_command_decode)
 
+add_executable(test_p4_state_model_seq test_p4_state_model_seq.cpp)
+target_link_libraries(test_p4_state_model_seq PRIVATE spe_core)
+add_test(NAME p4_state_model_seq COMMAND test_p4_state_model_seq)
+
+add_executable(test_p4_reorder_alert test_p4_reorder_alert.cpp)
+target_link_libraries(test_p4_reorder_alert PRIVATE spe_core)
+add_test(NAME p4_reorder_alert COMMAND test_p4_reorder_alert)
+
