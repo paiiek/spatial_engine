@@ -85,6 +85,9 @@ set(SPE_CORE_SOURCES
     src/ipc/HeartbeatMonitor.cpp
     src/ipc/OSCBackend.cpp
     src/ipc/VST3ControlStub.cpp
+    # P5: input chain
+    src/input/FileInput.cpp
+    src/input/SynthInput.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)

@@ -108,3 +108,8 @@ add_executable(test_p4_flood_malformed test_p4_flood_malformed.cpp)
 target_link_libraries(test_p4_flood_malformed PRIVATE spe_core)
 add_test(NAME p4_flood_malformed COMMAND test_p4_flood_malformed)
 
+# P5 tests
+add_executable(test_p5_decoder_underflow test_p5_decoder_underflow.cpp)
+target_link_libraries(test_p5_decoder_underflow PRIVATE spe_core)
+add_test(NAME p5_decoder_underflow COMMAND test_p5_decoder_underflow)
+
