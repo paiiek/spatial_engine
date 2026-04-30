@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "commands": [
+    {
+      "address": "/sys/handshake",
+      "tag": "SysHandshake",
+      "direction": "client_to_engine",
+      "type_tags": ",iii",
+      "args": [
+        {"name": "seq",            "type": "int32"},
+        {"name": "id",             "type": "int32"},
+        {"name": "schema_version", "type": "int32"}
+      ],
+      "description": "Client declares schema version. Engine replies OK or mismatch."
+    },
+    {
+      "address": "/sys/algo_swap",
+      "tag": "SysAlgoSwap",
+      "direction": "client_to_engine",
+      "type_tags": ",iii",
+      "args": [
+        {"name": "seq",  "type": "int32"},
+        {"name": "id",   "type": "int32"},
+        {"name": "algo", "type": "int32", "enum": {"0": "VBAP", "1": "WFS", "2": "DBAP"}}
+      ],
+      "description": "Set engine-wide default rendering algorithm."
+    },
+    {
+      "address": "/sys/reset",
+      "tag": "SysReset",
+      "direction": "client_to_engine",
+      "type_tags": ",ii",
+      "args": [
+        {"name": "seq", "type": "int32"},
+        {"name": "id",  "type": "int32"}
+      ],
+      "description": "Reset all object states to defaults."
+    },
+    {
+      "address": "/obj/move",
+      "tag": "ObjMove",
+      "direction": "client_to_engine",
+      "type_tags": ",iifff",
+      "args": [
+        {"name": "seq",    "type": "int32"},
+        {"name": "id",     "type": "int32"},
+        {"name": "obj_id", "type": "int32"},
+        {"name": "az_rad", "type": "float32"},
+        {"name": "el_rad", "type": "float32"},
+        {"name": "dist_m", "type": "float32"}
+      ],
+      "description": "Set spatial position of one object."
+    },
+    {
+      "address": "/obj/gain",
+      "tag": "ObjGain",
+      "direction": "client_to_engine",
+      "type_tags": ",iiif",
+      "args": [
+        {"name": "seq",    "type": "int32"},
+        {"name": "id",     "type": "int32"},
+        {"name": "obj_id", "type": "int32"},
+        {"name": "gain",   "type": "float32"}
+      ],
+      "description": "Set per-object gain scalar (linear, 0.0–2.0)."
+    },
+    {
+      "address": "/obj/active",
+      "tag": "ObjActive",
+      "direction": "client_to_engine",
+      "type_tags": ",iiii",
+      "args": [
+        {"name": "seq",    "type": "int32"},
+        {"name": "id",     "type": "int32"},
+        {"name": "obj_id", "type": "int32"},
+        {"name": "active", "type": "int32", "enum": {"0": "off", "1": "on"}}
+      ],
+      "description": "Enable or disable an object."
+    },
+    {
+      "address": "/obj/algo",
+      "tag": "ObjAlgo",
+      "direction": "client_to_engine",
+      "type_tags": ",iiii",
+      "args": [
+        {"name": "seq",    "type": "int32"},
+        {"name": "id",     "type": "int32"},
+        {"name": "obj_id", "type": "int32"},
+        {"name": "algo",   "type": "int32", "enum": {"0": "VBAP", "1": "WFS", "2": "DBAP"}}
+      ],
+      "description": "Select rendering algorithm for one object."
+    },
+    {
+      "address": "/hb/ping",
+      "tag": "HbPing",
+      "direction": "client_to_engine",
+      "type_tags": ",iit",
+      "args": [
+        {"name": "seq",          "type": "int32"},
+        {"name": "id",           "type": "int32"},
+        {"name": "timestamp_ms", "type": "timetag"}
+      ],
+      "description": "Heartbeat ping from publisher (10 Hz, 100 ms period)."
+    },
+    {
+      "address": "/hb/pong",
+      "tag": "HbPong",
+      "direction": "client_to_engine",
+      "type_tags": ",iit",
+      "args": [
+        {"name": "seq",          "type": "int32"},
+        {"name": "id",           "type": "int32"},
+        {"name": "timestamp_ms", "type": "timetag"}
+      ],
+      "description": "Heartbeat pong reply from subscriber."
+    }
+  ],
+  "replies": [
+    {
+      "address": "/sys/handshake_ok",
+      "tag": "HandshakeOk",
+      "direction": "engine_to_client",
+      "description": "Handshake accepted. Schema versions match."
+    },
+    {
+      "address": "/sys/error",
+      "tag": "HandshakeMismatch",
+      "direction": "engine_to_client",
+      "description": "Handshake rejected (version mismatch) or generic error."
+    },
+    {
+      "address": "/sys/state",
+      "tag": "StateUpdate",
+      "direction": "engine_to_client",
+      "description": "Authoritative object state snapshot (10 Hz)."
+    },
+    {
+      "address": "/sys/warning",
+      "tag": "Warning",
+      "direction": "engine_to_client",
+      "description": "Non-fatal warning. osc_reorder_burst = 5+ reorders within 1 s."
+    },
+    {
+      "address": "/sys/heartbeat_miss",
+      "tag": "HeartbeatMiss",
+      "direction": "engine_to_client",
+      "description": "3 consecutive heartbeat misses (300 ms gap detected)."
+    }
+  ],
+  "algorithms": [
+    {"value": 0, "name": "VBAP", "description": "Vector Base Amplitude Panning"},
+    {"value": 1, "name": "WFS",  "description": "Wave Field Synthesis"},
+    {"value": 2, "name": "DBAP", "description": "Distance Based Amplitude Panning"}
+  ]
+}
