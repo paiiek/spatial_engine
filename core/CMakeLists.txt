@@ -81,6 +81,8 @@ set(SPE_CORE_SOURCES
     src/ipc/ProtocolVersion.cpp
     src/ipc/CommandDecoder.cpp
     src/ipc/StateModel.cpp
+    src/ipc/HeartbeatPublisher.cpp
+    src/ipc/HeartbeatMonitor.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)
