@@ -17,7 +17,7 @@ target_link_libraries(test_p1_trace_ring PRIVATE spe_util)
 add_test(NAME p1_trace_ring COMMAND test_p1_trace_ring)
 
 # P2 tests
-set(SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/configs")
+set(SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/../configs")
 
 add_executable(test_p2_coords test_p2_coords.cpp)
 target_link_libraries(test_p2_coords PRIVATE spe_core)

@@ -6,7 +6,9 @@
 #include "input/FileInput.h"
 #include "input/SynthInput.h"
 #include <cassert>
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include <vector>
 
 using namespace spe::input;
@@ -110,11 +112,9 @@ static void test_decoder_thread_lifecycle() {
     FileInput fi(std::move(samples), 48000, /*chunk*/256, /*fifo_pow2*/4096);
     fi.start();
 
-    // Spin briefly until FIFO fills (decoder thread loops until at_end).
-    int spins = 0;
-    while (fi.fifoAvailable() < 1024 && spins++ < 1000) {
-        // sleep handled by std::this_thread::yield; tight enough for test.
-    }
+    // Wait until FIFO fills (decoder thread loops until at_end).
+    for (int i = 0; i < 200 && fi.fifoAvailable() < 1024; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     assert(fi.fifoAvailable() >= 1024);
 
     fi.stop();
