@@ -77,6 +77,8 @@ set(SPE_CORE_SOURCES
     src/render/VBAPRenderer.cpp
     src/render/DBAPRenderer.cpp
     src/render/WFSRenderer.cpp
+    # P4: IPC layer
+    src/ipc/ProtocolVersion.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)
