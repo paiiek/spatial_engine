@@ -98,6 +98,10 @@ set(SPE_CORE_SOURCES
     src/input/LiveMicInput.cpp
     # P6: DanteBackend stub API (always compiled; JUCE-only class guarded internally)
     src/audio_io/DanteBackend.cpp
+    # P7: reverb
+    src/reverb/FdnReverb.cpp
+    src/reverb/IRConvolutionStub.cpp
+    src/reverb/ReverbEngine.cpp
 )
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})

@@ -118,3 +118,8 @@ add_executable(test_p6_dante_loopback test_p6_dante_loopback.cpp)
 target_link_libraries(test_p6_dante_loopback PRIVATE spe_core)
 add_test(NAME p6_dante_loopback COMMAND test_p6_dante_loopback)
 
+# P7 tests
+add_executable(test_p7_fdn_reverb test_p7_fdn_reverb.cpp)
+target_link_libraries(test_p7_fdn_reverb PRIVATE spe_core)
+add_test(NAME p7_fdn_reverb COMMAND test_p7_fdn_reverb)
+
