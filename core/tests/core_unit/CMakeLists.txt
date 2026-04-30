@@ -80,3 +80,7 @@ add_executable(test_p4_handshake test_p4_handshake.cpp)
 target_link_libraries(test_p4_handshake PRIVATE spe_core)
 add_test(NAME p4_handshake COMMAND test_p4_handshake)
 
+add_executable(test_p4_command_decode test_p4_command_decode.cpp)
+target_link_libraries(test_p4_command_decode PRIVATE spe_core)
+add_test(NAME p4_command_decode COMMAND test_p4_command_decode)
+
