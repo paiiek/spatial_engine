@@ -76,6 +76,7 @@ set(SPE_CORE_SOURCES
     src/render/AlgorithmAnalyticReference.cpp
     src/render/VBAPRenderer.cpp
     src/render/DBAPRenderer.cpp
+    src/render/WFSRenderer.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)

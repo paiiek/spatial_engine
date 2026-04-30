@@ -51,3 +51,11 @@ add_executable(test_p3_dbap test_p3_dbap.cpp)
 target_link_libraries(test_p3_dbap PRIVATE spe_core)
 add_test(NAME p3_dbap COMMAND test_p3_dbap)
 
+add_executable(test_p3_wfs test_p3_wfs.cpp)
+target_link_libraries(test_p3_wfs PRIVATE spe_core)
+add_test(NAME p3_wfs COMMAND test_p3_wfs)
+
+add_executable(test_p3_compat_rules test_p3_compat_rules.cpp)
+target_link_libraries(test_p3_compat_rules PRIVATE spe_core)
+add_test(NAME p3_compat_rules COMMAND test_p3_compat_rules)
+
