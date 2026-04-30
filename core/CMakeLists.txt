@@ -74,6 +74,7 @@ set(SPE_CORE_SOURCES
     src/geometry/LayoutLoader.cpp
     src/render/LayoutCompatibilityChecker.cpp
     src/render/AlgorithmAnalyticReference.cpp
+    src/render/VBAPRenderer.cpp
 )
 if(SPE_HAVE_JUCE)
     list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)

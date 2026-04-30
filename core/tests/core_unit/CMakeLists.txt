@@ -42,3 +42,8 @@ if(SPATIAL_ENGINE_RT_ASSERTS)
     add_test(NAME p1_rt_no_alloc COMMAND test_p1_rt_no_alloc)
 endif()
 
+# P3 tests
+add_executable(test_p3_vbap test_p3_vbap.cpp)
+target_link_libraries(test_p3_vbap PRIVATE spe_core)
+add_test(NAME p3_vbap COMMAND test_p3_vbap)
+
