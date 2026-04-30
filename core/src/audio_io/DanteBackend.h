@@ -9,6 +9,30 @@
 
 #pragma once
 
+#include <vector>
+
+namespace spe::audio_io {
+
+/// JACK port → Dante channel mapping entry.
+struct DantePortMap {
+    int jackPortIndex;  ///< 0-based JACK port index
+    int danteChannel;   ///< 0-based Dante channel
+};
+
+/// Static utility: port discovery and channel-order validation.
+/// Always available (no JUCE required).
+struct DantePortDiscovery {
+    /// Returns discovered Dante output port mappings.
+    /// Returns empty vector when JACK is unavailable (CI / NO_JUCE builds).
+    static std::vector<DantePortMap> discoverPorts();
+
+    /// Validates channel order by checking that identity mapping holds for
+    /// channelCount channels. Returns false when hardware is unavailable.
+    static bool validateChannelOrder(int channelCount);
+};
+
+} // namespace spe::audio_io
+
 #if defined(SPE_HAVE_JUCE)
 
 #include "audio_io/AudioBackend.h"

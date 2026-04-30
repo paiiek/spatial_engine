@@ -1,5 +1,29 @@
 // core/src/audio_io/DanteBackend.cpp
 
+#include "audio_io/DanteBackend.h"
+
+namespace spe::audio_io {
+
+// ---------------------------------------------------------------------------
+// DantePortDiscovery — always-available stubs (no JUCE required)
+// ---------------------------------------------------------------------------
+
+std::vector<DantePortMap> DantePortDiscovery::discoverPorts() {
+    // Real implementation would enumerate JACK ports filtered by "Dante"
+    // prefix via jack_get_ports(). Without JACK available this returns an
+    // empty vector, which tests treat as "hardware absent".
+    return {};
+}
+
+bool DantePortDiscovery::validateChannelOrder(int /*channelCount*/) {
+    // Real implementation sends an impulse on each channel and checks that
+    // the round-trip capture lands on the same channel index.
+    // Without hardware / JACK this always returns false.
+    return false;
+}
+
+} // namespace spe::audio_io
+
 #if defined(SPE_HAVE_JUCE)
 
 #include "audio_io/DanteBackend.h"

@@ -104,3 +104,43 @@ on SpeakerArray to align both backends. Document in `docs/latency_budget.md`.
   64,800 measurements / 2 receivers. A2 partition strategy parameters frozen above.
 - **2026-04-30** — toolchain on dev machine: cmake (mamba), gcc 13.3.0, no ninja yet.
   Lab machine pins TBD pending Digigram driver matrix.
+- **2026-05-01** — P6 DanteBackend stub + LiveMicInput implemented. `DantePortDiscovery::discoverPorts()`
+  and `validateChannelOrder()` return empty/false in NO_JUCE CI builds; will enumerate JACK ports filtered
+  by "Dante" prefix via `jack_get_ports()` on lab target. LiveMicInput silence-fallback verified via
+  `p6_dante_loopback` ctest. Full lab validation (impulse round-trip, channel-order identity check)
+  deferred until Digigram driver matrix confirmed and PREEMPT_RT kernel pinned.
+
+## 7. P6 Dante I/O — driver version pins & JACK configuration
+
+### 7.1 Dante driver versions (TBD — fill from Digigram support ticket)
+
+| Component | Target version | Notes |
+|-----------|---------------|-------|
+| Digigram ALP-Dante ALSA driver | TBD | Must certify against pinned kernel from §1 |
+| Dante firmware on ALP-Dante card | TBD | Confirm via `dantectl show version` |
+| PipeWire-JACK bridge | ≥ 0.3.65 | Ubuntu 22.04 PPA or backport |
+| JACK2 (fallback, no PipeWire) | ≥ 1.9.21 | `apt install jackd2` |
+
+### 7.2 JACK configuration for Dante I/O
+
+```bash
+# Start JACK with 64-frame period, 2 periods, 48 kHz, hw:Dante device
+jackd -R -P80 -d alsa -d hw:Dante -r 48000 -p 64 -n 2 -o 8 -i 8
+```
+
+Expected JACK port names (verify with `jack_lsp | grep -i dante`):
+- Output: `system:playback_1` … `system:playback_8`
+- Input:  `system:capture_1` … `system:capture_8`
+
+`DantePortDiscovery::discoverPorts()` filters ports by device name prefix `"Dante"` or `"system"`
+(JACK default) and returns identity mapping `jackPortIndex == danteChannel` for 0–7.
+
+### 7.3 PREEMPT_RT verification
+
+```bash
+uname -v | grep -i preempt   # should show PREEMPT_RT
+cyclictest -l 10000 -m -S -p 80 -i 200 -h 400 -q  # p99 < 200 µs target
+```
+
+If p99 exceeds 200 µs, check: C-state policy (`/sys/devices/system/cpu/cpu*/cpuidle/`),
+CPU governor (`cpupower frequency-info`), IRQ affinity (`/proc/irq/*/smp_affinity`).

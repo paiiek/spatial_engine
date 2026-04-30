@@ -11,6 +11,12 @@
 # add_subdirectory()'s it and the executable links juce_audio_devices, etc.
 
 cmake_minimum_required(VERSION 3.20)
+project(spatial_engine_core CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+enable_testing()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # --- JUCE wiring ---------------------------------------------------------
 # SPATIAL_ENGINE_NO_JUCE forces a JUCE-free build even when the submodule is
@@ -88,10 +94,11 @@ set(SPE_CORE_SOURCES
     # P5: input chain
     src/input/FileInput.cpp
     src/input/SynthInput.cpp
+    # P6: live mic input (silence fallback in NO_JUCE builds)
+    src/input/LiveMicInput.cpp
+    # P6: DanteBackend stub API (always compiled; JUCE-only class guarded internally)
+    src/audio_io/DanteBackend.cpp
 )
-if(SPE_HAVE_JUCE)
-    list(APPEND SPE_CORE_SOURCES src/audio_io/DanteBackend.cpp)
-endif()
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})
 target_link_libraries(spe_core PUBLIC spe_util yaml-cpp::yaml-cpp)
