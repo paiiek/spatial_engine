@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spatial-engine/proto/geometry_schema.json",
+  "title": "SpeakerLayout",
+  "description": "Schema for lab_*.yaml speaker layout configuration files.",
+  "type": "object",
+  "required": ["version", "name", "speakers"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version string, e.g. '1.0'."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable layout name."
+    },
+    "regularity_hint": {
+      "type": "string",
+      "enum": ["LINEAR", "CIRCULAR", "PLANAR_GRID", "IRREGULAR"],
+      "description": "Optional hint for geometry classification."
+    },
+    "speakers": {
+      "type": "array",
+      "description": "List of loudspeaker definitions.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "channel"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Unique speaker identifier within the layout."
+          },
+          "channel": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based audio channel index."
+          },
+          "az_deg": {
+            "type": "number",
+            "description": "Azimuth in degrees. RIGHT = +az, measured from front. Mutually exclusive with x/y/z."
+          },
+          "el_deg": {
+            "type": "number",
+            "description": "Elevation in degrees. UP = +el. Used with az_deg."
+          },
+          "dist_m": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Distance in metres. Used with az_deg."
+          },
+          "x": {
+            "type": "number",
+            "description": "Cartesian X (right). Mutually exclusive with az_deg."
+          },
+          "y": {
+            "type": "number",
+            "description": "Cartesian Y (up)."
+          },
+          "z": {
+            "type": "number",
+            "description": "Cartesian Z (front)."
+          },
+          "xyz": {
+            "type": "array",
+            "items": {"type": "number"},
+            "minItems": 3,
+            "maxItems": 3,
+            "description": "Cartesian [x, y, z] as array. Mutually exclusive with az_deg."
+          }
+        },
+        "not": {
+          "description": "xyz/spherical mutually exclusive: cannot specify both az_deg and x (or xyz).",
+          "anyOf": [
+            {"required": ["az_deg", "x"]},
+            {"required": ["az_deg", "xyz"]}
+          ]
+        }
+      }
+    }
+  }
+}

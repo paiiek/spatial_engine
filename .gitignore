@@ -1,0 +1,63 @@
+# Build artifacts
+build/
+build-*/
+core/JuceLibraryCode/
+core/CMakeFiles/
+core/CMakeCache.txt
+core/cmake_install.cmake
+core/Makefile
+
+# JUCE submodule clone (fetched by bootstrap.sh; not tracked here)
+core/JUCE/
+
+# OMC session/runtime state (plans/ and specs/ are tracked; state/ is not)
+# Use **/ prefix so nested .omc/ dirs (e.g. ui/.omc/) are also excluded.
+**/.omc/state/
+**/.omc/notepad.md
+**/.omc/project-memory.json
+**/.omc/research/
+**/.omc/logs/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+uv.lock.bak
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs & runtime
+logs/
+*.log
+xrun_forensics_*.json
+tests/latency_harness/baseline.json
+tests/soak_harness/results/
+
+# Artifacts produced by harnesses
+tests/accuracy_harness/results/
+tests/perceptual/listening_test_v0/data/
+
+# OS junk
+.DS_Store
+Thumbs.db
+NUL
+
+# Local secrets / config overrides
+configs/local.yaml
+.env

@@ -1,0 +1,25 @@
+# regular CIRCULAR; VBAP-2D / DBAP / WFS all OK
+version: "1.0"
+name: "lab_4ch"
+regularity_hint: "CIRCULAR"
+speakers:
+  - id: 1
+    channel: 1
+    az_deg: -90.0
+    el_deg:   0.0
+    dist_m:   1.0
+  - id: 2
+    channel: 2
+    az_deg: -30.0
+    el_deg:   0.0
+    dist_m:   1.0
+  - id: 3
+    channel: 3
+    az_deg:  30.0
+    el_deg:   0.0
+    dist_m:   1.0
+  - id: 4
+    channel: 4
+    az_deg:  90.0
+    el_deg:   0.0
+    dist_m:   1.0

@@ -1,0 +1,45 @@
+# IRREGULAR; only DBAP is safe (Pre-mortem B negative test).
+version: "1.0"
+name: "lab_8ch_irregular"
+regularity_hint: "IRREGULAR"
+speakers:
+  - id: 1
+    channel: 1
+    az_deg:  -95.0
+    el_deg:    5.0
+    dist_m:    1.1
+  - id: 2
+    channel: 2
+    az_deg:  -20.0
+    el_deg:   -8.0
+    dist_m:    0.9
+  - id: 3
+    channel: 3
+    az_deg:   37.0
+    el_deg:   12.0
+    dist_m:    1.2
+  - id: 4
+    channel: 4
+    az_deg:  110.0
+    el_deg:   -3.0
+    dist_m:    0.95
+  - id: 5
+    channel: 5
+    az_deg: -150.0
+    el_deg:   20.0
+    dist_m:    1.05
+  - id: 6
+    channel: 6
+    az_deg:   60.0
+    el_deg:  -15.0
+    dist_m:    1.15
+  - id: 7
+    channel: 7
+    az_deg:  170.0
+    el_deg:   25.0
+    dist_m:    0.85
+  - id: 8
+    channel: 8
+    az_deg:  -55.0
+    el_deg:  -20.0
+    dist_m:    1.0
