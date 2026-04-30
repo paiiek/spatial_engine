@@ -47,3 +47,7 @@ add_executable(test_p3_vbap test_p3_vbap.cpp)
 target_link_libraries(test_p3_vbap PRIVATE spe_core)
 add_test(NAME p3_vbap COMMAND test_p3_vbap)
 
+add_executable(test_p3_dbap test_p3_dbap.cpp)
+target_link_libraries(test_p3_dbap PRIVATE spe_core)
+add_test(NAME p3_dbap COMMAND test_p3_dbap)
+
