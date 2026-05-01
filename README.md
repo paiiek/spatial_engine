@@ -5,7 +5,23 @@ C++ + JUCE native audio core (Process A) + PySide6 UI (Process B), OSC/UDP loopb
 
 ## Status
 
-`v0` — under construction. Plan: `.omc/plans/spatial-engine-v0.md` (R2, READY-FOR-CONSENSUS).
+**v0.1.0** — 기준 태그 완료 (commit `19679c6`). v1 피처 진행 중.
+
+| 단계 | 내용 | 상태 |
+|------|------|------|
+| v0 (P0–P12) | C++ 코어, PySide6 UI, OSC IPC, VBAP/WFS/DBAP, FDN Reverb, Latency/Soak 하네스 | ✅ 완료 |
+| v1-F1 | ADM-OSC 수신 네임스페이스 (`/adm/obj/n/*`) | ✅ 완료 |
+| v1-F2 | 스냅샷/씬 시스템 + `/scene/save\|load\|list` OSC | ✅ 완료 |
+| v1-F3 | MAX_OBJECTS 16→64 | ✅ 완료 |
+| v1-F4 | IR SOFA 로더 확장 | ✅ 완료 |
+| v1-F5 | Elevation UI 슬라이더 (-90..+90°) | ✅ 완료 |
+| v1-F6 | VBAP 3D elevation 수치 테스트 | ✅ 완료 (2D-only 한계 명시) |
+| v1-F7 | MIDI PC 스냅샷 리콜 브리지 | ✅ 완료 |
+| 하드웨어 실측 | P10 레이턴시, P11 소크, P12 퍼셉추얼 | ⏳ 하드웨어 도착 대기 |
+
+CI: **30/30 ctest** | **71 passed 1 skipped pytest** (하드웨어 불필요 기준)
+
+자세한 내용: [`docs/v0.1.0_report.md`](docs/v0.1.0_report.md)
 
 ## Foundational stack (locked by spec v2.1)
 
