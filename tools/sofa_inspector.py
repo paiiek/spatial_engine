@@ -110,7 +110,7 @@ def format_human(info: dict[str, Any]) -> str:
 
 
 VALID_SR     = 48000
-VALID_IR_LEN = {256, 512}
+VALID_IR_LEN = {256, 384, 512}  # 384 = RWTH Aachen KEMAR (8ms @ 48kHz)
 
 
 def validate_sofa(info: dict[str, Any]) -> list[str]:

@@ -206,7 +206,7 @@ def run_soak(args: argparse.Namespace) -> dict:
         duration_s = min(duration_s, 60)
 
     start_time = time.monotonic()
-    start_utc = datetime.datetime.utcnow().isoformat() + "Z"
+    start_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     samples: list[dict] = []
     core_rss_times: list[float] = []

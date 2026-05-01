@@ -123,7 +123,7 @@ def test_threshold_gate_pass():
 
     # Default dry-run ~2ms mean → p99 well under 5ms
     subprocess.run(
-        [sys.executable, str(HARNESS), "--dry-run", "--duration", "30",
+        [sys.executable, str(HARNESS), "--dry-run", "--duration", "200",
          "--threshold-us", "5000", "--output", out],
         capture_output=True, text=True, timeout=30, check=True,
     )

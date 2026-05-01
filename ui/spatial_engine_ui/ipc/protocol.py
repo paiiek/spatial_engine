@@ -9,6 +9,7 @@ ADDR_PROTOCOL_VERSION = "/sys/protocol_version"
 ADDR_WARNING = "/sys/warning"
 ADDR_MATRIX = "/sys/matrix"
 ADDR_HEARTBEAT_MISS = "/sys/heartbeat_miss"
+ADDR_METRICS = "/sys/metrics"
 
 # OSC addresses — UI → core
 ADDR_OBJECT_POS = "/object/{id}/pos"          # ,iff  id x z
