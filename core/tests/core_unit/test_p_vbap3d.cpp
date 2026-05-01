@@ -183,24 +183,90 @@ static void test3_elevation_effect() {
         }
     }
 
-    // vbap_gain is currently 2D-only (azimuth pair selection, el_rad unused).
-    // When 3D VBAP is implemented, any_diff MUST be true on make_8ch_3d.
-    // Until then, we assert: (a) no crash, (b) valid gains — both verified above.
-    if (any_diff) {
-        std::printf("[PASS] test3: el=30 changes gain distribution vs el=0\n");
-    } else {
-        std::printf("[KNOWN-2D] test3: vbap_gain ignores el_rad (2D implementation) — "
-                    "gains valid, no crash. Update to CHECK(any_diff) when 3D VBAP lands.\n");
-    }
+    CHECK(any_diff);
+    std::printf("[PASS] test3: el=30 changes gain distribution vs el=0\n");
     // Gains must remain valid regardless of el_rad
     CHECK(all_valid(gains_el0));
     CHECK(all_valid(gains_el30));
+}
+
+// --- Test 4: dimensionality boundary (max|y| around 1e-3 threshold) ---
+static void test4_dimensionality_boundary() {
+    // (a) Sub-threshold (max|y| = 5e-4) → 2D path: gains identical for el=0 and el=30
+    {
+        SpeakerLayout l;
+        l.name = "test_4ch_subthresh";
+        l.regularity = Regularity::CIRCULAR;
+        float azs[] = {0.f, 90.f, 180.f, 270.f};
+        for (int i = 0; i < 4; ++i) {
+            float az = azs[i] * kPi / 180.f;
+            Speaker s;
+            s.channel = i + 1;
+            s.x = std::sin(az);
+            s.y = 5e-4f * (i % 2 == 0 ? 1.f : -1.f); // |y| < 1e-3
+            s.z = std::cos(az);
+            l.speakers.push_back(s);
+        }
+        float az = 0.f;
+        auto g0  = AlgorithmAnalyticReference::vbap_gain(l, az, 0.f);
+        auto g30 = AlgorithmAnalyticReference::vbap_gain(l, az, 30.f * kPi / 180.f);
+
+        CHECK(all_valid(g0));
+        CHECK(all_valid(g30));
+
+        // 2D path ignores el_rad → gains must match exactly
+        bool same = true;
+        for (size_t i = 0; i < g0.size(); ++i)
+            if (std::abs(g0[i] - g30[i]) > 1e-5f) { same = false; break; }
+        CHECK(same);
+        std::printf("[PASS] test4a: max|y|=5e-4 routes to 2D path (gains el=0 == el=30)\n");
+    }
+
+    // (b) Above threshold (max|y| = 2e-3) → 3D path: gains differ
+    {
+        SpeakerLayout l;
+        l.name = "test_8ch_3d_thresh";
+        l.regularity = Regularity::IRREGULAR;
+        float azs[] = {0.f, 90.f, 180.f, 270.f};
+        for (int i = 0; i < 4; ++i) {
+            float az = azs[i] * kPi / 180.f;
+            Speaker s;
+            s.channel = i + 1;
+            s.x = std::sin(az);
+            s.y = 0.f;
+            s.z = std::cos(az);
+            l.speakers.push_back(s);
+        }
+        // Upper layer with small (but >1e-3) elevation: y=2e-3
+        for (int i = 0; i < 4; ++i) {
+            float az = azs[i] * kPi / 180.f;
+            Speaker s;
+            s.channel = i + 5;
+            s.x = std::sin(az);
+            s.y = 2e-3f;
+            s.z = std::cos(az);
+            l.speakers.push_back(s);
+        }
+        float az = 0.f;
+        auto g0  = AlgorithmAnalyticReference::vbap_gain(l, az, 0.f);
+        auto g30 = AlgorithmAnalyticReference::vbap_gain(l, az, 30.f * kPi / 180.f);
+
+        CHECK(all_valid(g0));
+        CHECK(all_valid(g30));
+
+        bool any_diff = false;
+        for (size_t i = 0; i < g0.size(); ++i)
+            if (std::abs(g0[i] - g30[i]) > 1e-4f) { any_diff = true; break; }
+        CHECK(any_diff);
+        std::printf("[PASS] test4b: max|y|=2e-3 routes to 3D path (gains differ for el=0 vs el=30)\n");
+    }
 }
 
 int main() {
     test1_horizontal_el0();
     test2_extreme_elevation();
     test3_elevation_effect();
+    test4_dimensionality_boundary();
 
     if (failures == 0) {
         std::printf("[RESULT] PASS\n");
