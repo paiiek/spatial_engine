@@ -7,13 +7,21 @@
 
 namespace spe::reverb {
 
+namespace {
+    // Formats a short error message into IRConvolutionStub::lastError_.
+    template <typename... Args>
+    void setFormattedError(std::string& dst, const char* fmt, Args... args) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), fmt, args...);
+        dst = buf;
+    }
+}
+
 IRValidationError IRConvolutionStub::validate(const IRMetadata& meta) noexcept {
     if (meta.sampleRate != engineSampleRate_) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf),
+        setFormattedError(lastError_,
             "IR sample rate %d != engine sample rate %d",
             meta.sampleRate, engineSampleRate_);
-        lastError_ = buf;
         return IRValidationError::SampleRateMismatch;
     }
     if (meta.channelCount < 1) {
@@ -21,11 +29,9 @@ IRValidationError IRConvolutionStub::validate(const IRMetadata& meta) noexcept {
         return IRValidationError::BadChannelCount;
     }
     if (meta.irLengthFrames > kMaxIRLengthFrames) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf),
+        setFormattedError(lastError_,
             "IR length %d frames exceeds max %d",
             meta.irLengthFrames, kMaxIRLengthFrames);
-        lastError_ = buf;
         return IRValidationError::IRTooLong;
     }
     lastError_.clear();

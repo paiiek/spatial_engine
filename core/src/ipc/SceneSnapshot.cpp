@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace spe::ipc {
 
@@ -13,12 +14,6 @@ namespace spe::ipc {
 static std::string ftos(float v) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(v));
-    return buf;
-}
-
-static std::string itos(int v) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%d", v);
     return buf;
 }
 
@@ -45,6 +40,16 @@ static std::string jsonGet(const std::string& json, const std::string& key) {
     return json.substr(pos, end - pos);
 }
 
+// Parse helpers that swallow malformed numerics — keep field at default on failure.
+static int   parseIntOr  (const std::string& s, int   defv) noexcept {
+    if (s.empty()) return defv;
+    try { return std::stoi(s); } catch (const std::exception&) { return defv; }
+}
+static float parseFloatOr(const std::string& s, float defv) noexcept {
+    if (s.empty()) return defv;
+    try { return std::stof(s); } catch (const std::exception&) { return defv; }
+}
+
 // ---- toJson -----------------------------------------------------------------
 
 std::string SceneSnapshot::toJson() const {
@@ -54,12 +59,12 @@ std::string SceneSnapshot::toJson() const {
         const auto& o = objects[i];
         if (i > 0) os << ',';
         os << '{'
-           << "\"id\":"          << itos(o.id)          << ','
-           << "\"az_rad\":"      << ftos(o.az_rad)      << ','
-           << "\"el_rad\":"      << ftos(o.el_rad)      << ','
-           << "\"dist_m\":"      << ftos(o.dist_m)      << ','
-           << "\"algorithm\":"   << itos(o.algorithm)   << ','
-           << "\"gain_linear\":" << ftos(o.gain_linear) << ','
+           << "\"id\":"          << std::to_string(o.id)        << ','
+           << "\"az_rad\":"      << ftos(o.az_rad)               << ','
+           << "\"el_rad\":"      << ftos(o.el_rad)               << ','
+           << "\"dist_m\":"      << ftos(o.dist_m)               << ','
+           << "\"algorithm\":"   << std::to_string(o.algorithm)  << ','
+           << "\"gain_linear\":" << ftos(o.gain_linear)          << ','
            << "\"muted\":"       << (o.muted ? "true" : "false")
            << '}';
     }
@@ -94,19 +99,15 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
         auto close = json.find('}', open);
         if (close == std::string::npos) break;
 
-        std::string obj_str = json.substr(open, close - open + 1);
+        const std::string obj_str = json.substr(open, close - open + 1);
         ObjectSnapshot o;
-        try {
-            auto s = jsonGet(obj_str, "id");        if (!s.empty()) o.id          = std::stoi(s);
-            s = jsonGet(obj_str, "az_rad");         if (!s.empty()) o.az_rad      = std::stof(s);
-            s = jsonGet(obj_str, "el_rad");         if (!s.empty()) o.el_rad      = std::stof(s);
-            s = jsonGet(obj_str, "dist_m");         if (!s.empty()) o.dist_m      = std::stof(s);
-            s = jsonGet(obj_str, "algorithm");      if (!s.empty()) o.algorithm   = std::stoi(s);
-            s = jsonGet(obj_str, "gain_linear");    if (!s.empty()) o.gain_linear = std::stof(s);
-            s = jsonGet(obj_str, "muted");          o.muted = (s == "true");
-        } catch (const std::exception&) {
-            // Malformed numeric field — keep defaults for this object.
-        }
+        o.id          = parseIntOr  (jsonGet(obj_str, "id"),          o.id);
+        o.az_rad      = parseFloatOr(jsonGet(obj_str, "az_rad"),      o.az_rad);
+        o.el_rad      = parseFloatOr(jsonGet(obj_str, "el_rad"),      o.el_rad);
+        o.dist_m      = parseFloatOr(jsonGet(obj_str, "dist_m"),      o.dist_m);
+        o.algorithm   = parseIntOr  (jsonGet(obj_str, "algorithm"),   o.algorithm);
+        o.gain_linear = parseFloatOr(jsonGet(obj_str, "gain_linear"), o.gain_linear);
+        o.muted       = (jsonGet(obj_str, "muted") == "true");
         ss.objects.push_back(o);
         pos = close + 1;
     }

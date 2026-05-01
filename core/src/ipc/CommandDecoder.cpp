@@ -122,6 +122,23 @@ bool CommandDecoder::parseOscPacket(std::span<const uint8_t> data, OscArgs& out)
 
 // ---- buildCommand ----------------------------------------------------------
 
+// Map an integer algorithm token (0/1/2) to the Algorithm enum.
+// VBAP is the default for unknown values, matching legacy decoder behaviour.
+static inline Algorithm algoFromInt(int v) noexcept {
+    switch (v) {
+        case 1: return Algorithm::WFS;
+        case 2: return Algorithm::DBAP;
+        default: return Algorithm::VBAP;
+    }
+}
+
+// Copy an OSC string into a fixed 64-byte name buffer (truncates to 63 + null).
+static inline void copySceneName(char (&dst)[64], const std::string& src) noexcept {
+    const std::size_t n = src.size() < 63 ? src.size() : 63;
+    std::memcpy(dst, src.c_str(), n);
+    dst[n] = '\0';
+}
+
 Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count) noexcept {
     Command cmd;
     cmd.schema_version = SCHEMA_VERSION;
@@ -149,6 +166,15 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
 
     const std::string& addr = args.address;
 
+    // Build an Unknown reply for malformed/unsupported addresses.
+    auto makeUnknown = [&]() {
+        ++reject_count;
+        cmd.tag = CommandTag::Unknown;
+        PayloadUnknown pu;
+        pu.address = addr;
+        cmd.payload = pu;
+    };
+
     if (addr == "/obj/move") {
         cmd.tag = CommandTag::ObjMove;
         PayloadObjMove p;
@@ -173,9 +199,7 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         cmd.tag = CommandTag::ObjAlgo;
         PayloadObjAlgo p;
         p.obj_id = static_cast<uint32_t>(getInt(0));
-        int algo_i = getInt(1);
-        p.algo = (algo_i == 1) ? Algorithm::WFS :
-                 (algo_i == 2) ? Algorithm::DBAP : Algorithm::VBAP;
+        p.algo   = algoFromInt(getInt(1));
         cmd.payload = p;
     } else if (addr == "/sys/handshake") {
         cmd.tag = CommandTag::SysHandshake;
@@ -185,9 +209,7 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
     } else if (addr == "/sys/algo_swap") {
         cmd.tag = CommandTag::SysAlgoSwap;
         PayloadSysAlgoSwap p;
-        int algo_i = getInt(0);
-        p.algo = (algo_i == 1) ? Algorithm::WFS :
-                 (algo_i == 2) ? Algorithm::DBAP : Algorithm::VBAP;
+        p.algo = algoFromInt(getInt(0));
         cmd.payload = p;
     } else if (addr == "/sys/reset") {
         cmd.tag = CommandTag::SysReset;
@@ -205,19 +227,12 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
     } else if (addr == "/scene/save") {
         cmd.tag = CommandTag::SceneSave;
         PayloadSceneSave p;
-        // format: ,is schema_version name
-        const std::string& nm = (args.n_str > 0) ? args.strings[0] : std::string{};
-        std::size_t copy_len = nm.size() < 63 ? nm.size() : 63;
-        std::memcpy(p.name, nm.c_str(), copy_len);
-        p.name[copy_len] = '\0';
+        copySceneName(p.name, (args.n_str > 0) ? args.strings[0] : std::string{});
         cmd.payload = p;
     } else if (addr == "/scene/load") {
         cmd.tag = CommandTag::SceneLoad;
         PayloadSceneLoad p;
-        const std::string& nm = (args.n_str > 0) ? args.strings[0] : std::string{};
-        std::size_t copy_len = nm.size() < 63 ? nm.size() : 63;
-        std::memcpy(p.name, nm.c_str(), copy_len);
-        p.name[copy_len] = '\0';
+        copySceneName(p.name, (args.n_str > 0) ? args.strings[0] : std::string{});
         cmd.payload = p;
     } else if (addr == "/scene/list") {
         cmd.tag = CommandTag::SceneList;
@@ -281,34 +296,16 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
                 p.obj_id = static_cast<uint32_t>(obj_id);
                 p.muted  = (args.n_int > 0 ? args.ints[0] : 0) != 0;
                 cmd.payload = p;
-            } else if (subpath == "w") {
-                // Width/spread — not implemented in v0, silently ignore.
-                // Return Unknown so caller can log if desired.
-                ++reject_count;
-                cmd.tag = CommandTag::Unknown;
-                PayloadUnknown p;
-                p.address = addr;
-                cmd.payload = p;
             } else {
-                ++reject_count;
-                cmd.tag = CommandTag::Unknown;
-                PayloadUnknown p;
-                p.address = addr;
-                cmd.payload = p;
+                // "w" (width/spread) and any other ADM-OSC sub-address are
+                // not implemented in v0 — fall through as Unknown.
+                makeUnknown();
             }
         } else {
-            ++reject_count;
-            cmd.tag = CommandTag::Unknown;
-            PayloadUnknown p;
-            p.address = addr;
-            cmd.payload = p;
+            makeUnknown();
         }
     } else {
-        ++reject_count;
-        cmd.tag = CommandTag::Unknown;
-        PayloadUnknown p;
-        p.address = addr;
-        cmd.payload = p;
+        makeUnknown();
     }
     return cmd;
 }
@@ -443,24 +440,15 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
         add_t(p.timestamp_ms);
         break;
     }
-    case CommandTag::SceneSave: {
-        addr = "/scene/save";
-        auto& p = std::get<PayloadSceneSave>(cmd.payload);
-        // tags already have ",ii" for seq/id; append 's'
-        // We encode name as an OSC string argument.
-        tags += 's';
-        std::string nm(p.name);
-        for (char c : nm) args_buf.push_back(static_cast<uint8_t>(c));
-        args_buf.push_back(0);
-        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
-        break;
-    }
+    case CommandTag::SceneSave:
     case CommandTag::SceneLoad: {
-        addr = "/scene/load";
-        auto& p = std::get<PayloadSceneLoad>(cmd.payload);
+        // Both carry a single null-terminated scene name as an OSC string arg.
+        const char* nm = (cmd.tag == CommandTag::SceneSave)
+            ? std::get<PayloadSceneSave>(cmd.payload).name
+            : std::get<PayloadSceneLoad>(cmd.payload).name;
+        addr = (cmd.tag == CommandTag::SceneSave) ? "/scene/save" : "/scene/load";
         tags += 's';
-        std::string nm(p.name);
-        for (char c : nm) args_buf.push_back(static_cast<uint8_t>(c));
+        for (const char* p = nm; *p; ++p) args_buf.push_back(static_cast<uint8_t>(*p));
         args_buf.push_back(0);
         while (args_buf.size() % 4 != 0) args_buf.push_back(0);
         break;

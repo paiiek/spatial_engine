@@ -4,6 +4,7 @@
 #pragma once
 #include "ipc/Command.h"
 #include "ipc/SceneSnapshot.h"
+#include <optional>
 #include <string>
 #include <vector>
 

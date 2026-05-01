@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "project": "spatial_engine v1 features",
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "스냅샷/씬 시스템",
+      "passes": true,
+      "acceptanceCriteria": [
+        "SceneSnapshot toJson/fromJson 라운드트립 테스트 통과",
+        "/scene/save|load|list OSC 커맨드 디코드 테스트 통과",
+        "scene_panel.py + test_scene_panel.py 5/5 pytest 통과"
+      ]
+    },
+    {
+      "id": "US-002",
+      "title": "MAX_OBJECTS 16→64 스케일업",
+      "passes": true,
+      "acceptanceCriteria": [
+        "Constants.h MAX_OBJECTS=64",
+        "test_p_max_objects 통과",
+        "29/29 ctest 통과"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "IR 컨볼루션 SOFA 로더 확장",
+      "passes": true,
+      "acceptanceCriteria": [
+        "IRConvolutionStub.loadFromSofa() 구현",
+        "ir_sofa_loader.py + test_ir_loader.py 6/6 pytest 통과"
+      ]
+    }
+  ]
+}

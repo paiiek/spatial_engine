@@ -18,10 +18,20 @@ from ir_sofa_loader import sofa_info, load_sofa_ir  # noqa: E402
 
 
 @pytest.fixture(scope='module')
-def info():
+def sofa_path():
     if not os.path.exists(SOFA_PATH):
         pytest.skip(f"SOFA file not found: {SOFA_PATH}")
-    return sofa_info(SOFA_PATH)
+    return SOFA_PATH
+
+
+@pytest.fixture(scope='module')
+def info(sofa_path):
+    return sofa_info(sofa_path)
+
+
+@pytest.fixture(scope='module')
+def ir(sofa_path):
+    return load_sofa_ir(sofa_path, measurement_idx=0)
 
 
 def test_sofa_sample_rate(info):
@@ -40,17 +50,11 @@ def test_sofa_measurement_count(info):
     assert info['measurement_count'] == 64800
 
 
-def test_load_ir_shape():
-    if not os.path.exists(SOFA_PATH):
-        pytest.skip(f"SOFA file not found: {SOFA_PATH}")
+def test_load_ir_shape(ir):
     import numpy as np
-    ir = load_sofa_ir(SOFA_PATH, measurement_idx=0)
     assert ir.shape == (2, 384)
     assert ir.dtype == np.float32
 
 
-def test_load_ir_not_all_zeros():
-    if not os.path.exists(SOFA_PATH):
-        pytest.skip(f"SOFA file not found: {SOFA_PATH}")
-    ir = load_sofa_ir(SOFA_PATH, measurement_idx=0)
+def test_load_ir_not_all_zeros(ir):
     assert ir.max() != 0.0, "IR data appears to be all zeros — invalid SOFA file"
