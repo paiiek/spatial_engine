@@ -10,8 +10,6 @@ try:
 except ImportError:
     _MIDO_AVAILABLE = False
 
-from ..ipc.protocol import SCHEMA_VERSION
-
 SCENE_NAME_TEMPLATE = "scene_{pc}"  # PC 0 → "scene_0", PC 5 → "scene_5"
 OSC_SCENE_LOAD = "/scene/load"
 
@@ -33,9 +31,12 @@ class MidiBridge:
         return SCENE_NAME_TEMPLATE.format(pc=pc)
 
     def handle_message(self, msg) -> str | None:
-        """Process a MIDI message. Returns scene name if PC event, else None."""
+        """Process a MIDI message. Sends /scene/load OSC and returns scene name if PC event."""
         if hasattr(msg, 'type') and msg.type == 'program_change':
-            return self.pc_to_scene_name(msg.program)
+            name = self.pc_to_scene_name(msg.program)
+            if self._client is not None:
+                self._client.send_message(OSC_SCENE_LOAD, name)
+            return name
         return None
 
     def start(self) -> None:

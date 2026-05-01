@@ -183,12 +183,18 @@ static void test3_elevation_effect() {
         }
     }
 
+    // vbap_gain is currently 2D-only (azimuth pair selection, el_rad unused).
+    // When 3D VBAP is implemented, any_diff MUST be true on make_8ch_3d.
+    // Until then, we assert: (a) no crash, (b) valid gains — both verified above.
     if (any_diff) {
-        std::printf("[PASS] test3: el=30 changes gain distribution vs el=0 (3D layout)\n");
+        std::printf("[PASS] test3: el=30 changes gain distribution vs el=0\n");
     } else {
-        // Horizontal-only layout may not respond to elevation — log, don't fail
-        std::printf("[INFO] test3: el change produced no gain diff (layout may be 2D-only) — no crash confirmed\n");
+        std::printf("[KNOWN-2D] test3: vbap_gain ignores el_rad (2D implementation) — "
+                    "gains valid, no crash. Update to CHECK(any_diff) when 3D VBAP lands.\n");
     }
+    // Gains must remain valid regardless of el_rad
+    CHECK(all_valid(gains_el0));
+    CHECK(all_valid(gains_el30));
 }
 
 int main() {
