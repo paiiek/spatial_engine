@@ -138,3 +138,8 @@ add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)
 add_test(NAME p_max_objects COMMAND test_p_max_objects)
 
+# Feature 2: VBAP 3D elevation numerical tests
+add_executable(test_p_vbap3d test_p_vbap3d.cpp)
+target_link_libraries(test_p_vbap3d PRIVATE spe_core)
+add_test(NAME p_vbap3d COMMAND test_p_vbap3d)
+
