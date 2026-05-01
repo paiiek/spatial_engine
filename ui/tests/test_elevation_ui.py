@@ -6,20 +6,13 @@ import types
 
 
 def _stub_pyside6() -> None:
-    """Insert minimal PySide6 stubs so topdown.py import path takes the stub branch."""
+    """Force topdown.py to take the headless ImportError branch.
+
+    Setting sys.modules["PySide6.QtWidgets"] to None makes
+    `from PySide6.QtWidgets import ...` raise ImportError.
+    """
     if "PySide6" not in sys.modules:
-        pyside6 = types.ModuleType("PySide6")
-        sys.modules["PySide6"] = pyside6
-
-        # Raise ImportError when QtWidgets is imported so the except branch fires
-        class _FailLoader:
-            def __getattr__(self, name: str):  # noqa: ANN001
-                raise ImportError("headless stub")
-
-        qtwidgets = types.ModuleType("PySide6.QtWidgets")
-        # Make importing any name from it raise AttributeError-like failure
-        # The try block in topdown.py does `from PySide6.QtWidgets import ...`
-        # which will raise ImportError if the module raises on attribute access.
+        sys.modules["PySide6"] = types.ModuleType("PySide6")
         sys.modules["PySide6.QtWidgets"] = None  # type: ignore[assignment]
 
 

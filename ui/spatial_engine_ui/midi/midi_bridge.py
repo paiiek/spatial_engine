@@ -19,7 +19,6 @@ class MidiBridge:
     def __init__(self, osc_client=None, midi_port_name: str | None = None):
         self._client = osc_client
         self._port_name = midi_port_name
-        self._running = False
 
     @staticmethod
     def is_available() -> bool:
@@ -40,11 +39,13 @@ class MidiBridge:
         return None
 
     def start(self) -> None:
-        """Start listening. No-op if mido not available or no port configured."""
+        """Start listening. No-op if mido not available or no port configured.
+
+        Real port-open + PC forwarding deferred to v1+ lab deployment.
+        """
         if not _MIDO_AVAILABLE or not self._port_name:
             return
-        # Real implementation: open MIDI port and forward PC events
-        # Deferred to v1+ lab deployment
 
     def stop(self) -> None:
-        self._running = False
+        """No-op stop (paired with deferred start)."""
+        return
