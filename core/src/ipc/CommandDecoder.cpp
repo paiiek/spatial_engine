@@ -247,53 +247,43 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         char sub[32] = {};
         // Parse "/adm/obj/{n}/{sub}"
         if (std::sscanf(addr.c_str(), "/adm/obj/%d/%31s", &obj_id, sub) == 2 && obj_id >= 0) {
-            std::string subpath(sub);
+            const std::string subpath(sub);
+            const auto oid = static_cast<uint32_t>(obj_id);
             cmd.seq = 0; // ADM-OSC carries no sequence number
             cmd.id  = 0;
 
+            // Helper: build an ObjMove payload from per-axis components.
+            auto setMove = [&](float az, float el, float dist) {
+                cmd.tag = CommandTag::ObjMove;
+                PayloadObjMove p;
+                p.obj_id = oid;
+                p.az_rad = az;
+                p.el_rad = el;
+                p.dist_m = dist;
+                cmd.payload = p;
+            };
+
             if (subpath == "azim") {
-                cmd.tag = CommandTag::ObjMove;
-                PayloadObjMove p;
-                p.obj_id  = static_cast<uint32_t>(obj_id);
-                p.az_rad  = getFloat(0) * DEG2RAD;
-                p.el_rad  = 0.f;
-                p.dist_m  = 1.f;
-                cmd.payload = p;
+                setMove(getFloat(0) * DEG2RAD, 0.f, 1.f);
             } else if (subpath == "elev") {
-                cmd.tag = CommandTag::ObjMove;
-                PayloadObjMove p;
-                p.obj_id  = static_cast<uint32_t>(obj_id);
-                p.az_rad  = 0.f;
-                p.el_rad  = getFloat(0) * DEG2RAD;
-                p.dist_m  = 1.f;
-                cmd.payload = p;
+                setMove(0.f, getFloat(0) * DEG2RAD, 1.f);
             } else if (subpath == "dist") {
-                cmd.tag = CommandTag::ObjMove;
-                PayloadObjMove p;
-                p.obj_id  = static_cast<uint32_t>(obj_id);
-                p.az_rad  = 0.f;
-                p.el_rad  = 0.f;
-                p.dist_m  = getFloat(0) * MAX_DIST; // normalised 0..1 → metres
-                cmd.payload = p;
+                setMove(0.f, 0.f, getFloat(0) * MAX_DIST); // normalised 0..1 → metres
             } else if (subpath == "aed") {
                 // ,fff  azimuth_deg  elevation_deg  distance_normalised
-                cmd.tag = CommandTag::ObjMove;
-                PayloadObjMove p;
-                p.obj_id  = static_cast<uint32_t>(obj_id);
-                p.az_rad  = getFloat(0) * DEG2RAD;
-                p.el_rad  = getFloat(1) * DEG2RAD;
-                p.dist_m  = getFloat(2) * MAX_DIST;
-                cmd.payload = p;
+                setMove(getFloat(0) * DEG2RAD,
+                        getFloat(1) * DEG2RAD,
+                        getFloat(2) * MAX_DIST);
             } else if (subpath == "gain") {
                 cmd.tag = CommandTag::ObjGain;
                 PayloadObjGain p;
-                p.obj_id = static_cast<uint32_t>(obj_id);
+                p.obj_id = oid;
                 p.gain   = getFloat(0);
                 cmd.payload = p;
             } else if (subpath == "mute") {
                 cmd.tag = CommandTag::ObjMute;
                 PayloadObjMute p;
-                p.obj_id = static_cast<uint32_t>(obj_id);
+                p.obj_id = oid;
                 p.muted  = (args.n_int > 0 ? args.ints[0] : 0) != 0;
                 cmd.payload = p;
             } else {
@@ -443,10 +433,11 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
     case CommandTag::SceneSave:
     case CommandTag::SceneLoad: {
         // Both carry a single null-terminated scene name as an OSC string arg.
-        const char* nm = (cmd.tag == CommandTag::SceneSave)
+        const bool is_save = (cmd.tag == CommandTag::SceneSave);
+        const char* nm = is_save
             ? std::get<PayloadSceneSave>(cmd.payload).name
             : std::get<PayloadSceneLoad>(cmd.payload).name;
-        addr = (cmd.tag == CommandTag::SceneSave) ? "/scene/save" : "/scene/load";
+        addr = is_save ? "/scene/save" : "/scene/load";
         tags += 's';
         for (const char* p = nm; *p; ++p) args_buf.push_back(static_cast<uint8_t>(*p));
         args_buf.push_back(0);

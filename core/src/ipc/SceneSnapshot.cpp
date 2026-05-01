@@ -4,7 +4,6 @@
 #include <fstream>
 #include <filesystem>
 #include <cstdio>
-#include <cstring>
 #include <string>
 
 namespace spe::ipc {
@@ -88,9 +87,10 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
     ss.name = jsonGet(json, "name");
 
     // Find "objects":[ and iterate over {...} blocks
-    auto arr_start = json.find("\"objects\":[");
+    static constexpr char kObjectsKey[] = "\"objects\":[";
+    auto arr_start = json.find(kObjectsKey);
     if (arr_start == std::string::npos) return ss;
-    arr_start += std::strlen("\"objects\":[");
+    arr_start += sizeof(kObjectsKey) - 1;
 
     std::size_t pos = arr_start;
     while (pos < json.size()) {
@@ -100,13 +100,16 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
         if (close == std::string::npos) break;
 
         const std::string obj_str = json.substr(open, close - open + 1);
+        auto getI = [&](const char* k, int   defv) { return parseIntOr  (jsonGet(obj_str, k), defv); };
+        auto getF = [&](const char* k, float defv) { return parseFloatOr(jsonGet(obj_str, k), defv); };
+
         ObjectSnapshot o;
-        o.id          = parseIntOr  (jsonGet(obj_str, "id"),          o.id);
-        o.az_rad      = parseFloatOr(jsonGet(obj_str, "az_rad"),      o.az_rad);
-        o.el_rad      = parseFloatOr(jsonGet(obj_str, "el_rad"),      o.el_rad);
-        o.dist_m      = parseFloatOr(jsonGet(obj_str, "dist_m"),      o.dist_m);
-        o.algorithm   = parseIntOr  (jsonGet(obj_str, "algorithm"),   o.algorithm);
-        o.gain_linear = parseFloatOr(jsonGet(obj_str, "gain_linear"), o.gain_linear);
+        o.id          = getI("id",          o.id);
+        o.az_rad      = getF("az_rad",      o.az_rad);
+        o.el_rad      = getF("el_rad",      o.el_rad);
+        o.dist_m      = getF("dist_m",      o.dist_m);
+        o.algorithm   = getI("algorithm",   o.algorithm);
+        o.gain_linear = getF("gain_linear", o.gain_linear);
         o.muted       = (jsonGet(obj_str, "muted") == "true");
         ss.objects.push_back(o);
         pos = close + 1;

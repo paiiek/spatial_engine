@@ -188,6 +188,44 @@ static void test_path_traversal_blocked() {
     std::printf("PASS: test_path_traversal_blocked\n");
 }
 
+// ---- Test 7: boundary cases — empty name, max length, oversize -------------
+
+static void test_scene_name_boundaries() {
+    namespace fs = std::filesystem;
+    auto tmpdir = fs::temp_directory_path() / "spe_scene_bounds_test";
+    fs::remove_all(tmpdir);
+    fs::create_directories(tmpdir);
+    const std::string dir = tmpdir.string();
+
+    // Empty name: rejected by isSafeSceneName.
+    {
+        spe::ipc::SceneSnapshot ss;
+        ss.name = "";
+        CHECK(!ss.saveToDisk(dir), "empty name: saveToDisk must reject");
+        CHECK(!spe::ipc::SceneSnapshot::loadFromDisk(dir, "").has_value(),
+              "empty name: loadFromDisk must reject");
+    }
+
+    // 63-char name: accepted (max allowed).
+    {
+        spe::ipc::SceneSnapshot ss;
+        ss.name.assign(63, 'a');
+        CHECK(ss.saveToDisk(dir), "63-char name: saveToDisk must succeed");
+        CHECK(spe::ipc::SceneSnapshot::loadFromDisk(dir, ss.name).has_value(),
+              "63-char name: loadFromDisk must succeed");
+    }
+
+    // 64-char name: rejected (exceeds limit).
+    {
+        spe::ipc::SceneSnapshot ss;
+        ss.name.assign(64, 'b');
+        CHECK(!ss.saveToDisk(dir), "64-char name: saveToDisk must reject");
+    }
+
+    fs::remove_all(tmpdir);
+    std::printf("PASS: test_scene_name_boundaries\n");
+}
+
 // ---- main ------------------------------------------------------------------
 
 int main() {
@@ -197,6 +235,7 @@ int main() {
     test_decode_list();
     test_scene_controller_roundtrip();
     test_path_traversal_blocked();
+    test_scene_name_boundaries();
     std::printf("ALL PASS\n");
     return 0;
 }

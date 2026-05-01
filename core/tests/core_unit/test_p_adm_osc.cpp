@@ -128,6 +128,30 @@ int main() {
         std::puts("  PASS 6: /adm/obj/7/w => Unknown");
     }
 
+    // 7. /adm/obj/-1/azim → Unknown (negative obj_id rejected by sscanf guard)
+    {
+        std::vector<uint8_t> args;
+        appendF32(args, 10.0f);
+        auto pkt = makeOsc("/adm/obj/-1/azim", "f", args);
+        Command cmd = dec.decode(std::span<const uint8_t>(pkt));
+        assert(cmd.tag == CommandTag::Unknown);
+        std::puts("  PASS 7: /adm/obj/-1/azim => Unknown");
+    }
+
+    // 8. Out-of-range obj_id (9999) is decoded but flagged for downstream
+    //    range-check by StateModel; decoder itself accepts any non-negative int.
+    {
+        std::vector<uint8_t> args;
+        appendF32(args, 0.0f);
+        auto pkt = makeOsc("/adm/obj/9999/azim", "f", args);
+        Command cmd = dec.decode(std::span<const uint8_t>(pkt));
+        assert(cmd.tag == CommandTag::ObjMove);
+        auto& p = std::get<PayloadObjMove>(cmd.payload);
+        assert(p.obj_id == 9999u);
+        (void)p;
+        std::puts("  PASS 8: /adm/obj/9999/azim => ObjMove (range check is downstream)");
+    }
+
     std::puts("PASS test_p_adm_osc");
     return 0;
 }
