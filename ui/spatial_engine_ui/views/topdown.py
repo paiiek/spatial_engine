@@ -3,6 +3,18 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+
+def _elevation_to_screen(x: float, y: float, z: float,
+                         w: int, h: int, margin: int) -> tuple[int, int]:
+    """Map (x,y,z) -> screen (sx, sy). r=sqrt(x^2+z^2), el=y."""
+    r = (x*x + z*z) ** 0.5
+    usable_w = w - 2 * margin
+    usable_h = h - 2 * margin
+    sx = margin + int(r * usable_w * 0.5)
+    sy = margin + int((1.0 - (y + 1.0) * 0.5) * usable_h)
+    return sx, sy
+
+
 try:
     from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QSlider, QHBoxLayout
     from PySide6.QtCore import Qt
@@ -81,13 +93,7 @@ try:
         @staticmethod
         def to_screen_coords(x: float, y: float, z: float,
                              w: int, h: int, margin: int) -> tuple[int, int]:
-            """Map (x,y,z) -> screen (sx, sy). r=sqrt(x^2+z^2), el=y."""
-            r = (x*x + z*z) ** 0.5
-            usable_w = w - 2 * margin
-            usable_h = h - 2 * margin
-            sx = margin + int(r * usable_w * 0.5)
-            sy = margin + int((1.0 - (y + 1.0) * 0.5) * usable_h)
-            return sx, sy
+            return _elevation_to_screen(x, y, z, w, h, margin)
 
         def paintEvent(self, _event) -> None:  # type: ignore[override]
             from PySide6.QtGui import QPainter, QColor
@@ -148,9 +154,4 @@ except ImportError:
         @staticmethod
         def to_screen_coords(x: float, y: float, z: float,
                              w: int, h: int, margin: int) -> tuple[int, int]:
-            r = (x*x + z*z) ** 0.5
-            usable_w = w - 2 * margin
-            usable_h = h - 2 * margin
-            sx = margin + int(r * usable_w * 0.5)
-            sy = margin + int((1.0 - (y + 1.0) * 0.5) * usable_h)
-            return sx, sy
+            return _elevation_to_screen(x, y, z, w, h, margin)

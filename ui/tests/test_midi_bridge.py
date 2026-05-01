@@ -59,7 +59,6 @@ def test_stop_without_start():
     bridge.stop()  # must not raise
 
 
-import pytest
 import sys
 
 _RTMIDI_OK = False
