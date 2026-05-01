@@ -67,6 +67,15 @@ std::string SceneSnapshot::toJson() const {
     return os.str();
 }
 
+// ---- path traversal guard ---------------------------------------------------
+
+static bool isSafeSceneName(const std::string& name) {
+    if (name.empty() || name.size() > 63) return false;
+    for (char c : name)
+        if (c == '/' || c == '\\' || c == '\0' || c == '.') return false;
+    return true;
+}
+
 // ---- fromJson ---------------------------------------------------------------
 
 SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
@@ -87,7 +96,7 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
 
         std::string obj_str = json.substr(open, close - open + 1);
         ObjectSnapshot o;
-        {
+        try {
             auto s = jsonGet(obj_str, "id");        if (!s.empty()) o.id          = std::stoi(s);
             s = jsonGet(obj_str, "az_rad");         if (!s.empty()) o.az_rad      = std::stof(s);
             s = jsonGet(obj_str, "el_rad");         if (!s.empty()) o.el_rad      = std::stof(s);
@@ -95,6 +104,8 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
             s = jsonGet(obj_str, "algorithm");      if (!s.empty()) o.algorithm   = std::stoi(s);
             s = jsonGet(obj_str, "gain_linear");    if (!s.empty()) o.gain_linear = std::stof(s);
             s = jsonGet(obj_str, "muted");          o.muted = (s == "true");
+        } catch (const std::exception&) {
+            // Malformed numeric field — keep defaults for this object.
         }
         ss.objects.push_back(o);
         pos = close + 1;
@@ -105,6 +116,7 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
 // ---- saveToDisk -------------------------------------------------------------
 
 bool SceneSnapshot::saveToDisk(const std::string& scenesDir) const {
+    if (!isSafeSceneName(name)) return false;
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::create_directories(scenesDir, ec);
@@ -121,6 +133,7 @@ bool SceneSnapshot::saveToDisk(const std::string& scenesDir) const {
 
 std::optional<SceneSnapshot> SceneSnapshot::loadFromDisk(const std::string& scenesDir,
                                                           const std::string& name) {
+    if (!isSafeSceneName(name)) return std::nullopt;
     std::string path = scenesDir + "/" + name + ".json";
     std::ifstream ifs(path);
     if (!ifs) return std::nullopt;

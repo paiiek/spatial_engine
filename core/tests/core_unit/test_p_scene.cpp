@@ -1,11 +1,13 @@
 // core/tests/core_unit/test_p_scene.cpp
 // US-001: SceneSnapshot and scene command decode tests.
 #include "ipc/SceneSnapshot.h"
+#include "ipc/SceneController.h"
 #include "ipc/Command.h"
 #include "ipc/CommandDecoder.h"
 #include <cassert>
 #include <cstring>
 #include <cstdio>
+#include <filesystem>
 
 using namespace spe::ipc;
 
@@ -120,6 +122,72 @@ static void test_decode_list() {
     std::printf("PASS: test_decode_list\n");
 }
 
+// ---- Test 5: SceneController save → list → load roundtrip -----------------
+
+static void test_scene_controller_roundtrip() {
+    namespace fs = std::filesystem;
+    // Use a temp directory unique to this test run.
+    auto tmpdir = fs::temp_directory_path() / "spe_scene_ctrl_test";
+    fs::remove_all(tmpdir);
+    fs::create_directories(tmpdir);
+
+    std::string dir = tmpdir.string();
+    spe::ipc::SceneController ctrl(dir);
+
+    // Build SceneSave command.
+    spe::ipc::Command saveCmd;
+    saveCmd.tag = spe::ipc::CommandTag::SceneSave;
+    spe::ipc::PayloadSceneSave sp{};
+    std::strncpy(sp.name, "myScene", sizeof(sp.name) - 1);
+    saveCmd.payload = sp;
+
+    bool handled = ctrl.handleCommand(saveCmd);
+    CHECK(handled, "controller: SceneSave handled");
+
+    // SceneList
+    spe::ipc::Command listCmd;
+    listCmd.tag = spe::ipc::CommandTag::SceneList;
+    listCmd.payload = spe::ipc::PayloadSceneList{};
+    handled = ctrl.handleCommand(listCmd);
+    CHECK(handled, "controller: SceneList handled");
+    CHECK(ctrl.lastSceneList().size() == 1, "controller: list has 1 scene");
+    CHECK(ctrl.lastSceneList()[0] == "myScene", "controller: scene name in list");
+
+    // SceneLoad
+    spe::ipc::Command loadCmd;
+    loadCmd.tag = spe::ipc::CommandTag::SceneLoad;
+    spe::ipc::PayloadSceneLoad lp{};
+    std::strncpy(lp.name, "myScene", sizeof(lp.name) - 1);
+    loadCmd.payload = lp;
+    handled = ctrl.handleCommand(loadCmd);
+    CHECK(handled, "controller: SceneLoad handled");
+    CHECK(ctrl.lastLoaded().has_value(), "controller: loaded scene present");
+    CHECK(ctrl.lastLoaded()->name == "myScene", "controller: loaded scene name");
+
+    fs::remove_all(tmpdir);
+    std::printf("PASS: test_scene_controller_roundtrip\n");
+}
+
+// ---- Test 6: path traversal blocked ----------------------------------------
+
+static void test_path_traversal_blocked() {
+    namespace fs = std::filesystem;
+    auto tmpdir = fs::temp_directory_path() / "spe_traversal_test";
+    fs::remove_all(tmpdir);
+    fs::create_directories(tmpdir);
+
+    spe::ipc::SceneSnapshot bad;
+    bad.name = "../evil";
+    bool ok = bad.saveToDisk(tmpdir.string());
+    CHECK(!ok, "path traversal: '../evil' must be rejected");
+
+    auto loaded = spe::ipc::SceneSnapshot::loadFromDisk(tmpdir.string(), "../evil");
+    CHECK(!loaded.has_value(), "path traversal: loadFromDisk must return nullopt");
+
+    fs::remove_all(tmpdir);
+    std::printf("PASS: test_path_traversal_blocked\n");
+}
+
 // ---- main ------------------------------------------------------------------
 
 int main() {
@@ -127,6 +195,8 @@ int main() {
     test_decode_save();
     test_decode_load();
     test_decode_list();
+    test_scene_controller_roundtrip();
+    test_path_traversal_blocked();
     std::printf("ALL PASS\n");
     return 0;
 }
