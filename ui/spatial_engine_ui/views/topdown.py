@@ -45,7 +45,9 @@ try:
 
         def set_object(self, obj_id: int) -> None:
             self._obj_id = obj_id
+            self._slider.blockSignals(True)
             self._slider.setValue(self.ELEV_DEFAULT)
+            self._slider.blockSignals(False)
 
         def _on_slider_changed(self, value: int) -> None:
             self._label.setText(f"Elev: {value}°")

@@ -15,6 +15,7 @@ try:
 except Exception:
     _RTMIDI_AVAILABLE = False
 
+import sys
 import threading
 import time
 
@@ -55,7 +56,6 @@ class MidiBridge:
             return self._port_name
         available = mido.get_input_names()
         if not available:
-            import sys
             print("[midi_bridge] no MIDI input ports available", file=sys.stderr)
             return None
         # prefer port with "loopback" in name (case-insensitive), else first

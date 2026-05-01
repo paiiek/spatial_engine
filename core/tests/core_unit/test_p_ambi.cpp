@@ -86,7 +86,7 @@ int main() {
         CHECK(c.W == 1.0f);
         CHECK(std::isnan(c.X));
         CHECK(std::isnan(c.Y));
-        // Z = sin(el=0) = 0, not NaN — only az-dependent terms propagate NaN
+        CHECK(!std::isnan(c.Z));  // Z = sin(el=0) = 0, not az-dependent
     }
 
     if (failures == 0) {
