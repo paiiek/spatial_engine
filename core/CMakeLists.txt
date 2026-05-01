@@ -107,6 +107,8 @@ set(SPE_CORE_SOURCES
     src/reverb/ReverbEngine.cpp
     # P9: BinauralMonitor stub
     src/output_backend/BinauralMonitor.cpp
+    # F2: Ambisonics 1st-order encoder
+    src/ambi/AmbisonicEncoder.cpp
 )
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})
