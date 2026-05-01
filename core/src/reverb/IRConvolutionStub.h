@@ -21,6 +21,15 @@ enum class IRValidationError {
     IRTooLong           = 3,
 };
 
+struct SofaMetadata {
+    float       sample_rate_hz      = 48000.f;
+    int         ir_length_samples   = 0;
+    int         measurement_count   = 0;
+    int         receiver_count      = 2;
+    bool        loaded              = false;
+    std::string path;
+};
+
 class IRConvolutionStub {
 public:
     static constexpr int kMaxIRLengthFrames = 192000; // 4 s @ 48 kHz
@@ -36,11 +45,17 @@ public:
     // RT-safe: no alloc, no lock.
     void process(const float* src, float* dst, int numSamples) noexcept;
 
+    // NO_JUCE stub: checks file existence and caches metadata path.
+    // Returns true if file exists, false otherwise.
+    bool loadFromSofa(const std::string& sofaPath);
+    const SofaMetadata& sofaMetadata() const noexcept { return sofa_meta_; }
+
     const std::string& lastError() const noexcept { return lastError_; }
 
 private:
-    int         engineSampleRate_ = 48000;
-    std::string lastError_;
+    int          engineSampleRate_ = 48000;
+    std::string  lastError_;
+    SofaMetadata sofa_meta_;
 };
 
 } // namespace spe::reverb

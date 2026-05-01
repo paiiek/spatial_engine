@@ -6,9 +6,10 @@
 
 namespace spe {
 
-// Object slot count. Spec mandates 8 simultaneous; we reserve 2x headroom
-// to allow algorithm-swap parallel-run (ADR 0006) without growth.
-inline constexpr int MAX_OBJECTS = 16;
+// Object slot count. Spec mandates 8 simultaneous; expanded to 64 for
+// larger venue deployments (US-002). Allows algorithm-swap parallel-run
+// (ADR 0006) without growth.
+inline constexpr int MAX_OBJECTS = 64;
 
 // Hard upper bound on per-callback block size. JUCE host refuses to start
 // if the device reports a larger buffer (P1 startup gate).

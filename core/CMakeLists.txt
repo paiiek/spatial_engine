@@ -91,6 +91,8 @@ set(SPE_CORE_SOURCES
     src/ipc/HeartbeatMonitor.cpp
     src/ipc/OSCBackend.cpp
     src/ipc/VST3ControlStub.cpp
+    # US-001: Scene snapshot serialisation
+    src/ipc/SceneSnapshot.cpp
     # P5: input chain
     src/input/FileInput.cpp
     src/input/SynthInput.cpp

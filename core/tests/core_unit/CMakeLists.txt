@@ -128,3 +128,13 @@ add_executable(test_p_adm_osc test_p_adm_osc.cpp)
 target_link_libraries(test_p_adm_osc PRIVATE spe_core)
 add_test(NAME p_adm_osc COMMAND test_p_adm_osc)
 
+# US-001: Scene snapshot tests
+add_executable(test_p_scene test_p_scene.cpp)
+target_link_libraries(test_p_scene PRIVATE spe_core)
+add_test(NAME p_scene COMMAND test_p_scene)
+
+# US-002: MAX_OBJECTS scale-up tests
+add_executable(test_p_max_objects test_p_max_objects.cpp)
+target_link_libraries(test_p_max_objects PRIVATE spe_core)
+add_test(NAME p_max_objects COMMAND test_p_max_objects)
+

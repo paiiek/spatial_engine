@@ -202,6 +202,26 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadHbPong p;
         p.timestamp_ms = (args.n_u64 > 0) ? args.u64s[0] : 0;
         cmd.payload = p;
+    } else if (addr == "/scene/save") {
+        cmd.tag = CommandTag::SceneSave;
+        PayloadSceneSave p;
+        // format: ,is schema_version name
+        const std::string& nm = (args.n_str > 0) ? args.strings[0] : std::string{};
+        std::size_t copy_len = nm.size() < 63 ? nm.size() : 63;
+        std::memcpy(p.name, nm.c_str(), copy_len);
+        p.name[copy_len] = '\0';
+        cmd.payload = p;
+    } else if (addr == "/scene/load") {
+        cmd.tag = CommandTag::SceneLoad;
+        PayloadSceneLoad p;
+        const std::string& nm = (args.n_str > 0) ? args.strings[0] : std::string{};
+        std::size_t copy_len = nm.size() < 63 ? nm.size() : 63;
+        std::memcpy(p.name, nm.c_str(), copy_len);
+        p.name[copy_len] = '\0';
+        cmd.payload = p;
+    } else if (addr == "/scene/list") {
+        cmd.tag = CommandTag::SceneList;
+        cmd.payload = PayloadSceneList{};
     } else if (addr.size() > 9 && addr.compare(0, 9, "/adm/obj/") == 0) {
         // ADM-OSC Living Standard receive paths.
         // No seq/id prefix — ADM-OSC uses pure float/int args only.
@@ -421,6 +441,32 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
         addr = "/hb/pong";
         auto& p = std::get<PayloadHbPong>(cmd.payload);
         add_t(p.timestamp_ms);
+        break;
+    }
+    case CommandTag::SceneSave: {
+        addr = "/scene/save";
+        auto& p = std::get<PayloadSceneSave>(cmd.payload);
+        // tags already have ",ii" for seq/id; append 's'
+        // We encode name as an OSC string argument.
+        tags += 's';
+        std::string nm(p.name);
+        for (char c : nm) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SceneLoad: {
+        addr = "/scene/load";
+        auto& p = std::get<PayloadSceneLoad>(cmd.payload);
+        tags += 's';
+        std::string nm(p.name);
+        for (char c : nm) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SceneList: {
+        addr = "/scene/list";
         break;
     }
     default:

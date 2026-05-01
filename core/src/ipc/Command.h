@@ -38,6 +38,11 @@ enum class CommandTag : uint8_t {
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
     HbPong        = 0x21, // /hb/pong       — subscriber → publisher (loopback)
 
+    // Scene (snapshot) system
+    SceneSave     = 0x30, // /scene/save    — save current scene by name
+    SceneLoad     = 0x31, // /scene/load    — load scene by name
+    SceneList     = 0x32, // /scene/list    — list available scenes
+
     // Unknown / malformed placeholder
     Unknown       = 0xFF,
 };
@@ -89,6 +94,10 @@ struct PayloadObjMute {
     bool     muted  = false;
 };
 
+struct PayloadSceneSave { char name[64] = {}; };
+struct PayloadSceneLoad { char name[64] = {}; };
+struct PayloadSceneList {};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -105,6 +114,9 @@ using CommandPayload = std::variant<
     PayloadSysReset,
     PayloadHbPing,
     PayloadHbPong,
+    PayloadSceneSave,
+    PayloadSceneLoad,
+    PayloadSceneList,
     PayloadUnknown
 >;
 
