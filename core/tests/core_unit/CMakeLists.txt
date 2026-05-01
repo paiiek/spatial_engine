@@ -123,3 +123,8 @@ add_executable(test_p7_fdn_reverb test_p7_fdn_reverb.cpp)
 target_link_libraries(test_p7_fdn_reverb PRIVATE spe_core)
 add_test(NAME p7_fdn_reverb COMMAND test_p7_fdn_reverb)
 
+# ADM-OSC tests
+add_executable(test_p_adm_osc test_p_adm_osc.cpp)
+target_link_libraries(test_p_adm_osc PRIVATE spe_core)
+add_test(NAME p_adm_osc COMMAND test_p_adm_osc)
+

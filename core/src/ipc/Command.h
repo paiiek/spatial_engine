@@ -23,10 +23,11 @@ enum class Algorithm : uint8_t {
 // ---- Command tag (one per OSC address pattern) ------------------------------
 enum class CommandTag : uint8_t {
     // Object control
-    ObjMove    = 0x01,  // /obj/move      — set az/el/dist for one object
-    ObjGain    = 0x02,  // /obj/gain      — set per-object gain scalar
-    ObjActive  = 0x03,  // /obj/active    — enable / disable object
-    ObjAlgo    = 0x04,  // /obj/algo      — select rendering algorithm
+    ObjMove    = 0x01,  // /obj/move             — set az/el/dist for one object
+    ObjGain    = 0x02,  // /obj/gain             — set per-object gain scalar
+    ObjActive  = 0x03,  // /obj/active           — enable / disable object
+    ObjAlgo    = 0x04,  // /obj/algo             — select rendering algorithm
+    ObjMute    = 0x05,  // /adm/obj/n/mute       — mute/unmute (ADM-OSC)
 
     // System
     SysHandshake  = 0x10, // /sys/handshake — client sends schema_version
@@ -83,6 +84,11 @@ struct PayloadHbPong {
     uint64_t timestamp_ms = 0;
 };
 
+struct PayloadObjMute {
+    uint32_t obj_id = 0;
+    bool     muted  = false;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -93,6 +99,7 @@ using CommandPayload = std::variant<
     PayloadObjGain,
     PayloadObjActive,
     PayloadObjAlgo,
+    PayloadObjMute,
     PayloadSysHandshake,
     PayloadSysAlgoSwap,
     PayloadSysReset,

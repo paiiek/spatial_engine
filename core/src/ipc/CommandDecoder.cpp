@@ -2,7 +2,9 @@
 // Minimal OSC 1.1 subset decoder/encoder. No JUCE dependency.
 
 #include "ipc/CommandDecoder.h"
+#include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <vector>
 
 namespace spe::ipc {
@@ -200,6 +202,87 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadHbPong p;
         p.timestamp_ms = (args.n_u64 > 0) ? args.u64s[0] : 0;
         cmd.payload = p;
+    } else if (addr.size() > 9 && addr.compare(0, 9, "/adm/obj/") == 0) {
+        // ADM-OSC Living Standard receive paths.
+        // No seq/id prefix — ADM-OSC uses pure float/int args only.
+        static constexpr float DEG2RAD  = 3.14159265358979323846f / 180.f;
+        static constexpr float MAX_DIST = 20.0f; // metres for normalised dist
+
+        int obj_id = -1;
+        char sub[32] = {};
+        // Parse "/adm/obj/{n}/{sub}"
+        if (std::sscanf(addr.c_str(), "/adm/obj/%d/%31s", &obj_id, sub) == 2 && obj_id >= 0) {
+            std::string subpath(sub);
+            cmd.seq = 0; // ADM-OSC carries no sequence number
+            cmd.id  = 0;
+
+            if (subpath == "azim") {
+                cmd.tag = CommandTag::ObjMove;
+                PayloadObjMove p;
+                p.obj_id  = static_cast<uint32_t>(obj_id);
+                p.az_rad  = getFloat(0) * DEG2RAD;
+                p.el_rad  = 0.f;
+                p.dist_m  = 1.f;
+                cmd.payload = p;
+            } else if (subpath == "elev") {
+                cmd.tag = CommandTag::ObjMove;
+                PayloadObjMove p;
+                p.obj_id  = static_cast<uint32_t>(obj_id);
+                p.az_rad  = 0.f;
+                p.el_rad  = getFloat(0) * DEG2RAD;
+                p.dist_m  = 1.f;
+                cmd.payload = p;
+            } else if (subpath == "dist") {
+                cmd.tag = CommandTag::ObjMove;
+                PayloadObjMove p;
+                p.obj_id  = static_cast<uint32_t>(obj_id);
+                p.az_rad  = 0.f;
+                p.el_rad  = 0.f;
+                p.dist_m  = getFloat(0) * MAX_DIST; // normalised 0..1 → metres
+                cmd.payload = p;
+            } else if (subpath == "aed") {
+                // ,fff  azimuth_deg  elevation_deg  distance_normalised
+                cmd.tag = CommandTag::ObjMove;
+                PayloadObjMove p;
+                p.obj_id  = static_cast<uint32_t>(obj_id);
+                p.az_rad  = getFloat(0) * DEG2RAD;
+                p.el_rad  = getFloat(1) * DEG2RAD;
+                p.dist_m  = getFloat(2) * MAX_DIST;
+                cmd.payload = p;
+            } else if (subpath == "gain") {
+                cmd.tag = CommandTag::ObjGain;
+                PayloadObjGain p;
+                p.obj_id = static_cast<uint32_t>(obj_id);
+                p.gain   = getFloat(0);
+                cmd.payload = p;
+            } else if (subpath == "mute") {
+                cmd.tag = CommandTag::ObjMute;
+                PayloadObjMute p;
+                p.obj_id = static_cast<uint32_t>(obj_id);
+                p.muted  = (args.n_int > 0 ? args.ints[0] : 0) != 0;
+                cmd.payload = p;
+            } else if (subpath == "w") {
+                // Width/spread — not implemented in v0, silently ignore.
+                // Return Unknown so caller can log if desired.
+                ++reject_count;
+                cmd.tag = CommandTag::Unknown;
+                PayloadUnknown p;
+                p.address = addr;
+                cmd.payload = p;
+            } else {
+                ++reject_count;
+                cmd.tag = CommandTag::Unknown;
+                PayloadUnknown p;
+                p.address = addr;
+                cmd.payload = p;
+            }
+        } else {
+            ++reject_count;
+            cmd.tag = CommandTag::Unknown;
+            PayloadUnknown p;
+            p.address = addr;
+            cmd.payload = p;
+        }
     } else {
         ++reject_count;
         cmd.tag = CommandTag::Unknown;

@@ -26,6 +26,22 @@ def object_pos_address(obj_id: int) -> str:
     return f"/object/{obj_id}/pos"
 
 
+# ADM-OSC addresses (receive only — sent by external controllers)
+ADM_OBJ_AZIM = "/adm/obj/{n}/azim"
+ADM_OBJ_ELEV = "/adm/obj/{n}/elev"
+ADM_OBJ_DIST = "/adm/obj/{n}/dist"
+ADM_OBJ_GAIN = "/adm/obj/{n}/gain"
+ADM_OBJ_MUTE = "/adm/obj/{n}/mute"
+ADM_OBJ_AED  = "/adm/obj/{n}/aed"
+
+
+def adm_obj_azim(n: int) -> str: return f"/adm/obj/{n}/azim"
+def adm_obj_elev(n: int) -> str: return f"/adm/obj/{n}/elev"
+def adm_obj_aed(n: int)  -> str: return f"/adm/obj/{n}/aed"
+def adm_obj_gain(n: int) -> str: return f"/adm/obj/{n}/gain"
+def adm_obj_mute(n: int) -> str: return f"/adm/obj/{n}/mute"
+
+
 def noise_type_address(channel: int) -> str:
     return f"/noise/{channel}/type"
 
