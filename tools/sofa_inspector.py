@@ -109,19 +109,66 @@ def format_human(info: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+VALID_SR     = 48000
+VALID_IR_LEN = {256, 512}
+
+
+def validate_sofa(info: dict[str, Any]) -> list[str]:
+    """Return list of validation error strings (empty = OK)."""
+    errors: list[str] = []
+    derived = info.get("derived", {})
+    sr = derived.get("sample_rate_hz")
+    ir_len = derived.get("ir_length_samples")
+    if sr is None:
+        errors.append("Could not read Data.SamplingRate from SOFA file.")
+    elif int(sr) != VALID_SR:
+        errors.append(f"Sample rate mismatch: expected {VALID_SR} Hz, got {int(sr)} Hz.")
+    if ir_len is None:
+        errors.append("Could not read IR length from Data.IR.")
+    elif ir_len not in VALID_IR_LEN:
+        errors.append(
+            f"IR length unsupported: expected one of {sorted(VALID_IR_LEN)}, got {ir_len} samples."
+        )
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Print KEMAR SOFA metadata for BinauralMonitor sub-budget (A2).")
     parser.add_argument("path", nargs="?", default=DEFAULT_KEMAR, type=Path)
     parser.add_argument("--json", action="store_true", help="Emit JSON only.")
+    parser.add_argument("--validate", action="store_true", default=True,
+                        help="Validate SR and IR length (default: on). Exit 1 on mismatch.")
     args = parser.parse_args(argv)
 
+    try:
+        import h5py  # noqa: F401
+    except ImportError:
+        print("ERROR: h5py is not available. Install via: pip install h5py", file=sys.stderr)
+        return 2
+
     info = inspect_sofa(args.path)
+    errors = validate_sofa(info)
+
+    derived = info.get("derived", {})
+    sr = derived.get("sample_rate_hz", "?")
+    ir_len = derived.get("ir_length_samples", "?")
+    n_meas = derived.get("measurement_count", "?")
+
     if args.json:
+        info["validation_errors"] = errors
         print(json.dumps(info, indent=2, default=str))
     else:
         print(format_human(info))
+        if errors:
+            for e in errors:
+                print(f"SOFA ERROR: {e}", file=sys.stderr)
+        else:
+            print(f"SOFA OK: SR={int(sr)} Hz, IR_len={ir_len}, positions={n_meas}")
         # Trailing machine-parseable line so just-recipes can grep.
         print("SOFA_INSPECT_JSON:" + json.dumps(info, default=str))
+
+    if errors:
+        return 1
     return 0
 
 

@@ -102,6 +102,8 @@ set(SPE_CORE_SOURCES
     src/reverb/FdnReverb.cpp
     src/reverb/IRConvolutionStub.cpp
     src/reverb/ReverbEngine.cpp
+    # P9: BinauralMonitor stub
+    src/output_backend/BinauralMonitor.cpp
 )
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})
