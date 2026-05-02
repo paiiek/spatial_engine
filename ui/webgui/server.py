@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import threading
+from contextlib import asynccontextmanager
 from typing import Set
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -13,19 +14,20 @@ from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="spatial_engine WebGUI", version="0.1.0")
 
-
-@app.on_event("startup")
-async def _start_osc_bridge() -> None:
-    """Auto-start OSC bridge on server startup."""
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     try:
         import ui.webgui.osc_bridge as osc_bridge  # noqa: PLC0415
         loop = asyncio.get_running_loop()
         osc_bridge.start(broadcast_state, loop)
-        logger.info("OSC bridge started via startup event")
+        logger.info("OSC bridge started via lifespan")
     except Exception as exc:  # pragma: no cover
         logger.warning("OSC bridge startup failed: %s", exc)
+    yield
+
+
+app = FastAPI(title="spatial_engine WebGUI", version="0.1.0", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # Connection manager

@@ -35,10 +35,7 @@ def test_broadcast_latency(client):
         payload = {"osc_address": "/adm/obj/1/azim", "args": [30.0]}
 
         t0 = time.perf_counter()
-        # Trigger broadcast synchronously via the async helper
-        asyncio.get_event_loop().run_until_complete(
-            manager.broadcast(json.dumps(payload))
-        )
+        asyncio.run(manager.broadcast(json.dumps(payload)))
         raw = ws.receive_text()
         t1 = time.perf_counter()
 
