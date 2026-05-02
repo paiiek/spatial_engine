@@ -17,6 +17,33 @@ ADDR_OBJECT_SEQ = "/object/{id}/seq"          # appended to pos bundle
 ADDR_NOISE_TYPE = "/noise/{ch}/type"          # ,s  white|pink
 ADDR_NOISE_GAIN = "/noise/{ch}/gain"          # ,f  dB
 
+# Per-object algorithm selector
+ADDR_OBJ_ALGO   = "/obj/algo"                 # ,ii obj_id algo_int (0=VBAP 1=WFS 2=DBAP)
+# Per-object DSP parameter (bundled): obj_id, param_id, value
+#   param 0..3 = EQ band gain dB (low/lowmid/highmid/high)
+#   param 4    = user delay ms
+#   param 5    = distance HF rolloff k_hf (0..1)
+#   param 6    = reverb send (0..1)
+ADDR_OBJ_DSP    = "/obj/dsp"                  # ,iif obj_id param_id value
+
+# Transport
+ADDR_TRANSPORT_PLAY = "/transport/play"       # no args
+ADDR_TRANSPORT_STOP = "/transport/stop"       # no args
+
+# DSP param IDs (mirror PayloadObjDsp::Param in core/src/ipc/Command.h)
+DSP_PARAM_EQ_LOW       = 0
+DSP_PARAM_EQ_LOWMID    = 1
+DSP_PARAM_EQ_HIGHMID   = 2
+DSP_PARAM_EQ_HIGH      = 3
+DSP_PARAM_DELAY_MS     = 4
+DSP_PARAM_K_HF         = 5
+DSP_PARAM_REVERB_SEND  = 6
+
+# Algorithm enum (mirror ipc::Algorithm in core/src/ipc/Command.h)
+ALGO_VBAP = 0
+ALGO_WFS  = 1
+ALGO_DBAP = 2
+
 HEARTBEAT_RATE_HZ = 10
 HEARTBEAT_MISS_THRESHOLD = 3
 DRAG_RATE_HZ = 120

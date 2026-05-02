@@ -43,6 +43,17 @@ enum class CommandTag : uint8_t {
     SceneLoad     = 0x31, // /scene/load    — load scene by name
     SceneList     = 0x32, // /scene/list    — list available scenes
 
+    // Noise generator (per-channel array verification)
+    NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink
+    NoiseGain     = 0x41, // /noise/{ch}/gain ,f  dB
+
+    // Transport
+    TransportPlay = 0x50, // /transport/play
+    TransportStop = 0x51, // /transport/stop
+
+    // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
+    ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
+
     // Unknown / malformed placeholder
     Unknown       = 0xFF,
 };
@@ -98,6 +109,39 @@ struct PayloadSceneSave { char name[64] = {}; };
 struct PayloadSceneLoad { char name[64] = {}; };
 struct PayloadSceneList {};
 
+struct PayloadNoiseType {
+    uint32_t channel = 0;
+    bool     pink    = false; // false = white, true = pink
+};
+
+struct PayloadNoiseGain {
+    uint32_t channel = 0;
+    float    gain_db = -60.f; // -60 dB ≡ effectively muted
+};
+
+struct PayloadTransportPlay {};
+struct PayloadTransportStop {};
+
+// Per-object DSP parameter setter.
+//   param 0..3 → EQ band gain in dB (low / lowmid / highmid / high)
+//   param 4    → user delay in ms (0..1000)
+//   param 5    → distance HF rolloff coefficient k_hf (0..1, 0=no rolloff)
+//   param 6    → reverb send level (0..1, linear)
+struct PayloadObjDsp {
+    enum class Param : uint8_t {
+        EqLow      = 0,
+        EqLowMid   = 1,
+        EqHighMid  = 2,
+        EqHigh     = 3,
+        DelayMs    = 4,
+        KHF        = 5,
+        ReverbSend = 6,
+    };
+    uint32_t obj_id = 0;
+    Param    param  = Param::EqLow;
+    float    value  = 0.f;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -117,6 +161,11 @@ using CommandPayload = std::variant<
     PayloadSceneSave,
     PayloadSceneLoad,
     PayloadSceneList,
+    PayloadNoiseType,
+    PayloadNoiseGain,
+    PayloadTransportPlay,
+    PayloadTransportStop,
+    PayloadObjDsp,
     PayloadUnknown
 >;
 

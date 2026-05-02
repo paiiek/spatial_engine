@@ -237,6 +237,47 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
     } else if (addr == "/scene/list") {
         cmd.tag = CommandTag::SceneList;
         cmd.payload = PayloadSceneList{};
+    } else if (addr == "/transport/play") {
+        cmd.tag = CommandTag::TransportPlay;
+        cmd.payload = PayloadTransportPlay{};
+    } else if (addr == "/transport/stop") {
+        cmd.tag = CommandTag::TransportStop;
+        cmd.payload = PayloadTransportStop{};
+    } else if (addr == "/obj/dsp") {
+        cmd.tag = CommandTag::ObjDsp;
+        PayloadObjDsp p;
+        p.obj_id = static_cast<uint32_t>(getInt(0));
+        const int param_int = getInt(1);
+        if (param_int >= 0 && param_int <= 6) {
+            p.param = static_cast<PayloadObjDsp::Param>(param_int);
+        }
+        p.value = getFloat(0);
+        cmd.payload = p;
+    } else if (addr.size() > 7 && addr.compare(0, 7, "/noise/") == 0) {
+        // Noise generator: /noise/{ch}/{type|gain}
+        int ch = -1;
+        char sub[16] = {};
+        if (std::sscanf(addr.c_str(), "/noise/%d/%15s", &ch, sub) == 2 && ch >= 0) {
+            const std::string subpath(sub);
+            const auto chu = static_cast<uint32_t>(ch);
+            if (subpath == "type" && args.n_str > 0) {
+                PayloadNoiseType p;
+                p.channel = chu;
+                p.pink    = (args.strings[0] == "pink");
+                cmd.tag     = CommandTag::NoiseType;
+                cmd.payload = p;
+            } else if (subpath == "gain") {
+                PayloadNoiseGain p;
+                p.channel = chu;
+                p.gain_db = getFloat(0);
+                cmd.tag     = CommandTag::NoiseGain;
+                cmd.payload = p;
+            } else {
+                makeUnknown();
+            }
+        } else {
+            makeUnknown();
+        }
     } else if (addr.size() > 9 && addr.compare(0, 9, "/adm/obj/") == 0) {
         // ADM-OSC Living Standard receive paths.
         // No seq/id prefix — ADM-OSC uses pure float/int args only.
@@ -446,6 +487,38 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
     }
     case CommandTag::SceneList: {
         addr = "/scene/list";
+        break;
+    }
+    case CommandTag::NoiseType: {
+        auto& p = std::get<PayloadNoiseType>(cmd.payload);
+        addr = "/noise/" + std::to_string(p.channel) + "/type";
+        const char* nm = p.pink ? "pink" : "white";
+        tags += 's';
+        for (const char* q = nm; *q; ++q) args_buf.push_back(static_cast<uint8_t>(*q));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::NoiseGain: {
+        auto& p = std::get<PayloadNoiseGain>(cmd.payload);
+        addr = "/noise/" + std::to_string(p.channel) + "/gain";
+        add_f(p.gain_db);
+        break;
+    }
+    case CommandTag::TransportPlay: {
+        addr = "/transport/play";
+        break;
+    }
+    case CommandTag::TransportStop: {
+        addr = "/transport/stop";
+        break;
+    }
+    case CommandTag::ObjDsp: {
+        auto& p = std::get<PayloadObjDsp>(cmd.payload);
+        addr = "/obj/dsp";
+        add_i(static_cast<int32_t>(p.obj_id));
+        add_i(static_cast<int32_t>(p.param));
+        add_f(p.value);
         break;
     }
     default:

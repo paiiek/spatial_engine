@@ -26,3 +26,21 @@ class OscClient:
     def send_noise_gain(self, channel: int, gain_db: float) -> None:
         from .protocol import noise_gain_address
         self._client.send_message(noise_gain_address(channel), [gain_db])
+
+    def send_object_algo(self, obj_id: int, algo: int) -> None:
+        """Set per-object rendering algorithm (0=VBAP, 1=WFS, 2=DBAP)."""
+        from .protocol import ADDR_OBJ_ALGO
+        self._client.send_message(ADDR_OBJ_ALGO, [int(obj_id), int(algo)])
+
+    def send_object_dsp(self, obj_id: int, param: int, value: float) -> None:
+        """Set per-object DSP parameter (EQ/Delay/HF/ReverbSend)."""
+        from .protocol import ADDR_OBJ_DSP
+        self._client.send_message(ADDR_OBJ_DSP, [int(obj_id), int(param), float(value)])
+
+    def send_transport_play(self) -> None:
+        from .protocol import ADDR_TRANSPORT_PLAY
+        self._client.send_message(ADDR_TRANSPORT_PLAY, [])
+
+    def send_transport_stop(self) -> None:
+        from .protocol import ADDR_TRANSPORT_STOP
+        self._client.send_message(ADDR_TRANSPORT_STOP, [])

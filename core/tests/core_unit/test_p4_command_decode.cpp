@@ -141,6 +141,64 @@ int main() {
         (void)rp;
     }
 
+    // --- NoiseType (white) ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::NoiseType; cmd.seq = 100; cmd.id = 100;
+        PayloadNoiseType p; p.channel = 3; p.pink = false;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::NoiseType);
+        auto& rp = std::get<PayloadNoiseType>(rt.payload);
+        assert(rp.channel == 3);
+        assert(rp.pink == false);
+        (void)rp;
+    }
+
+    // --- NoiseType (pink) ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::NoiseType; cmd.seq = 101; cmd.id = 101;
+        PayloadNoiseType p; p.channel = 7; p.pink = true;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::NoiseType);
+        auto& rp = std::get<PayloadNoiseType>(rt.payload);
+        assert(rp.channel == 7);
+        assert(rp.pink == true);
+        (void)rp;
+    }
+
+    // --- NoiseGain ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::NoiseGain; cmd.seq = 102; cmd.id = 102;
+        PayloadNoiseGain p; p.channel = 2; p.gain_db = -12.5f;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::NoiseGain);
+        auto& rp = std::get<PayloadNoiseGain>(rt.payload);
+        assert(rp.channel == 2);
+        assert(rp.gain_db == -12.5f);
+        (void)rp;
+    }
+
+    // --- TransportPlay / TransportStop ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::TransportPlay; cmd.seq = 103; cmd.id = 103;
+        cmd.payload = PayloadTransportPlay{};
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::TransportPlay);
+    }
+    {
+        Command cmd;
+        cmd.tag = CommandTag::TransportStop; cmd.seq = 104; cmd.id = 104;
+        cmd.payload = PayloadTransportStop{};
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::TransportStop);
+    }
+
     // No rejects so far.
     assert(dec.rejectCount() == 0);
 

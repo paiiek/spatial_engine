@@ -171,6 +171,48 @@ def _dispatch_to_osc(msg: dict) -> None:
     elif mtype == "scene_list":
         if osc_send_fn:
             osc_send_fn("/scene/list")
+    elif mtype == "transport":
+        action = str(msg.get("action", "")).lower()
+        if action == "play" and osc_send_fn:
+            osc_send_fn("/transport/play")
+        elif action == "stop" and osc_send_fn:
+            osc_send_fn("/transport/stop")
+        else:
+            logger.warning("transport: unknown action %r", action)
+    elif mtype == "obj_algo":
+        n = int(msg["n"])
+        if not (0 <= n < 64):
+            logger.warning("obj_algo n=%d out of range [0,63]", n)
+            return
+        algo = int(msg.get("algo", 0))   # 0=VBAP 1=WFS 2=DBAP
+        if not (0 <= algo <= 2):
+            logger.warning("obj_algo algo=%d out of range [0,2]", algo)
+            return
+        if osc_send_fn:
+            osc_send_fn("/obj/algo", n, algo)
+    elif mtype == "obj_dsp":
+        n = int(msg["n"])
+        if not (0 <= n < 64):
+            logger.warning("obj_dsp n=%d out of range [0,63]", n)
+            return
+        param = int(msg.get("param", 0))  # 0..6 (see protocol.py DSP_PARAM_*)
+        if not (0 <= param <= 6):
+            logger.warning("obj_dsp param=%d out of range [0,6]", param)
+            return
+        value = float(msg.get("value", 0.0))
+        if osc_send_fn:
+            osc_send_fn("/obj/dsp", n, param, value)
+    elif mtype == "noise":
+        ch = int(msg["ch"])
+        if ch < 0 or ch >= 64:
+            logger.warning("noise ch=%d out of range", ch)
+            return
+        ntype = msg.get("ntype")
+        ngain = msg.get("gain_db")
+        if osc_send_fn and ntype is not None:
+            osc_send_fn(f"/noise/{ch}/type", str(ntype))
+        if osc_send_fn and ngain is not None:
+            osc_send_fn(f"/noise/{ch}/gain", float(ngain))
     else:
         logger.debug("Unknown message type: %s", mtype)
 
