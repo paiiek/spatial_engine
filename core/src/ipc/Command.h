@@ -51,6 +51,9 @@ enum class CommandTag : uint8_t {
     TransportPlay = 0x50, // /transport/play
     TransportStop = 0x51, // /transport/stop
 
+    // Reverb engine select
+    ReverbSelect  = 0x52, // /reverb/select ,s "fdn"|"ir"
+
     // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
     ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
 
@@ -122,6 +125,10 @@ struct PayloadNoiseGain {
 struct PayloadTransportPlay {};
 struct PayloadTransportStop {};
 
+struct PayloadReverbSelect {
+    uint8_t which = 0; // 0 = fdn, 1 = ir
+};
+
 // Per-object DSP parameter setter.
 //   param 0..3 → EQ band gain in dB (low / lowmid / highmid / high)
 //   param 4    → user delay in ms (0..1000)
@@ -166,6 +173,7 @@ using CommandPayload = std::variant<
     PayloadTransportPlay,
     PayloadTransportStop,
     PayloadObjDsp,
+    PayloadReverbSelect,
     PayloadUnknown
 >;
 

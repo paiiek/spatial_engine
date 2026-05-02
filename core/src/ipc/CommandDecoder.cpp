@@ -243,6 +243,15 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
     } else if (addr == "/transport/stop") {
         cmd.tag = CommandTag::TransportStop;
         cmd.payload = PayloadTransportStop{};
+    } else if (addr == "/reverb/select") {
+        if (args.n_str > 0) {
+            cmd.tag = CommandTag::ReverbSelect;
+            PayloadReverbSelect p;
+            p.which = (args.strings[0] == "ir") ? 1u : 0u;
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
     } else if (addr == "/obj/dsp") {
         cmd.tag = CommandTag::ObjDsp;
         PayloadObjDsp p;
@@ -511,6 +520,16 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
     }
     case CommandTag::TransportStop: {
         addr = "/transport/stop";
+        break;
+    }
+    case CommandTag::ReverbSelect: {
+        auto& p = std::get<PayloadReverbSelect>(cmd.payload);
+        addr = "/reverb/select";
+        tags += 's';
+        const char* nm = (p.which == 1) ? "ir" : "fdn";
+        for (const char* q = nm; *q; ++q) args_buf.push_back(static_cast<uint8_t>(*q));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
         break;
     }
     case CommandTag::ObjDsp: {

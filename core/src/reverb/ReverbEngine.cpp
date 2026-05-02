@@ -2,7 +2,7 @@
 
 #include "ReverbEngine.h"
 #include "FdnReverb.h"
-#include "IRConvolutionStub.h"
+#include "IRConvReverb.h"
 #include <cstring>
 
 namespace spe::reverb {
@@ -22,22 +22,6 @@ private:
     FdnReverb fdn_;
 };
 
-// --- IR stub wrapper -------------------------------------------------------
-class IRConvolutionEngine final : public IReverbEngine {
-public:
-    IRConvolutionEngine() = default;
-    void prepareToPlay(double sr, int /*bs*/) override {
-        stub_.setEngineSampleRate(static_cast<int>(sr));
-    }
-    void process(float* inOut, int n) noexcept override {
-        // Stub: dry pass-through (in-place: src == dst is fine with memcpy).
-        stub_.process(inOut, inOut, n);
-    }
-    const char* name() const noexcept override { return "IRConvolutionStub"; }
-private:
-    IRConvolutionStub stub_;
-};
-
 // --- Factory ---------------------------------------------------------------
 std::unique_ptr<IReverbEngine> createReverbEngine(const ReverbConfig& cfg) {
     switch (cfg.type) {
@@ -47,7 +31,7 @@ std::unique_ptr<IReverbEngine> createReverbEngine(const ReverbConfig& cfg) {
             return eng;
         }
         case ReverbType::IRConvolution: {
-            auto eng = std::make_unique<IRConvolutionEngine>();
+            auto eng = std::make_unique<IRConvReverb>(cfg);
             eng->prepareToPlay(cfg.sampleRate, cfg.blockSize);
             return eng;
         }

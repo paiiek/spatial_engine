@@ -13,6 +13,7 @@
 #include "render/VBAPRenderer.h"
 #include "render/WFSRenderer.h"
 #include "reverb/FdnReverb.h"
+#include "reverb/ReverbEngine.h"
 #include "util/CommandFifo.h"
 #include "util/TraceRing.h"
 #include "util/XrunCounter.h"
@@ -59,7 +60,9 @@ private:
     render::WFSRenderer           wfs_;
 
     // FDN reverb (mono send → mono wet) and binaural side-output (mono → L/R).
-    reverb::FdnReverb             fdn_;
+    reverb::FdnReverb                        fdn_;
+    std::unique_ptr<reverb::IReverbEngine>   ir_reverb_;
+    std::atomic<int>                         active_reverb_{0}; // 0=FDN, 1=IR
     output::BinauralMonitor       binaural_;
     bool                          binaural_ok_ = false;
 

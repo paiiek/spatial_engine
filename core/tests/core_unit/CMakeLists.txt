@@ -158,3 +158,8 @@ add_executable(test_p_binaural_stub test_p_binaural_stub.cpp)
 target_link_libraries(test_p_binaural_stub PRIVATE spe_core)
 add_test(NAME p_binaural_stub COMMAND test_p_binaural_stub)
 
+# M3: IRConvReverb (OLA) tests
+add_executable(test_p_ir_reverb test_p_ir_reverb.cpp)
+target_link_libraries(test_p_ir_reverb PRIVATE spe_core)
+add_test(NAME p_ir_reverb COMMAND test_p_ir_reverb)
+

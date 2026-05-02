@@ -24,6 +24,8 @@ struct QueuedCmd {
     // ObjDsp parameter setter (EQ band gain dB / delay ms / k_hf 0..1 / reverb send 0..1)
     uint8_t  dsp_param   = 0;  // 0..3 EQ band, 4 delay_ms, 5 k_hf, 6 reverb_send
     float    dsp_value   = 0.f;
+    // ReverbSelect: 0 = fdn, 1 = ir
+    uint8_t  reverb_which = 0;
 };
 
 template<int N = 1024>

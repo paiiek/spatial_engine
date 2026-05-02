@@ -104,6 +104,7 @@ set(SPE_CORE_SOURCES
     # P7: reverb
     src/reverb/FdnReverb.cpp
     src/reverb/IRConvolutionStub.cpp
+    src/reverb/IRConvReverb.cpp
     src/reverb/ReverbEngine.cpp
     # P9 / v1c: BinauralMonitor + pure-C++ HRTF pipeline
     src/output_backend/BinauralMonitor.cpp

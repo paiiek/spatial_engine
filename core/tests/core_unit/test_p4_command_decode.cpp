@@ -199,6 +199,32 @@ int main() {
         assert(rt.tag == CommandTag::TransportStop);
     }
 
+    // --- ReverbSelect (fdn) ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::ReverbSelect; cmd.seq = 110; cmd.id = 110;
+        PayloadReverbSelect p; p.which = 0;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::ReverbSelect);
+        auto& rp = std::get<PayloadReverbSelect>(rt.payload);
+        assert(rp.which == 0);
+        (void)rp;
+    }
+
+    // --- ReverbSelect (ir) ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::ReverbSelect; cmd.seq = 111; cmd.id = 111;
+        PayloadReverbSelect p; p.which = 1;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::ReverbSelect);
+        auto& rp = std::get<PayloadReverbSelect>(rt.payload);
+        assert(rp.which == 1);
+        (void)rp;
+    }
+
     // No rejects so far.
     assert(dec.rejectCount() == 0);
 

@@ -2,6 +2,7 @@
 
 #include "core/SpatialEngine.h"
 #include "geometry/LayoutLoader.h"
+#include "reverb/ReverbEngine.h"
 #include "util/RtAssertNoAlloc.h"
 
 #include <algorithm>
@@ -70,6 +71,11 @@ SpatialEngine::SpatialEngine(int listen_port)
                 break;
             case ipc::CommandTag::SysReset:
                 break;
+            case ipc::CommandTag::ReverbSelect:
+                if (auto* p = std::get_if<ipc::PayloadReverbSelect>(&cmd.payload)) {
+                    qc.reverb_which = p->which;
+                }
+                break;
             default:
                 return; // not queued
             }
@@ -121,6 +127,12 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
 
     // FDN reverb (mono send → mono wet)
     fdn_.prepareToPlay(sample_rate, max_block_size);
+    // IR convolution reverb
+    reverb::ReverbConfig ir_cfg;
+    ir_cfg.type       = reverb::ReverbType::IRConvolution;
+    ir_cfg.sampleRate = sample_rate;
+    ir_cfg.blockSize  = max_block_size;
+    ir_reverb_ = reverb::createReverbEngine(ir_cfg);
     reverb_send_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
     reverb_wet_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
 
@@ -207,6 +219,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             case ipc::CommandTag::TransportStop:
                 transport_play_.store(false, std::memory_order_relaxed);
                 break;
+            case ipc::CommandTag::ReverbSelect:
+                active_reverb_.store(static_cast<int>(qc.reverb_which),
+                                     std::memory_order_relaxed);
+                break;
             case ipc::CommandTag::ObjDsp:
                 switch (qc.dsp_param) {
                 case 0: c.eq_gain_db[0] = qc.dsp_value; break;
@@ -277,11 +293,18 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         }
     }
 
-    // FDN reverb: mono in-place. Copy send → wet, then process in place.
+    // Reverb: mono in-place. Copy send → wet, then process in place.
     std::copy(reverb_send_buf_.begin(),
               reverb_send_buf_.begin() + block.num_frames,
               reverb_wet_buf_.begin());
-    fdn_.process(reverb_wet_buf_.data(), block.num_frames);
+    {
+        const int rev = active_reverb_.load(std::memory_order_relaxed);
+        if (rev == 1 && ir_reverb_) {
+            ir_reverb_->process(reverb_wet_buf_.data(), block.num_frames);
+        } else {
+            fdn_.process(reverb_wet_buf_.data(), block.num_frames);
+        }
+    }
 
     // Per-algorithm spatial render (each renderer reads dry_ptrs_,
     // sees only its own algorithm's objects via the masked spans below).
