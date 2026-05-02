@@ -4,13 +4,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import threading
 from contextlib import asynccontextmanager
-from typing import Set
+from dataclasses import asdict
+from typing import Optional, Set
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from spatial_engine_ui.state.trajectory import TrajectoryConfig, TrajectoryShape
+from ui.webgui.trajectory import WebTrajectoryRunner
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +30,12 @@ async def lifespan(_app: FastAPI):
         logger.info("OSC bridge started via lifespan")
     except Exception as exc:  # pragma: no cover
         logger.warning("OSC bridge startup failed: %s", exc)
-    yield
+    _app.state.trajectory = WebTrajectoryRunner(osc_send_fn)
+    await _app.state.trajectory.start()
+    try:
+        yield
+    finally:
+        await _app.state.trajectory.stop()
 
 
 app = FastAPI(title="spatial_engine WebGUI", version="0.1.0", lifespan=lifespan)
@@ -215,6 +226,57 @@ def _dispatch_to_osc(msg: dict) -> None:
             osc_send_fn(f"/noise/{ch}/gain", float(ngain))
     else:
         logger.debug("Unknown message type: %s", mtype)
+
+
+# ---------------------------------------------------------------------------
+# Trajectory API
+# ---------------------------------------------------------------------------
+
+class TrajectoryRequest(BaseModel):
+    obj_id: int
+    shape: str = "circle"
+    speed_hz: float = 0.5
+    radius: float = 1.0
+    elevation_rad: float = 0.0
+    az_start_rad: float = 0.0
+    az_end_rad: float = math.pi
+    lissajous_ratio: float = 2.0
+
+
+class TrajectoryStopRequest(BaseModel):
+    obj_id: int
+
+
+@app.post("/api/trajectory/start")
+async def trajectory_start(req: TrajectoryRequest) -> JSONResponse:
+    try:
+        shape = TrajectoryShape(req.shape)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid shape: {req.shape!r}")
+    cfg = TrajectoryConfig(
+        obj_id=req.obj_id,
+        shape=shape,
+        speed_hz=req.speed_hz,
+        radius=req.radius,
+        elevation_rad=req.elevation_rad,
+        az_start_rad=req.az_start_rad,
+        az_end_rad=req.az_end_rad,
+        lissajous_ratio=req.lissajous_ratio,
+        enabled=True,
+    )
+    app.state.trajectory.upsert(cfg)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/trajectory/stop")
+async def trajectory_stop(req: TrajectoryStopRequest) -> JSONResponse:
+    app.state.trajectory.remove(req.obj_id)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/trajectory/list")
+async def trajectory_list() -> list:
+    return [asdict(c) for c in app.state.trajectory.list_configs()]
 
 
 # ---------------------------------------------------------------------------
