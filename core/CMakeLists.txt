@@ -83,6 +83,7 @@ set(SPE_CORE_SOURCES
     src/render/VBAPRenderer.cpp
     src/render/DBAPRenderer.cpp
     src/render/WFSRenderer.cpp
+    src/render/AmbisonicRenderer.cpp
     # P4: IPC layer
     src/ipc/ProtocolVersion.cpp
     src/ipc/CommandDecoder.cpp
@@ -111,8 +112,9 @@ set(SPE_CORE_SOURCES
     src/hrtf/SofaBinReader.cpp
     src/hrtf/HrtfLookup.cpp
     src/hrtf/OlaConvolver.cpp
-    # F2: Ambisonics 1st-order encoder
+    # F2: Ambisonics 1st-order encoder + M2 decoder
     src/ambi/AmbisonicEncoder.cpp
+    src/ambi/AmbiDecoder.cpp
 )
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})

@@ -9,6 +9,7 @@
 #include "ipc/OSCBackend.h"
 #include "ipc/StateModel.h"
 #include "output_backend/BinauralMonitor.h"
+#include "render/AmbisonicRenderer.h"
 #include "render/DBAPRenderer.h"
 #include "render/VBAPRenderer.h"
 #include "render/WFSRenderer.h"
@@ -58,6 +59,7 @@ private:
     render::VBAPRenderer          vbap_;
     render::DBAPRenderer          dbap_;
     render::WFSRenderer           wfs_;
+    render::AmbisonicRenderer     ambisonic_;
 
     // FDN reverb (mono send → mono wet) and binaural side-output (mono → L/R).
     reverb::FdnReverb                        fdn_;
@@ -109,6 +111,7 @@ private:
     std::vector<float>  vbap_scratch_;
     std::vector<float>  dbap_scratch_;
     std::vector<float>  wfs_scratch_;
+    std::vector<float>  ambisonic_scratch_;
     // Mono reverb send & wet buses
     std::vector<float>  reverb_send_buf_;
     std::vector<float>  reverb_wet_buf_;

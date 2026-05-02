@@ -15,9 +15,10 @@ static constexpr uint16_t SCHEMA_VERSION = 1;
 
 // ---- Algorithm enum (mirrors plan §C-MA #6) ---------------------------------
 enum class Algorithm : uint8_t {
-    VBAP = 0,
-    WFS  = 1,
-    DBAP = 2,
+    VBAP      = 0,
+    WFS       = 1,
+    DBAP      = 2,
+    Ambisonic = 3,
 };
 
 // ---- Command tag (one per OSC address pattern) ------------------------------

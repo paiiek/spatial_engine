@@ -163,3 +163,8 @@ add_executable(test_p_ir_reverb test_p_ir_reverb.cpp)
 target_link_libraries(test_p_ir_reverb PRIVATE spe_core)
 add_test(NAME p_ir_reverb COMMAND test_p_ir_reverb)
 
+# M2: AmbiDecoder mode-matching projection tests
+add_executable(test_p_ambi_decoder test_p_ambi_decoder.cpp)
+target_link_libraries(test_p_ambi_decoder PRIVATE spe_core)
+add_test(NAME p_ambi_decoder COMMAND test_p_ambi_decoder)
+

@@ -110,12 +110,14 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         vbap_.prepareToPlay(layout_, sample_rate);
         dbap_.prepareToPlay(layout_, sample_rate);
         wfs_.prepareToPlay(layout_, sample_rate);
+        ambisonic_.prepareToPlay(layout_, sample_rate);
         const int n_spk = vbap_.numSpeakers();
         const size_t total = static_cast<size_t>(n_spk) * max_block_size;
         mix_buf_.assign(total, 0.f);
         vbap_scratch_.assign(total, 0.f);
         dbap_scratch_.assign(total, 0.f);
         wfs_scratch_.assign(total, 0.f);
+        ambisonic_scratch_.assign(total, 0.f);
         // Per-channel noise generator state (one entry per speaker output).
         // Size > 1 avoids OOB if a /noise/{ch}/* command arrives before layout.
         noise_chans_.assign(static_cast<size_t>(std::max(n_spk, 1)), NoiseChan{});
@@ -314,14 +316,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         std::array<render::ObjectState, MAX_OBJECTS> vbap_objs{};
         std::array<render::ObjectState, MAX_OBJECTS> dbap_objs{};
         std::array<render::ObjectState, MAX_OBJECTS> wfs_objs{};
+        std::array<render::ObjectState, MAX_OBJECTS> ambisonic_objs{};
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             const auto& c = obj_cache_[static_cast<size_t>(i)];
             const render::ObjectState s = {c.az, c.el, c.dist, c.active};
             switch (c.algo) {
-            case ipc::Algorithm::WFS:  wfs_objs[i]  = s; break;
-            case ipc::Algorithm::DBAP: dbap_objs[i] = s; break;
+            case ipc::Algorithm::WFS:       wfs_objs[i]       = s; break;
+            case ipc::Algorithm::DBAP:      dbap_objs[i]      = s; break;
+            case ipc::Algorithm::Ambisonic: ambisonic_objs[i] = s; break;
             case ipc::Algorithm::VBAP:
-            default:                   vbap_objs[i] = s; break;
+            default:                        vbap_objs[i]      = s; break;
             }
         }
 
@@ -337,6 +341,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             std::span<const render::ObjectState>(wfs_objs.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             wfs_scratch_.data(), block.num_frames);
+        ambisonic_.processBlock(
+            std::span<const render::ObjectState>(ambisonic_objs.data(), MAX_OBJECTS),
+            std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
+            ambisonic_scratch_.data(), block.num_frames);
 
         // Sum per-algorithm scratches into mix_buf_
         const int total = n_spk * block.num_frames;
@@ -344,7 +352,8 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             mix_buf_[static_cast<size_t>(idx)] =
                 vbap_scratch_[static_cast<size_t>(idx)] +
                 dbap_scratch_[static_cast<size_t>(idx)] +
-                wfs_scratch_ [static_cast<size_t>(idx)];
+                wfs_scratch_ [static_cast<size_t>(idx)] +
+                ambisonic_scratch_[static_cast<size_t>(idx)];
         }
 
         // Distribute reverb wet uniformly across all speakers (energy-preserving)
