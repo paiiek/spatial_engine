@@ -143,6 +143,11 @@ add_executable(test_p_vbap3d test_p_vbap3d.cpp)
 target_link_libraries(test_p_vbap3d PRIVATE spe_core)
 add_test(NAME p_vbap3d COMMAND test_p_vbap3d)
 
+# T3 (v1b): VBAPRenderer gain cache tests
+add_executable(test_p_vbap_cache test_p_vbap_cache.cpp)
+target_link_libraries(test_p_vbap_cache PRIVATE spe_core)
+add_test(NAME p_vbap_cache COMMAND test_p_vbap_cache)
+
 # F2: Ambisonics 1st-order encoder numerical tests
 add_executable(test_p_ambi test_p_ambi.cpp)
 target_link_libraries(test_p_ambi PRIVATE spe_core)
