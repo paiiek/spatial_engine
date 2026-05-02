@@ -57,6 +57,20 @@ osc_send_fn = None  # callable(address: str, *args) — set by osc_bridge
 _bridge_mode: str = "ai"  # "ai" | "low_latency"
 bridge_switch_fn = None   # callable(mode: str) — injected by bridge when co-located
 
+_BRIDGE_MODE_FILE = "/tmp/.spe_bridge_mode"
+
+
+def _write_bridge_mode_file(mode: str) -> None:
+    """Write mode to shared file so a separate bridge process can pick it up."""
+    try:
+        import tempfile, os
+        tmp = _BRIDGE_MODE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(mode)
+        os.replace(tmp, _BRIDGE_MODE_FILE)
+    except OSError as exc:
+        logger.warning("Could not write bridge mode file: %s", exc)
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -74,6 +88,7 @@ async def set_mode(mode: str = Query(..., description="ai | low_latency")) -> JS
     if mode not in ("ai", "low_latency"):
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode!r}. Must be 'ai' or 'low_latency'.")
     _bridge_mode = mode
+    _write_bridge_mode_file(mode)
     if bridge_switch_fn is not None:
         try:
             bridge_switch_fn(mode)
@@ -114,6 +129,9 @@ def _dispatch_to_osc(msg: dict) -> None:
     mtype = msg.get("type")
     if mtype == "obj_pos":
         n = int(msg["n"])
+        if not (0 <= n < 64):
+            logger.warning("obj_pos n=%d out of range [0,63]", n)
+            return
         azim = float(msg["azim"])
         elev = float(msg.get("elev", 0.0))
         dist = float(msg.get("dist", 1.0))
@@ -121,9 +139,23 @@ def _dispatch_to_osc(msg: dict) -> None:
             osc_send_fn(f"/adm/obj/{n}/aed", azim, elev, dist)
     elif mtype == "obj_gain":
         n = int(msg["n"])
+        if not (0 <= n < 64):
+            logger.warning("obj_gain n=%d out of range [0,63]", n)
+            return
         gain = float(msg["gain"])
         if osc_send_fn:
             osc_send_fn(f"/adm/obj/{n}/gain", gain)
+    elif mtype == "scene_save":
+        name = str(msg.get("name", "scene"))[:64]
+        if osc_send_fn:
+            osc_send_fn("/scene/save", name)
+    elif mtype == "scene_load":
+        name = str(msg.get("name", "scene"))[:64]
+        if osc_send_fn:
+            osc_send_fn("/scene/load", name)
+    elif mtype == "scene_list":
+        if osc_send_fn:
+            osc_send_fn("/scene/list")
     else:
         logger.debug("Unknown message type: %s", mtype)
 

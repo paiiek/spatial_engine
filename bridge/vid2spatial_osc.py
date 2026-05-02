@@ -287,8 +287,8 @@ class BridgeServer:
             az_deg  = float(args[0])
             el_deg  = float(args[1])
             dist_m  = float(args[2])
-            # dist_m in metres; normalise with max_dist=10m
-            dist_norm = max(0.0, min(1.0, 1.0 - dist_m / 10.0))
+            # dist_m in metres; normalise with max_dist=20m (matches engine MAX_DIST)
+            dist_norm = max(0.0, min(1.0, 1.0 - dist_m / 20.0))
             self._update_state("default", az=az_deg, el=el_deg, dist=dist_norm)
             self._flush("default")
 
@@ -298,6 +298,22 @@ class BridgeServer:
     # ------------------------------------------------------------------
     # Server lifecycle
     # ------------------------------------------------------------------
+
+    _MODE_FILE = "/tmp/.spe_bridge_mode"
+
+    def _poll_mode_file(self) -> None:
+        """Background thread: poll shared mode file written by WebGUI server."""
+        import time
+        while self._running:
+            try:
+                with open(self._MODE_FILE) as f:
+                    new_mode = f.read().strip()
+                if new_mode in ("ai", "low_latency") and new_mode != self.mode:
+                    self.switch_mode(new_mode)
+                    print(f"[bridge] mode switched to {new_mode} via mode file")
+            except (OSError, ValueError):
+                pass
+            time.sleep(1.0)
 
     def start(self) -> None:
         if not _PYTHONOSC_OK:
@@ -315,6 +331,10 @@ class BridgeServer:
             ("0.0.0.0", self.listen_port), disp
         )
         self._running = True
+
+        poll_thread = threading.Thread(target=self._poll_mode_file, daemon=True)
+        poll_thread.start()
+
         print(
             f"[bridge] mode={self.mode}  "
             f"Listening on 0.0.0.0:{self.listen_port} -> "

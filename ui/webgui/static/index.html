@@ -131,6 +131,11 @@
     <button id="btn-lt-mode">저레이턴시</button>
     <span id="mode-status">모드: ai</span>
   </div>
+  <div id="scene-panel" style="display:flex;align-items:center;gap:6px;margin-left:12px;">
+    <input id="scene-name" type="text" value="default" style="width:90px;font-family:inherit;font-size:11px;padding:3px 6px;background:#1a1a2e;border:1px solid #2a2a4e;border-radius:4px;color:#ccc;" placeholder="씬 이름" />
+    <button id="btn-scene-save" style="font-family:inherit;font-size:11px;padding:4px 8px;border-radius:4px;border:1px solid #2a2a4e;background:#1a1a2e;color:#888;cursor:pointer;">저장</button>
+    <button id="btn-scene-load" style="font-family:inherit;font-size:11px;padding:4px 8px;border-radius:4px;border:1px solid #2a2a4e;background:#1a1a2e;color:#888;cursor:pointer;">로드</button>
+  </div>
 </header>
 
 <main>
@@ -180,16 +185,14 @@
   });
 
   // Update status dot based on WS state by monkey-patching WsClient.onMessage
+  // Note: WsClient already parses JSON; data is an object here.
   WsClient.onMessage((data) => {
     dot.classList.add("connected");
     label.textContent = "connected";
     // Handle mode_change broadcast from server
-    try {
-      const msg = JSON.parse(data);
-      if (msg.type === "mode_change") {
-        _applyMode(msg.mode);
-      }
-    } catch (_) {}
+    if (data && data.type === "mode_change") {
+      _applyMode(data.mode);
+    }
   });
 
   // --- Mode toggle ---
@@ -225,6 +228,16 @@
 
   // Fetch initial mode on load
   fetch("/api/mode").then(r => r.json()).then(j => _applyMode(j.mode)).catch(() => {});
+
+  // --- Scene save/load ---
+  document.getElementById("btn-scene-save").addEventListener("click", () => {
+    const name = document.getElementById("scene-name").value.trim() || "default";
+    WsClient.send({ type: "scene_save", name });
+  });
+  document.getElementById("btn-scene-load").addEventListener("click", () => {
+    const name = document.getElementById("scene-name").value.trim() || "default";
+    WsClient.send({ type: "scene_load", name });
+  });
 </script>
 </body>
 </html>
