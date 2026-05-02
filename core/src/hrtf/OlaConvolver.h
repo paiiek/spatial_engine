@@ -1,7 +1,11 @@
 // core/src/hrtf/OlaConvolver.h
 // Overlap-add convolution for a fixed-length IR and fixed block size.
-// Pure C++, no FFT library dependency. Direct convolution with internal
-// overlap buffer. Suitable for monitor-path IR lengths up to ~1024.
+// Pure C++, no FFT dependency. Direct convolution with pre-allocated work buffer.
+//
+// RT-safety contract:
+//   process() is alloc-free after prepare(). prepare() allocates; call it from
+//   a non-RT thread (e.g., control thread) before audio starts.
+//   num_samples MUST equal block_size passed to prepare() — not validated at runtime.
 
 #pragma once
 
@@ -11,21 +15,23 @@ namespace spe::hrtf {
 
 class OlaConvolver {
 public:
-    // Set IR and block size. ir_len must be >= 1.
+    // Prepare with IR of length ir_len >= 1 and fixed block size.
+    // Allocates internal buffers. NOT RT-safe — call from control thread.
     void prepare(const float* ir, int ir_len, int block_size);
 
-    // Convolve one block of mono input, accumulate into output.
-    // output must be at least block_size floats (zeroed or pre-filled by caller).
+    // Convolve one block. num_samples must equal block_size from prepare().
+    // output is overwritten (not accumulated). Alloc-free after prepare().
     void process(const float* input, int num_samples, float* output);
 
-    // Clear overlap buffer (call on flush/reset).
+    // Clear overlap state (flush). Alloc-free.
     void reset();
 
     bool isReady() const { return !ir_.empty(); }
 
 private:
     std::vector<float> ir_;
-    std::vector<float> overlap_;  // (ir_len - 1) tail from previous block
+    std::vector<float> overlap_;  // (ir_len - 1) tail carried across blocks
+    std::vector<float> work_;     // pre-allocated: block_size + ir_len - 1
     int                block_size_ = 0;
 };
 
