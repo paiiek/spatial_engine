@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 
 import pytest
@@ -160,6 +161,88 @@ def test_pipeline_report_clip_count():
     """QUANT_EVAL report must cover at least 20 clips."""
     az_maes = _load_quant_eval_az_maes()
     assert len(az_maes) >= 20, f"Only {len(az_maes)} clips in report, expected ≥ 20"
+
+
+# ---------------------------------------------------------------------------
+# Test 4: per-clip and aggregate regression vs frozen baseline
+# ---------------------------------------------------------------------------
+
+_BASELINE = os.path.join(os.path.dirname(__file__), "baseline.json")
+_PER_CLIP_PATTERN = re.compile(
+    r"\|\s*\*?\*?([\w-]+)\*?\*?\s*\|[^|]+\|[^|]+\|\s*([\d.]+)°"
+)
+
+
+def _load_quant_eval_clips() -> dict[str, float]:
+    if not os.path.isfile(_QUANT_EVAL_MD):
+        pytest.skip(f"QUANT_EVAL report not found: {_QUANT_EVAL_MD}")
+    clips: dict[str, float] = {}
+    with open(_QUANT_EVAL_MD) as f:
+        for line in f:
+            m = _PER_CLIP_PATTERN.match(line.strip())
+            if m:
+                name = m.group(1)
+                if name.lower() in ("metric", "mean", "median", "min", "max"):
+                    continue
+                clips[name] = float(m.group(2))
+    return clips
+
+
+def _load_baseline() -> dict:
+    if not os.path.isfile(_BASELINE):
+        pytest.fail(f"baseline.json missing at {_BASELINE} — bootstrap required")
+    with open(_BASELINE) as f:
+        return json.load(f)
+
+
+def test_per_clip_regression_vs_baseline():
+    """No single clip's AzMAE may regress beyond the baseline tolerance."""
+    baseline = _load_baseline()
+    tol_abs = float(baseline["regression_tolerance"]["per_clip_absolute_max_deg"])
+    base_clips = baseline["clips"]
+    live_clips = _load_quant_eval_clips()
+
+    missing = [c for c in base_clips if c not in live_clips]
+    assert not missing, f"Baseline clips missing from live report: {missing}"
+
+    regressions = []
+    for clip, base_mae in base_clips.items():
+        live_mae = live_clips[clip]
+        if live_mae - base_mae > tol_abs:
+            regressions.append(
+                f"{clip}: {base_mae:.2f}° → {live_mae:.2f}° (Δ={live_mae - base_mae:+.2f}° > {tol_abs}°)"
+            )
+    assert not regressions, "Per-clip AzMAE regressions:\n  " + "\n  ".join(regressions)
+
+
+def test_aggregate_mean_regression_vs_baseline():
+    """Mean AzMAE across all baselined clips may not grow beyond mean_relative_max."""
+    baseline = _load_baseline()
+    tol_rel = float(baseline["regression_tolerance"]["mean_relative_max"])
+    base_mean = float(baseline["aggregate"]["mean_az_mae_deg"])
+    live_clips = _load_quant_eval_clips()
+    base_clip_names = set(baseline["clips"].keys())
+    common = [v for k, v in live_clips.items() if k in base_clip_names]
+    assert len(common) >= len(base_clip_names) * 0.9, (
+        f"Less than 90% of baseline clips present in live report: "
+        f"{len(common)}/{len(base_clip_names)}"
+    )
+    live_mean = sum(common) / len(common)
+    assert live_mean <= base_mean * (1.0 + tol_rel), (
+        f"Mean AzMAE regression: {base_mean:.3f}° → {live_mean:.3f}° "
+        f"(+{(live_mean / base_mean - 1.0) * 100:.1f}% > +{tol_rel * 100:.0f}%)"
+    )
+
+
+def test_baseline_schema_integrity():
+    """baseline.json must declare schema_version, gate, tolerance, and clips."""
+    b = _load_baseline()
+    assert b.get("schema_version") == 1
+    assert "phase2_gate" in b
+    assert b["phase2_gate"]["mean_az_mae_max_deg"] == AZ_MAE_GATE_DEG
+    assert "regression_tolerance" in b
+    assert "clips" in b and len(b["clips"]) >= 20
+    assert "aggregate" in b and "mean_az_mae_deg" in b["aggregate"]
 
 
 # ---------------------------------------------------------------------------

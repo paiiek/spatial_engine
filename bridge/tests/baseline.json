@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "source_report": "QUANT_EVAL_20260304.md",
+  "snapshot_date": "2026-05-02",
+  "phase2_gate": {
+    "mean_az_mae_max_deg": 2.0,
+    "median_az_mae_max_deg": 1.5
+  },
+  "regression_tolerance": {
+    "mean_relative_max": 0.1,
+    "per_clip_absolute_max_deg": 0.5
+  },
+  "clips": {
+    "car-5": 0.08,
+    "car-10": 0.62,
+    "car-13": 0.19,
+    "dog-1": 1.13,
+    "dog-3": 0.14,
+    "dog-9": 0.71,
+    "dog-14": 1.09,
+    "horse-1": 1.85,
+    "horse-3": 3.35,
+    "horse-11": 0.5,
+    "motorcycle-1": 0.49,
+    "motorcycle-3": 0.87,
+    "motorcycle-6": 1.14,
+    "skateboard-8": 0.18,
+    "skateboard-11": 0.87,
+    "skateboard-17": 0.69,
+    "train-16": 3.69,
+    "train-17": 3.18,
+    "drone-2": 0.29,
+    "drone-6": 0.63,
+    "drone-13": 0.44,
+    "guitar-9": 7.88
+  },
+  "aggregate": {
+    "mean_az_mae_deg": 1.3641,
+    "min_az_mae_deg": 0.08,
+    "max_az_mae_deg": 7.88,
+    "n_clips": 22
+  }
+}

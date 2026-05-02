@@ -156,11 +156,26 @@ function drawElevation() {
   }
 }
 
-// ─── Animation loop ──────────────────────────────────────────────────────────
+// ─── Animation loop + fps counter ────────────────────────────────────────────
 
-function frame() {
+let _fpsFrames = 0;
+let _fpsLast = performance.now();
+window.__fps = 0;
+const fpsEl = document.getElementById("fps-counter");
+
+function frame(now) {
   drawTopDown();
   drawElevation();
+
+  _fpsFrames++;
+  const dt = (now ?? performance.now()) - _fpsLast;
+  if (dt >= 1000) {
+    window.__fps = Math.round((_fpsFrames * 1000) / dt);
+    if (fpsEl) fpsEl.textContent = `${window.__fps} fps`;
+    _fpsFrames = 0;
+    _fpsLast += dt;
+  }
+
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
