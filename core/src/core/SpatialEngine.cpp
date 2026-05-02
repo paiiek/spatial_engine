@@ -76,6 +76,18 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.reverb_which = p->which;
                 }
                 break;
+            case ipc::CommandTag::OutputGain:
+                if (auto* p = std::get_if<ipc::PayloadOutputGain>(&cmd.payload)) {
+                    qc.output_ch       = p->channel;
+                    qc.output_value_db = p->gain_db;
+                }
+                break;
+            case ipc::CommandTag::OutputLimit:
+                if (auto* p = std::get_if<ipc::PayloadOutputLimit>(&cmd.payload)) {
+                    qc.output_ch       = p->channel;
+                    qc.output_value_db = p->threshold_db;
+                }
+                break;
             default:
                 return; // not queued
             }
@@ -136,6 +148,10 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
             spk_delay_samples_[static_cast<size_t>(i)] =
                 delay_ms * 0.001f * static_cast<float>(sample_rate);
         }
+
+        // Per-channel limiters
+        spk_limiters_.assign(static_cast<size_t>(n_spk), spe::dsp::ChannelLimiter{});
+        for (auto& lim : spk_limiters_) lim.prepare(sample_rate);
 
         render_ready_.store(true);
     } else {
@@ -240,6 +256,15 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             case ipc::CommandTag::ReverbSelect:
                 active_reverb_.store(static_cast<int>(qc.reverb_which),
                                      std::memory_order_relaxed);
+                break;
+            case ipc::CommandTag::OutputGain:
+                if (qc.output_ch < spk_gain_lin_.size())
+                    spk_gain_lin_[qc.output_ch] = std::pow(10.f, qc.output_value_db / 20.f);
+                break;
+            case ipc::CommandTag::OutputLimit:
+                if (qc.output_ch < spk_limiters_.size())
+                    spk_limiters_[qc.output_ch].setThreshold(
+                        std::pow(10.f, qc.output_value_db / 20.f));
                 break;
             case ipc::CommandTag::ObjDsp:
                 switch (qc.dsp_param) {
@@ -426,6 +451,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                     sample = white;
                 }
                 block.output_channels[spk][n] += sample * nc.gain_lin * transport_gain;
+            }
+        }
+
+        // Per-channel limiter (applied after all summing: spatial + reverb + noise)
+        for (int spk = 0; spk < out_ch; ++spk) {
+            if (!block.output_channels || !block.output_channels[spk]) continue;
+            if (spk >= static_cast<int>(spk_limiters_.size())) break;
+            auto& lim = spk_limiters_[static_cast<size_t>(spk)];
+            for (int n = 0; n < block.num_frames; ++n) {
+                block.output_channels[spk][n] = lim.processSample(block.output_channels[spk][n]);
             }
         }
 

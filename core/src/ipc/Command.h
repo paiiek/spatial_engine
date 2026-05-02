@@ -55,6 +55,10 @@ enum class CommandTag : uint8_t {
     // Reverb engine select
     ReverbSelect  = 0x52, // /reverb/select ,s "fdn"|"ir"
 
+    // Per-output-channel gain trim and limiter threshold
+    OutputGain    = 0x53, // /output/{ch}/gain  ,f dB
+    OutputLimit   = 0x54, // /output/{ch}/limit ,f dB threshold
+
     // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
     ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
 
@@ -152,6 +156,16 @@ struct PayloadObjDsp {
     float    value  = 0.f;
 };
 
+struct PayloadOutputGain {
+    uint32_t channel = 0;
+    float    gain_db = 0.f;
+};
+
+struct PayloadOutputLimit {
+    uint32_t channel      = 0;
+    float    threshold_db = 0.f; // 0 dB = no limiting
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -177,6 +191,8 @@ using CommandPayload = std::variant<
     PayloadTransportStop,
     PayloadObjDsp,
     PayloadReverbSelect,
+    PayloadOutputGain,
+    PayloadOutputLimit,
     PayloadUnknown
 >;
 

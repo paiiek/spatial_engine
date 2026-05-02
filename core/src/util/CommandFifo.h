@@ -26,6 +26,9 @@ struct QueuedCmd {
     float    dsp_value   = 0.f;
     // ReverbSelect: 0 = fdn, 1 = ir
     uint8_t  reverb_which = 0;
+    // OutputGain / OutputLimit
+    uint32_t output_ch       = 0;
+    float    output_value_db = 0.f;
 };
 
 template<int N = 1024>

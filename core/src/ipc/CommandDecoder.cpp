@@ -288,6 +288,19 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         } else {
             makeUnknown();
         }
+    } else if (addr.size() > 8 && addr.compare(0, 8, "/output/") == 0) {
+        int ch = -1; char sub[16] = {};
+        if (std::sscanf(addr.c_str(), "/output/%d/%15s", &ch, sub) == 2 && ch >= 0) {
+            if (std::string(sub) == "gain") {
+                cmd.tag = CommandTag::OutputGain;
+                PayloadOutputGain p; p.channel = static_cast<uint32_t>(ch); p.gain_db = getFloat(0);
+                cmd.payload = p;
+            } else if (std::string(sub) == "limit") {
+                cmd.tag = CommandTag::OutputLimit;
+                PayloadOutputLimit p; p.channel = static_cast<uint32_t>(ch); p.threshold_db = getFloat(0);
+                cmd.payload = p;
+            } else { makeUnknown(); }
+        } else { makeUnknown(); }
     } else if (addr.size() > 9 && addr.compare(0, 9, "/adm/obj/") == 0) {
         // ADM-OSC Living Standard receive paths.
         // No seq/id prefix — ADM-OSC uses pure float/int args only.
@@ -539,6 +552,18 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
         add_i(static_cast<int32_t>(p.obj_id));
         add_i(static_cast<int32_t>(p.param));
         add_f(p.value);
+        break;
+    }
+    case CommandTag::OutputGain: {
+        auto& p = std::get<PayloadOutputGain>(cmd.payload);
+        addr = "/output/" + std::to_string(p.channel) + "/gain";
+        add_f(p.gain_db);
+        break;
+    }
+    case CommandTag::OutputLimit: {
+        auto& p = std::get<PayloadOutputLimit>(cmd.payload);
+        addr = "/output/" + std::to_string(p.channel) + "/limit";
+        add_f(p.threshold_db);
         break;
     }
     default:

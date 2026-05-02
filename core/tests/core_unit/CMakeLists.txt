@@ -178,3 +178,8 @@ add_executable(test_p_speaker_alignment test_p_speaker_alignment.cpp)
 target_link_libraries(test_p_speaker_alignment PRIVATE spe_core)
 add_test(NAME p_speaker_alignment COMMAND test_p_speaker_alignment)
 
+# M9: per-channel ChannelLimiter + /output/{ch}/{gain,limit} OSC
+add_executable(test_p_channel_limiter test_p_channel_limiter.cpp)
+target_link_libraries(test_p_channel_limiter PRIVATE spe_core)
+add_test(NAME p_channel_limiter COMMAND test_p_channel_limiter)
+

@@ -3,6 +3,7 @@
 
 #include "audio_io/AudioCallback.h"
 #include "core/Constants.h"
+#include "dsp/ChannelLimiter.h"
 #include "dsp/DelayLine.h"
 #include "dsp/PerObjectChain.h"
 #include "geometry/SpeakerLayout.h"
@@ -115,9 +116,10 @@ private:
     std::vector<float>  wfs_scratch_;
     std::vector<float>  ambisonic_scratch_;
     // Per-speaker time-alignment (delay + gain)
-    std::vector<spe::dsp::DelayLine> spk_delays_;
-    std::vector<float>               spk_gain_lin_;
-    std::vector<float>               spk_delay_samples_;
+    std::vector<spe::dsp::DelayLine>       spk_delays_;
+    std::vector<float>                     spk_gain_lin_;
+    std::vector<float>                     spk_delay_samples_;
+    std::vector<spe::dsp::ChannelLimiter>  spk_limiters_;
 
     // Mono reverb send & wet buses
     std::vector<float>  reverb_send_buf_;
