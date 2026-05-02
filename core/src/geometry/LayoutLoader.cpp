@@ -80,6 +80,10 @@ LayoutResult load_layout(const std::string& yaml_path) {
             return make_error(std::string("speaker missing position (az_deg or x/y/z)"));
         }
 
+        // Optional time-alignment fields (default 0)
+        sp.delay_ms = node["delay_ms"] ? node["delay_ms"].as<float>() : 0.f;
+        sp.gain_db  = node["gain_db"]  ? node["gain_db"].as<float>()  : 0.f;
+
         layout.speakers.push_back(sp);
     }
 

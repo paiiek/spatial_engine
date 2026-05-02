@@ -18,6 +18,8 @@ enum class Regularity : uint8_t {
 struct Speaker {
     int         channel;   // 1-based channel index
     float       x, y, z;  // Cartesian metres, x=right y=up z=front
+    float       delay_ms = 0.f;  // per-speaker time alignment delay
+    float       gain_db  = 0.f;  // per-speaker output trim
 };
 
 struct SpeakerLayout {

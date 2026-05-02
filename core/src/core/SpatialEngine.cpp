@@ -121,6 +121,22 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         // Per-channel noise generator state (one entry per speaker output).
         // Size > 1 avoids OOB if a /noise/{ch}/* command arrives before layout.
         noise_chans_.assign(static_cast<size_t>(std::max(n_spk, 1)), NoiseChan{});
+
+        // Per-speaker time-alignment: delay lines + gain scalars
+        spk_delays_.resize(static_cast<size_t>(n_spk));
+        spk_gain_lin_.resize(static_cast<size_t>(n_spk));
+        spk_delay_samples_.resize(static_cast<size_t>(n_spk));
+        for (int i = 0; i < n_spk; ++i) {
+            spk_delays_[static_cast<size_t>(i)].prepareToPlay(sample_rate);
+            const float gain_db = (i < static_cast<int>(layout_.speakers.size()))
+                ? layout_.speakers[static_cast<size_t>(i)].gain_db : 0.f;
+            spk_gain_lin_[static_cast<size_t>(i)] = std::pow(10.f, gain_db / 20.f);
+            const float delay_ms = (i < static_cast<int>(layout_.speakers.size()))
+                ? layout_.speakers[static_cast<size_t>(i)].delay_ms : 0.f;
+            spk_delay_samples_[static_cast<size_t>(i)] =
+                delay_ms * 0.001f * static_cast<float>(sample_rate);
+        }
+
         render_ready_.store(true);
     } else {
         // Provide minimum noise capacity (1 channel) so OSC commands don't OOB.
@@ -367,12 +383,20 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         }
 
         // Deinterleave mix_buf_ → planar output_channels (speaker bus)
+        // Apply per-speaker delay (DelayLine) and gain during deinterleave.
         const int out_ch = std::min(block.output_channel_count, n_spk);
         for (int spk = 0; spk < out_ch; ++spk) {
             if (block.output_channels && block.output_channels[spk]) {
+                const float g = (spk < static_cast<int>(spk_gain_lin_.size()))
+                    ? spk_gain_lin_[static_cast<size_t>(spk)] : 1.f;
+                const float d = (spk < static_cast<int>(spk_delay_samples_.size()))
+                    ? spk_delay_samples_[static_cast<size_t>(spk)] : 0.f;
                 for (int n = 0; n < block.num_frames; ++n) {
-                    block.output_channels[spk][n] =
-                        mix_buf_[static_cast<size_t>(n * n_spk + spk)];
+                    float s = mix_buf_[static_cast<size_t>(n * n_spk + spk)] * g;
+                    if (spk < static_cast<int>(spk_delays_.size())) {
+                        s = spk_delays_[static_cast<size_t>(spk)].processSample(s, d);
+                    }
+                    block.output_channels[spk][n] = s;
                 }
             }
         }

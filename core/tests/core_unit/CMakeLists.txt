@@ -173,3 +173,8 @@ add_executable(test_p_source_width test_p_source_width.cpp)
 target_link_libraries(test_p_source_width PRIVATE spe_core)
 add_test(NAME p_source_width COMMAND test_p_source_width)
 
+# M6: per-speaker time-alignment (delay_ms / gain_db)
+add_executable(test_p_speaker_alignment test_p_speaker_alignment.cpp)
+target_link_libraries(test_p_speaker_alignment PRIVATE spe_core)
+add_test(NAME p_speaker_alignment COMMAND test_p_speaker_alignment)
+
