@@ -118,6 +118,88 @@
     .legend-dot {
       width: 8px; height: 8px; border-radius: 50%;
     }
+
+    /* Trajectory panel */
+    #trajectory-panel {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 6px;
+      padding: 10px 12px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11px;
+    }
+    #trajectory-panel h2 {
+      font-size: 11px;
+      color: #a0a0cc;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 2px;
+    }
+    .traj-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .traj-label {
+      color: #888;
+      min-width: 88px;
+    }
+    .traj-val {
+      color: #aef;
+      min-width: 40px;
+      text-align: right;
+    }
+    #trajectory-panel input[type=range] {
+      flex: 1;
+      accent-color: #4a8aff;
+    }
+    #trajectory-panel select,
+    #trajectory-panel input[type=number] {
+      font-family: inherit;
+      font-size: 11px;
+      background: #0f0f1a;
+      border: 1px solid #2a2a4e;
+      border-radius: 4px;
+      color: #ccc;
+      padding: 2px 6px;
+    }
+    .traj-buttons {
+      display: flex;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .traj-buttons button {
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 4px;
+      border: 1px solid #2a2a4e;
+      background: #1a1a2e;
+      color: #888;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .traj-buttons button:hover { background: #2a2a4e; color: #ccc; }
+    #traj-btn-start { border-color: #2a4e2a; background: #1a2e1a; color: #9f9; }
+    #traj-btn-stop  { border-color: #4e2a2a; background: #2e1a1a; color: #f99; }
+    #traj-status { font-size: 11px; color: #888; }
+    #trajectory-list {
+      list-style: none;
+      font-size: 10px;
+      color: #aaa;
+      padding: 4px 6px;
+      background: #0f0f1a;
+      border: 1px solid #1a1a3e;
+      border-radius: 4px;
+      min-height: 28px;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    #trajectory-list li { padding: 1px 0; }
   </style>
 </head>
 <body>
@@ -163,10 +245,49 @@
       <!-- Populated by JS -->
     </div>
   </div>
+  <!-- Trajectory control panel -->
+  <section id="trajectory-panel">
+    <h2>Trajectory</h2>
+    <div class="traj-row">
+      <span class="traj-label">Shape</span>
+      <select id="traj-shape">
+        <option value="circle">Circle</option>
+        <option value="line">Line</option>
+        <option value="lissajous">Lissajous</option>
+      </select>
+    </div>
+    <div class="traj-row">
+      <span class="traj-label">Obj ID</span>
+      <input id="traj-obj-id" type="number" min="0" max="63" value="0" style="width:56px;" />
+    </div>
+    <div class="traj-row">
+      <span class="traj-label">Speed (Hz)</span>
+      <input id="traj-speed" type="range" min="0.1" max="5.0" step="0.1" value="0.5" />
+      <span id="traj-speed-val" class="traj-val">0.50</span>
+    </div>
+    <div class="traj-row">
+      <span class="traj-label">Radius (m)</span>
+      <input id="traj-radius" type="range" min="0.1" max="5.0" step="0.1" value="1.0" />
+      <span id="traj-radius-val" class="traj-val">1.00</span>
+    </div>
+    <div class="traj-row">
+      <span class="traj-label">Elevation (rad)</span>
+      <input id="traj-elevation" type="range" min="-1.5708" max="1.5708" step="0.01" value="0" />
+      <span id="traj-elevation-val" class="traj-val">0.000</span>
+    </div>
+    <div class="traj-buttons">
+      <button id="traj-btn-start">▶ Start</button>
+      <button id="traj-btn-stop">■ Stop</button>
+      <button id="traj-btn-refresh">↺ Refresh</button>
+      <span id="traj-status">대기 중</span>
+    </div>
+    <ul id="trajectory-list"></ul>
+  </section>
 </main>
 
 <script src="/static/ws_client.js"></script>
 <script src="/static/canvas.js"></script>
+<script src="/static/trajectory.js"></script>
 <script>
   // Status dot reflects WS connection
   const dot = document.getElementById("status-dot");

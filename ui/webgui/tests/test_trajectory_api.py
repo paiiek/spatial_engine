@@ -54,3 +54,9 @@ def test_trajectory_start_lissajous(client):
         "obj_id": 2, "shape": "lissajous", "speed_hz": 1.0, "lissajous_ratio": 3.0
     })
     assert resp.status_code == 200
+
+
+def test_static_serves_trajectory_js(client):
+    resp = client.get("/static/trajectory.js")
+    assert resp.status_code == 200
+    assert "startTrajectory" in resp.text
