@@ -139,7 +139,9 @@ if(SPE_HAVE_JUCE)
 endif()
 
 # --- spatial_engine_core executable --------------------------------------
-add_executable(spatial_engine_core src/bin/spatial_engine_core.cpp)
+add_executable(spatial_engine_core
+    src/bin/spatial_engine_core.cpp
+    src/bin/WavWriter.cpp)
 target_link_libraries(spatial_engine_core PRIVATE spe_core)
 
 # --- CTest scaffold ------------------------------------------------------

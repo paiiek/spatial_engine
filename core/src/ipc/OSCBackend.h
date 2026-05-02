@@ -10,6 +10,7 @@
 #include <functional>
 #include <span>
 #include <cstdint>
+#include <thread>
 
 namespace spe::ipc {
 
@@ -18,7 +19,8 @@ public:
     // Callback invoked on control thread with each decoded Command.
     using CommandSink = std::function<void(const Command&)>;
 
-    explicit OSCBackend(CommandSink sink) : sink_(std::move(sink)) {}
+    explicit OSCBackend(CommandSink sink, int listen_port = 0)
+        : sink_(std::move(sink)), listen_port_(listen_port) {}
     ~OSCBackend() override { stop(); }
 
     // ExternalControl interface.
@@ -37,6 +39,9 @@ private:
     CommandSink    sink_;
     CommandDecoder decoder_;
     bool           running_ = false;
+    int            listen_port_ = 0;
+    int            udp_fd_      = -1;
+    std::thread    udp_thread_;
 };
 
 } // namespace spe::ipc

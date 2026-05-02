@@ -40,14 +40,57 @@ void OSCBackend::injectPacket(std::span<const uint8_t> packet) noexcept {
 
 #else
 // ---- JUCE-free stub path ---------------------------------------------------
-// No UDP wire. In-process: dispatch() encodes → decode round-trip → sink_.
-// Unit tests exercise the full Command/Decode/StateModel path without sockets.
+// POSIX UDP listener when listen_port_ > 0; in-process dispatch for tests.
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <array>
 
 namespace spe::ipc {
 
-void OSCBackend::start() { running_ = true; }
+void OSCBackend::start() {
+    running_ = true;
+    if (listen_port_ <= 0) return; // no UDP in test mode
 
-void OSCBackend::stop()  { running_ = false; }
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+
+    // 100ms receive timeout for clean shutdown
+    struct timeval tv{0, 100000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(listen_port_));
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+        close(fd);
+        return;
+    }
+    udp_fd_ = fd;
+
+    udp_thread_ = std::thread([this]() {
+        std::array<uint8_t, 65536> buf{};
+        while (running_) {
+            ssize_t n = recv(udp_fd_, buf.data(), buf.size(), 0);
+            if (n > 0 && running_) {
+                injectPacket(std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)));
+            }
+        }
+    });
+}
+
+void OSCBackend::stop() {
+    running_ = false;
+    if (udp_fd_ >= 0) {
+        close(udp_fd_);
+        udp_fd_ = -1;
+    }
+    if (udp_thread_.joinable()) udp_thread_.join();
+}
 
 void OSCBackend::dispatch(Command const& cmd) {
     if (!running_) return;

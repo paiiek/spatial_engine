@@ -14,6 +14,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="spatial_engine WebGUI", version="0.1.0")
 
+
+@app.on_event("startup")
+async def _start_osc_bridge() -> None:
+    """Auto-start OSC bridge on server startup."""
+    try:
+        import ui.webgui.osc_bridge as osc_bridge  # noqa: PLC0415
+        loop = asyncio.get_running_loop()
+        osc_bridge.start(broadcast_state, loop)
+        logger.info("OSC bridge started via startup event")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("OSC bridge startup failed: %s", exc)
+
 # ---------------------------------------------------------------------------
 # Connection manager
 # ---------------------------------------------------------------------------

@@ -64,14 +64,15 @@ def start(
     import ui.webgui.server as _server  # noqa: PLC0415
     _server.osc_send_fn = send_osc
 
-    d = osc_dispatcher.Dispatcher()
-    d.set_default_handler(_handle_state_message)
-
-    server = osc_server.ThreadingOSCUDPServer(
-        (osc_host, OSC_STATE_PORT), d
+    # Listener on 9101: engine state → WebSocket broadcast
+    d_state = osc_dispatcher.Dispatcher()
+    d_state.set_default_handler(_handle_state_message)
+    srv_state = osc_server.ThreadingOSCUDPServer(
+        (osc_host, OSC_STATE_PORT), d_state
     )
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
+    t_state = threading.Thread(target=srv_state.serve_forever, daemon=True)
+    t_state.start()
+
     logger.info(
         "OSC bridge started: listen=9101 send=9100 host=%s", osc_host
     )
@@ -89,3 +90,4 @@ def _handle_state_message(address: str, *args) -> None:
         asyncio.run_coroutine_threadsafe(
             _broadcast_fn(payload), _loop
         )
+
