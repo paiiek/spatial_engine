@@ -1,0 +1,8 @@
+listen_port: 9000
+target_port: 9100
+target_host: "127.0.0.1"
+mode: "ai"           # ai | low_latency
+iir_alpha: 0.3
+rate_limit_hz: 60
+object_map: {}       # {tracking_id: adm_obj_number} 정적 매핑
+max_objects: 8

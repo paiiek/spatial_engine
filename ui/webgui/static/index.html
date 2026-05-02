@@ -35,6 +35,31 @@
     #status-dot.connected { background: #2ecc71; }
     #status-label { font-size: 11px; color: #666; }
 
+    /* Mode panel */
+    #mode-panel {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    #mode-panel button {
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid #2a2a4e;
+      background: #1a1a2e;
+      color: #888;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, border-color 0.2s;
+    }
+    #mode-panel button.active {
+      background: #2a2a6e;
+      color: #a0c0ff;
+      border-color: #4a4aae;
+    }
+    #mode-status { font-size: 11px; color: #666; }
+
     main {
       display: flex;
       flex: 1;
@@ -101,6 +126,11 @@
   <div id="status-dot"></div>
   <h1>spatial_engine WebGUI</h1>
   <span id="status-label">connecting…</span>
+  <div id="mode-panel">
+    <button id="btn-ai-mode" class="active">AI 추적</button>
+    <button id="btn-lt-mode">저레이턴시</button>
+    <span id="mode-status">모드: ai</span>
+  </div>
 </header>
 
 <main>
@@ -150,10 +180,51 @@
   });
 
   // Update status dot based on WS state by monkey-patching WsClient.onMessage
-  WsClient.onMessage(() => {
+  WsClient.onMessage((data) => {
     dot.classList.add("connected");
     label.textContent = "connected";
+    // Handle mode_change broadcast from server
+    try {
+      const msg = JSON.parse(data);
+      if (msg.type === "mode_change") {
+        _applyMode(msg.mode);
+      }
+    } catch (_) {}
   });
+
+  // --- Mode toggle ---
+  const btnAi = document.getElementById("btn-ai-mode");
+  const btnLt = document.getElementById("btn-lt-mode");
+  const modeStatus = document.getElementById("mode-status");
+
+  function _applyMode(mode) {
+    modeStatus.textContent = "모드: " + mode;
+    if (mode === "ai") {
+      btnAi.classList.add("active");
+      btnLt.classList.remove("active");
+    } else {
+      btnLt.classList.add("active");
+      btnAi.classList.remove("active");
+    }
+  }
+
+  async function _setMode(mode) {
+    try {
+      const res = await fetch("/api/mode?mode=" + encodeURIComponent(mode), { method: "POST" });
+      if (res.ok) {
+        const json = await res.json();
+        _applyMode(json.mode);
+      }
+    } catch (err) {
+      console.error("[mode] request failed:", err);
+    }
+  }
+
+  btnAi.addEventListener("click", () => _setMode("ai"));
+  btnLt.addEventListener("click", () => _setMode("low_latency"));
+
+  // Fetch initial mode on load
+  fetch("/api/mode").then(r => r.json()).then(j => _applyMode(j.mode)).catch(() => {});
 </script>
 </body>
 </html>

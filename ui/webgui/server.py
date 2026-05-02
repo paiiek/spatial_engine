@@ -6,8 +6,8 @@ import json
 import logging
 from typing import Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,13 @@ manager = ConnectionManager()
 
 osc_send_fn = None  # callable(address: str, *args) — set by osc_bridge
 
+# ---------------------------------------------------------------------------
+# Bridge mode state — shared with bridge process via signal/file or in-process
+# ---------------------------------------------------------------------------
+
+_bridge_mode: str = "ai"  # "ai" | "low_latency"
+bridge_switch_fn = None   # callable(mode: str) — injected by bridge when co-located
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -58,6 +65,29 @@ osc_send_fn = None  # callable(address: str, *args) — set by osc_bridge
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/api/mode")
+async def set_mode(mode: str = Query(..., description="ai | low_latency")) -> JSONResponse:
+    """ai | low_latency 모드 전환. bridge process에 신호 전달."""
+    global _bridge_mode
+    if mode not in ("ai", "low_latency"):
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {mode!r}. Must be 'ai' or 'low_latency'.")
+    _bridge_mode = mode
+    if bridge_switch_fn is not None:
+        try:
+            bridge_switch_fn(mode)
+        except Exception as exc:
+            logger.warning("bridge_switch_fn failed: %s", exc)
+    await manager.broadcast(json.dumps({"type": "mode_change", "mode": mode}))
+    logger.info("Bridge mode set to %s", mode)
+    return JSONResponse({"status": "ok", "mode": mode})
+
+
+@app.get("/api/mode")
+async def get_mode() -> JSONResponse:
+    """현재 브리지 모드 조회."""
+    return JSONResponse({"mode": _bridge_mode})
 
 
 @app.websocket("/ws")
