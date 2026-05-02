@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>spatial_engine WebGUI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f1a;
+      color: #ccc;
+      font-family: "SF Mono", "Fira Code", monospace;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      background: #16162a;
+      border-bottom: 1px solid #2a2a4e;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 14px; font-weight: 600; color: #a0a0cc; }
+    #status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #e74c3c;
+      transition: background 0.3s;
+    }
+    #status-dot.connected { background: #2ecc71; }
+    #status-label { font-size: 11px; color: #666; }
+
+    main {
+      display: flex;
+      flex: 1;
+      gap: 8px;
+      padding: 8px;
+      overflow: hidden;
+    }
+
+    .view-panel {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .view-label {
+      font-size: 10px;
+      color: #555;
+      padding: 4px 8px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      flex-shrink: 0;
+    }
+
+    #topdown-panel { flex: 3; }
+    #elevation-panel { flex: 1; }
+
+    canvas {
+      flex: 1;
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    /* Legend */
+    #legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 6px 8px;
+      background: #16162a;
+      border-top: 1px solid #2a2a4e;
+      flex-shrink: 0;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      color: #888;
+    }
+    .legend-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div id="status-dot"></div>
+  <h1>spatial_engine WebGUI</h1>
+  <span id="status-label">connecting…</span>
+</header>
+
+<main>
+  <div class="view-panel" id="topdown-panel">
+    <div class="view-label">Top-Down View</div>
+    <canvas id="topdown-canvas"></canvas>
+  </div>
+  <div style="display:flex;flex-direction:column;flex:1;gap:8px;">
+    <div class="view-panel" id="elevation-panel" style="flex:1;">
+      <div class="view-label">Elevation View</div>
+      <canvas id="elevation-canvas"></canvas>
+    </div>
+    <div id="legend">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+</main>
+
+<script src="/static/ws_client.js"></script>
+<script src="/static/canvas.js"></script>
+<script>
+  // Status dot reflects WS connection
+  const dot = document.getElementById("status-dot");
+  const label = document.getElementById("status-label");
+
+  // Patch WsClient to update UI
+  const _origOnMessage = WsClient.onMessage.bind(WsClient);
+  // We hook into ws readyState via polling (light-weight for MVP)
+  setInterval(() => {
+    // Access internal ws by re-exposing via WsClient
+    const connected = document.visibilityState !== "hidden";
+    // Try a lightweight ping: if we received a message recently, show connected
+  }, 1000);
+
+  // Build legend
+  const legendEl = document.getElementById("legend");
+  const GROUP_LABELS = ["G1","G2","G3","G4","G5","G6","G7","G8"];
+  const GROUP_COLORS_HTML = [
+    "#e74c3c","#e67e22","#f1c40f","#2ecc71",
+    "#1abc9c","#3498db","#9b59b6","#e91e63",
+  ];
+  GROUP_LABELS.forEach((lbl, i) => {
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    item.innerHTML = `<span class="legend-dot" style="background:${GROUP_COLORS_HTML[i]}"></span>${lbl} (${i*8+1}-${i*8+8})`;
+    legendEl.appendChild(item);
+  });
+
+  // Update status dot based on WS state by monkey-patching WsClient.onMessage
+  WsClient.onMessage(() => {
+    dot.classList.add("connected");
+    label.textContent = "connected";
+  });
+</script>
+</body>
+</html>
