@@ -262,11 +262,33 @@ static void test4_dimensionality_boundary() {
     }
 }
 
+static void test5_fallback_gain_pattern() {
+    // Layout: 4ch horizontal + speaker[0].y=2e-3 → routes to 3D path (max|y|>1e-3).
+    // The perturbed triplet has det≈2e-3 (non-zero), but el=+60° has sy≈0.866
+    // while all speakers have y≤2e-3. Cramer's rule gives at least one negative
+    // gain for EVERY triplet → non-negativity gate at AAR.cpp:193 rejects all
+    // triplets → fallback path at AAR.cpp:236 fires.
+    auto layout = make_4ch_horizontal();
+    layout.speakers[0].y = 2e-3f; // routes to 3D path; still above-hull for el=60°
+    const float az = 0.f;
+    const float el = 60.f * kPi / 180.f;
+    auto gains = AlgorithmAnalyticReference::vbap_gain(layout, az, el);
+
+    CHECK(all_valid(gains));                    // finite + non-negative
+    CHECK_NEAR(sum_sq(gains), 1.0f, 1e-5f);    // energy normalised
+    int nonzero = 0;
+    for (float v : gains) if (v > 1e-6f) ++nonzero;
+    CHECK(nonzero >= 2 && nonzero <= 3); // ≥2 speakers: distinguishes nearest-3 from
+                                          // the last-ditch single-speaker branch (AAR.cpp:290)
+    std::printf("[PASS] test5: fallback gain pattern valid (>=2 nonzero, sum_sq=1)\n");
+}
+
 int main() {
     test1_horizontal_el0();
     test2_extreme_elevation();
     test3_elevation_effect();
     test4_dimensionality_boundary();
+    test5_fallback_gain_pattern();
 
     if (failures == 0) {
         std::printf("[RESULT] PASS\n");
