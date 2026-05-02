@@ -21,6 +21,10 @@ public:
     // Must be called after prepareToPlay().
     void loadIR(const float* ir, int len);
 
+    // Load IR from a WAV file (mono, 48 kHz, PCM-16 or IEEE-float-32).
+    // Returns false if the file cannot be opened or the format is unsupported.
+    bool loadIRFromWav(const std::string& path);
+
     const char* name() const noexcept override { return "IRConvReverb"; }
 
 private:

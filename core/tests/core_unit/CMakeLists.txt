@@ -183,3 +183,8 @@ add_executable(test_p_channel_limiter test_p_channel_limiter.cpp)
 target_link_libraries(test_p_channel_limiter PRIVATE spe_core)
 add_test(NAME p_channel_limiter COMMAND test_p_channel_limiter)
 
+# B3: IRConvReverb WAV loading (loadIRFromWav)
+add_executable(test_p_ir_loading test_p_ir_loading.cpp)
+target_link_libraries(test_p_ir_loading PRIVATE spe_core)
+add_test(NAME p_ir_loading COMMAND test_p_ir_loading)
+

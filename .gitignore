@@ -61,3 +61,7 @@ NUL
 # Local secrets / config overrides
 configs/local.yaml
 .env
+
+# Generated IR assets
+assets/ir/*.wav
+assets/ir/*.f32
