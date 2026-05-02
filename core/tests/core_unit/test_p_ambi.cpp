@@ -211,6 +211,36 @@ int main() {
         CHECK_NEAR(c3[3], legacy.X, kTol);
     }
 
+    // Test 13: non-trivial angle regression — all 2nd/3rd-order channels at az=π/4, el=0
+    // Reference values from AmbiX/SN3D closed-form at az=π/4, el=0:
+    //   sin_az=√2/2, cos_az=√2/2, sin_2az=1, cos_2az=0, cos_el=1, sin_el=0
+    {
+        const float az = kPi / 4.0f;
+        const float el = 0.0f;
+        constexpr float kSqrt3_2 = 0.8660254037844387f;  // √3/2
+        constexpr float kSqrt3   = 1.7320508075688772f;  // √3
+        constexpr float kSqrt2_2 = 0.7071067811865476f;  // √2/2
+
+        auto c2 = AmbisonicEncoder::encode_2nd_order(az, el);
+        // ACN 4 (Y_2^-2): (√3/2)·sin(π/2)·1 = √3/2
+        CHECK_NEAR(c2[4], kSqrt3_2, kTol);
+        // ACN 5 (Y_2^-1): √3·sin(π/4)·0·1 = 0
+        CHECK_NEAR(c2[5], 0.0f, kTol);
+        // ACN 6 (Y_2^0): 0.5·(0−1) = −0.5
+        CHECK_NEAR(c2[6], -0.5f, kTol);
+        // ACN 7 (Y_2^1): √3·cos(π/4)·0·1 = 0
+        CHECK_NEAR(c2[7], 0.0f, kTol);
+        // ACN 8 (Y_2^2): (√3/2)·cos(π/2)·1 = 0
+        CHECK_NEAR(c2[8], 0.0f, kTol);
+
+        auto c3 = AmbisonicEncoder::encode_3rd_order(az, el);
+        CHECK_NEAR(c3[4], kSqrt3_2, kTol);   // same as c2[4]
+        // ACN 13 at az=π/4,el=0: (√6/4)·cos(π/4)·(0−1)·1 = (√6/4)·(−√2/2)
+        constexpr float kSqrt12_8 = 0.4330127018922193f; // √12/8 = √3/4 ≈ (√6/4)·(√2/2)
+        CHECK_NEAR(c3[13], -kSqrt12_8, 1e-5f);
+        std::printf("[PASS] test13: non-trivial angle ACN4=sqrt(3)/2 (regression for 2x bug)\n");
+    }
+
     if (failures == 0) {
         std::printf("OK  test_p_ambi: all checks passed\n");
         return 0;

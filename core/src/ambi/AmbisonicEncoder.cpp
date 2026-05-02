@@ -38,7 +38,7 @@ AmbiCoeffs2nd AmbisonicEncoder::encode_2nd_order(float az_rad, float el_rad) noe
     c[2] = static_cast<float>(sin_el);                 // Y_1^0  (legacy Z)
     c[3] = static_cast<float>(cos_el * cos_az);        // Y_1^1  (legacy X)
     // ACN 4..8: 2nd order
-    c[4] = static_cast<float>(kSqrt3 * sin_2az * cos_el2);
+    c[4] = static_cast<float>(kSqrt3_2 * sin_2az * cos_el2);  // was kSqrt3 (2× error)
     c[5] = static_cast<float>(kSqrt3 * sin_az * sin_el * cos_el);
     c[6] = static_cast<float>(0.5 * (3.0 * sin_el2 - 1.0));
     c[7] = static_cast<float>(kSqrt3 * cos_az * sin_el * cos_el);
@@ -70,7 +70,7 @@ AmbiCoeffs3rd AmbisonicEncoder::encode_3rd_order(float az_rad, float el_rad) noe
     c[2] = static_cast<float>(sin_el);
     c[3] = static_cast<float>(cos_el * cos_az);
     // ACN 4..8: same as 2nd order
-    c[4] = static_cast<float>(kSqrt3 * sin_2az * cos_el2);
+    c[4] = static_cast<float>(kSqrt3_2 * sin_2az * cos_el2);  // was kSqrt3 (2× error)
     c[5] = static_cast<float>(kSqrt3 * sin_az * sin_el * cos_el);
     c[6] = static_cast<float>(0.5 * (3.0 * sin_el2 - 1.0));
     c[7] = static_cast<float>(kSqrt3 * cos_az * sin_el * cos_el);
