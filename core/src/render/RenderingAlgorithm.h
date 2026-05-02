@@ -11,10 +11,11 @@
 namespace spe::render {
 
 struct ObjectState {
-    float az_rad  = 0.f;
-    float el_rad  = 0.f;
-    float dist_m  = 1.f;
-    bool  active  = false;
+    float az_rad   = 0.f;
+    float el_rad   = 0.f;
+    float dist_m   = 1.f;
+    bool  active   = false;
+    float width_rad = 0.f;  // source spread (0 = point source, π = omnidirectional)
 };
 
 // Per-algorithm scratch for one object → per-speaker gains (SoA).

@@ -36,7 +36,10 @@ void DBAPRenderer::processBlock(
         // Convert spherical to Cartesian for DBAP distance calculation
         float az  = objects[obj].az_rad;
         float el  = objects[obj].el_rad;
-        float d   = objects[obj].dist_m;
+        // Width: reduce effective distance → more spread across speakers
+        // dist_eff = dist * (1 - 0.3 * width/π)
+        const float w_factor = 1.f - 0.3f * (objects[obj].width_rad / 3.14159265f);
+        float d   = objects[obj].dist_m * w_factor;
         float src_x = d * std::sin(az) * std::cos(el);
         float src_y = d * std::sin(el);
         float src_z = d * std::cos(az) * std::cos(el);

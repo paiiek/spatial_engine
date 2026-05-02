@@ -54,6 +54,21 @@ void WFSRenderer::processBlock(
         float sy = d * std::sin(el);
         float sz = d * std::cos(az) * std::cos(el);
 
+        // Width: scale gain of neighbouring speakers.
+        // width=0 → pure distance-based gain; width>0 → add spread boost to neighbours.
+        // We compute a per-speaker width_boost multiplier (1.0 for point source).
+        const float w_rad = objects[obj].width_rad;
+
+        // Find nearest speaker index for width neighbour logic
+        int nearest_s = 0;
+        float nearest_dist = 1e9f;
+        for (int s = 0; s < S; ++s) {
+            const auto& spk = layout_.speakers[s];
+            float dx = spk.x - sx, dy = spk.y - sy, dz = spk.z - sz;
+            float r = std::sqrt(dx*dx + dy*dy + dz*dz);
+            if (r < nearest_dist) { nearest_dist = r; nearest_s = s; }
+        }
+
         for (int s = 0; s < S; ++s) {
             const auto& spk = layout_.speakers[s];
             float dx = spk.x - sx;
@@ -64,6 +79,17 @@ void WFSRenderer::processBlock(
 
             float delay_samples = r / spe::SOUND_C * static_cast<float>(sr_);
             float gain = alias_fade_gain_ / std::sqrt(r);
+
+            // Width spread: neighbours within ±2 of nearest speaker get extra gain
+            if (w_rad > 1e-4f) {
+                int dist_spk = std::abs(s - nearest_s);
+                // Wrap-around distance on ring
+                dist_spk = std::min(dist_spk, S - dist_spk);
+                // Spread radius: width=π/2 → 2 neighbours, width=π → 3 neighbours
+                const float spread_w = w_rad / 3.14159265f;  // [0,1]
+                const float boost = spread_w * std::exp(-static_cast<float>(dist_spk) * 1.5f);
+                gain *= (1.f + boost);
+            }
 
             auto& ramp  = ramps_[flat_idx(obj, s)];
             auto& delay = delays_[flat_idx(obj, s)];

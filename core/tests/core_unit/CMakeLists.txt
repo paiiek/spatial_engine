@@ -168,3 +168,8 @@ add_executable(test_p_ambi_decoder test_p_ambi_decoder.cpp)
 target_link_libraries(test_p_ambi_decoder PRIVATE spe_core)
 add_test(NAME p_ambi_decoder COMMAND test_p_ambi_decoder)
 
+# M1: per-object Source WIDTH fan-out tests
+add_executable(test_p_source_width test_p_source_width.cpp)
+target_link_libraries(test_p_source_width PRIVATE spe_core)
+add_test(NAME p_source_width COMMAND test_p_source_width)
+

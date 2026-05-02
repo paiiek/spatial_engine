@@ -38,6 +38,7 @@ DSP_PARAM_EQ_HIGH      = 3
 DSP_PARAM_DELAY_MS     = 4
 DSP_PARAM_K_HF         = 5
 DSP_PARAM_REVERB_SEND  = 6
+DSP_PARAM_WIDTH        = 7  # source spread in radians (0..π)
 
 # Algorithm enum (mirror ipc::Algorithm in core/src/ipc/Command.h)
 ALGO_VBAP = 0

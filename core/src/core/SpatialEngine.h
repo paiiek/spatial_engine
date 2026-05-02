@@ -86,6 +86,7 @@ private:
         float user_delay_ms = 0.f;
         // 4-band EQ gain (dB) — freq/Q stay at PerObjectChain defaults
         std::array<float, 4> eq_gain_db{0.f, 0.f, 0.f, 0.f};
+        float width_rad = 0.f;  // source spread in radians (0 = point source)
     };
     std::array<ObjCache, MAX_OBJECTS> obj_cache_{};
 

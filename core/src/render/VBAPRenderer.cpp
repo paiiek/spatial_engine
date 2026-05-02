@@ -46,14 +46,18 @@ void VBAPRenderer::processBlock(
         const float* src = dry_mono[obj];
         if (!src) continue;
 
-        // Quantise (az,el) to 0.5 deg bins with offsets so UINT64_MAX is unreachable
+        // Quantise (az,el,width) to 0.5 deg bins with offsets so UINT64_MAX is unreachable
         const int az_bin = static_cast<int>(std::lround(
             objects[obj].az_rad * (180.0f / 3.14159265f) / AZ_BIN_DEG)) + AZ_OFFSET;
         const int el_bin = static_cast<int>(std::lround(
             objects[obj].el_rad * (180.0f / 3.14159265f) / EL_BIN_DEG)) + EL_OFFSET;
+        // Pack width into upper bits of el_bin word (width binned to 1-deg steps, offset 512)
+        const int w_bin  = static_cast<int>(std::lround(
+            objects[obj].width_rad * (180.0f / 3.14159265f))) + 512;
         const uint64_t key =
             (static_cast<uint64_t>(static_cast<uint32_t>(az_bin)) << 32) |
-             static_cast<uint64_t>(static_cast<uint32_t>(el_bin));
+            (static_cast<uint64_t>(static_cast<uint16_t>(el_bin)) << 16) |
+             static_cast<uint64_t>(static_cast<uint16_t>(w_bin));
 
         const std::vector<float>* gains_ptr = nullptr;
         {
@@ -77,6 +81,26 @@ void VBAPRenderer::processBlock(
                     // Cold-miss path allocates; warm-hit path (above) is alloc-free.
                     auto computed = AlgorithmAnalyticReference::vbap_gain(
                         layout_, objects[obj].az_rad, objects[obj].el_rad);
+                    // Width fan-out: blend point-source gains with uniform spread.
+                    // width=0 → pure VBAP; width=π → half uniform / half VBAP.
+                    // Blend factor w ∈ [0,1]: w = width_rad / π.
+                    // g_out[i] = (1-w)*g[i] + w*(1/sqrt(N))
+                    // This guarantees ≥3 nonzero gains when w>0 and N≥3.
+                    const float w_rad = objects[obj].width_rad;
+                    if (w_rad > 1e-4f) {
+                        const float w = w_rad / 3.14159265f;  // [0,1]
+                        const float uniform = 1.0f / std::sqrt(static_cast<float>(computed.size()));
+                        float energy = 0.f;
+                        for (auto& g : computed) {
+                            g = (1.f - w) * g + w * uniform;
+                            energy += g * g;
+                        }
+                        // Re-normalise to energy = 1
+                        if (energy > 1e-8f) {
+                            const float inv_rms = 1.0f / std::sqrt(energy);
+                            for (auto& g : computed) g *= inv_rms;
+                        }
+                    }
                     cache_slots_[probe].key = key;
                     cache_slots_[probe].gains = std::move(computed); // same capacity: no realloc
                     cache_ring_[(ring_head_ + cache_size_) % RING_CAP] = probe;
@@ -91,6 +115,20 @@ void VBAPRenderer::processBlock(
                 static thread_local std::vector<float> tmp;
                 tmp = AlgorithmAnalyticReference::vbap_gain(
                     layout_, objects[obj].az_rad, objects[obj].el_rad);
+                const float w_rad2 = objects[obj].width_rad;
+                if (w_rad2 > 1e-4f) {
+                    const float w2 = w_rad2 / 3.14159265f;
+                    const float uniform2 = 1.0f / std::sqrt(static_cast<float>(tmp.size()));
+                    float energy2 = 0.f;
+                    for (auto& g : tmp) {
+                        g = (1.f - w2) * g + w2 * uniform2;
+                        energy2 += g * g;
+                    }
+                    if (energy2 > 1e-8f) {
+                        const float inv2 = 1.0f / std::sqrt(energy2);
+                        for (auto& g : tmp) g *= inv2;
+                    }
+                }
                 gains_ptr = &tmp;
             }
         }

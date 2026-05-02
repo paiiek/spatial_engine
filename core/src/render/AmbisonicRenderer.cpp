@@ -37,8 +37,15 @@ void AmbisonicRenderer::processBlock(
         const float* src = dry_mono[static_cast<size_t>(obj)];
         if (!src) continue;
 
-        const auto coeffs = ambi::AmbisonicEncoder::encode_1st_order(
+        auto coeffs = ambi::AmbisonicEncoder::encode_1st_order(
             objects[obj].az_rad, objects[obj].el_rad);
+
+        // Width: max-rE weighting — attenuate X/Y/Z relative to W.
+        // width=0 → rE_scale=1 (point source); width=π → rE_scale=0 (omnidirectional W only).
+        const float rE_scale = 1.0f - (objects[obj].width_rad / 3.14159265f);
+        coeffs.X *= rE_scale;
+        coeffs.Y *= rE_scale;
+        coeffs.Z *= rE_scale;
 
         for (int n = 0; n < num_samples; ++n) {
             const float s = src[n];

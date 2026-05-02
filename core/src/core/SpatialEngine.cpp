@@ -234,6 +234,7 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 case 4: c.user_delay_ms = qc.dsp_value; break;
                 case 5: c.k_hf          = qc.dsp_value; break;
                 case 6: c.reverb_send   = qc.dsp_value; break;
+                case 7: c.width_rad     = qc.dsp_value; break;
                 default: break;
                 }
                 break;
@@ -319,7 +320,7 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         std::array<render::ObjectState, MAX_OBJECTS> ambisonic_objs{};
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             const auto& c = obj_cache_[static_cast<size_t>(i)];
-            const render::ObjectState s = {c.az, c.el, c.dist, c.active};
+            const render::ObjectState s = {c.az, c.el, c.dist, c.active, c.width_rad};
             switch (c.algo) {
             case ipc::Algorithm::WFS:       wfs_objs[i]       = s; break;
             case ipc::Algorithm::DBAP:      dbap_objs[i]      = s; break;

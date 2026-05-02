@@ -135,6 +135,7 @@ struct PayloadReverbSelect {
 //   param 4    → user delay in ms (0..1000)
 //   param 5    → distance HF rolloff coefficient k_hf (0..1, 0=no rolloff)
 //   param 6    → reverb send level (0..1, linear)
+//   param 7    → source width in radians (0..π, 0=point source)
 struct PayloadObjDsp {
     enum class Param : uint8_t {
         EqLow      = 0,
@@ -144,6 +145,7 @@ struct PayloadObjDsp {
         DelayMs    = 4,
         KHF        = 5,
         ReverbSend = 6,
+        Width      = 7,
     };
     uint32_t obj_id = 0;
     Param    param  = Param::EqLow;
