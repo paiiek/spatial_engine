@@ -127,25 +127,31 @@ core/build/spatial_engine_core \
 ### 인터페이스 구성
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  [AI 추적] [저레이턴시]  모드: ai  │  vid2spatial [시작] [정지] 정지됨  │
-│                                                                      │
-│  씬 이름: [________]  [저장] [로드]                                   │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│                     탑-다운 스피커 레이아웃                            │
-│                   (오브젝트 드래그로 위치 조정)                         │
-│                                                                      │
-│              ●  ← 드래그 가능한 음원 오브젝트                           │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ [AI 추적] [저레이턴시]  모드: ai │ vid2spatial [시작] [정지] 실행 중 (:9000) │
+│ 씬: [________] [저장] [로드]  Transport: [▶ Play] [■ Stop]   60 fps          │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                            │
+│                       탑-다운 스피커 레이아웃                                │
+│                    (오브젝트 드래그로 위치 조정)                              │
+│                                                                            │
+│              ●  ← 드래그 가능한 음원 오브젝트                                │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 오브젝트 제어
 
 - **오브젝트 드래그**: 캔버스에서 음원 오브젝트(번호 표시 원)를 마우스로 드래그
 - 드래그 시 실시간으로 `/adm/obj/N/aed` OSC 메시지가 엔진(9100)으로 전송
-- 엔진이 VBAP 게인을 실시간으로 업데이트
+- 엔진이 per-object DSP chain (EQ → User Delay → Distance Gain → Distance HF → Propagation Delay → Reverb Send)을 통과시킨 뒤 선택된 알고리즘 (VBAP/WFS/DBAP) 으로 spatial render
+
+### Transport (▶ Play / ■ Stop)
+
+헤더의 **▶ Play** / **■ Stop** 버튼은 모든 출력 채널의 게인을 1.0/0.0 으로 즉시 토글합니다.
+
+- 클릭 시 WebGUI → `/transport/play` 또는 `/transport/stop` OSC 메시지가 엔진으로 전송
+- 정지 상태에서는 per-object 게인 ramp 가 0 으로 적용되어 모든 채널 무음 (드래그·자동화는 그대로 동작, 게인만 mute)
 
 ### 모드 전환
 
@@ -155,6 +161,27 @@ core/build/spatial_engine_core \
 | 저레이턴시 | `low_latency` | 브리지 비활성화 — 수동 드래그만 동작 |
 
 모드는 `/tmp/.spe_bridge_mode` 파일로 브리지 프로세스에 전달됩니다.
+
+### Per-object 파라미터 (PySide6 ObjectInspector)
+
+PySide6 데스크톱 UI 의 `ObjectInspector` 패널에서 선택된 오브젝트의 DSP 파라미터를 실시간으로 조정:
+
+- **Algorithm 콤보**: VBAP / WFS / DBAP — `/obj/algo ,ii obj_id algo_int`
+- **EQ 4 밴드** (low / lowmid / highmid / high), 각 -24 ~ +24 dB — `/obj/dsp ,iif obj_id 0..3 gain_db`
+- **User Delay**: 0 ~ 1000 ms — `/obj/dsp ,iif obj_id 4 ms`
+- **Distance HF (k_hf)**: 0 ~ 1 (0=rolloff 없음) — `/obj/dsp ,iif obj_id 5 k_hf`
+- **Reverb send**: 0 ~ 1 — `/obj/dsp ,iif obj_id 6 send`
+
+WebGUI 측은 동일한 OSC 라우팅을 WebSocket 메시지 (`type: "obj_dsp"`, `type: "obj_algo"`) 로 노출합니다.
+
+### 노이즈 제너레이터 (어레이 검증용)
+
+PySide6 `NoisePanel` 또는 WebSocket `type: "noise"` 메시지로 채널별 white/pink 노이즈를 출력 버스에 더할 수 있습니다 — 물리 스피커 결선 검증 용도.
+
+| OSC | 인수 | 의미 |
+|-----|------|------|
+| `/noise/{ch}/type` | `,s "white"\|"pink"` | 채널별 노이즈 종류 |
+| `/noise/{ch}/gain` | `,f gain_db` | 채널별 게인 (≤ -60 dB → 무음) |
 
 ### vid2spatial 브리지 제어
 
@@ -350,12 +377,17 @@ cd core/build
 # → 100% tests passed, 0 tests failed out of 34
 ```
 
-### Python 테스트 (44개)
+### Python 테스트 (149개)
 
 ```bash
-python3 -m pytest ui/tests/ -q
-# → 44 passed, 3 skipped
+python3 -m pytest ui/ bridge/ -q
+# → 149 passed, 3 skipped
 ```
+
+세부:
+- `ui/tests/` — PySide6 컴포넌트 (드래그 코알레서, 매트릭스 동기, scene 패널, transport 패널, **ObjectInspector DSP 라우팅**, MIDI 브리지 등)
+- `ui/webgui/tests/` — FastAPI 서버 + WS 디스패처 (transport / obj_algo / obj_dsp / noise) + 600Hz throughput + p99 RTT < 20 ms 게이트
+- `bridge/tests/` — vid2spatial 좌표 변환, AzMAE baseline.json 회귀 가드, 모드 전환 p95 < 100 ms / p99 < 500 ms
 
 ### 엔드투엔드 오디오 검증
 
@@ -433,16 +465,42 @@ for i in range(180):
 
 | 항목 | 내용 |
 |------|------|
-| **WebGUI** | FastAPI + WebSocket + Three.js 캔버스, 오브젝트 드래그 |
+| **WebGUI** | FastAPI + WebSocket + HTML5 Canvas, 오브젝트 드래그 |
 | **vid2spatial 브리지** | 이중 모드 (AI 추적/저레이턴시), 파일 IPC |
 | **OSCBackend UDP** | POSIX UDP 소켓 수신 (NO_JUCE 경로) |
 | **CommandFifo (SPSC)** | lock-free 링 버퍼, OSC→오디오 스레드 RT-safe |
-| **SpatialEngine 완전 배선** | obj_cache_ → 사인 오실레이터 → VBAP → 디인터리브 |
 | **WavWriter** | 8ch RIFF/WAV 실시간 캡처 |
 | **spatial_engine_core** | `--osc-port`, `--wav`, `--layout`, `--seconds` |
 | **demo_e2e.py** | 5 오브젝트 궤도 데모, vid2spatial traj.json 재생 |
 | **WebGUI vid2spatial 통합** | 시작/정지 버튼, BridgeServer 관리 API |
 | **bridge aed 수정** | 3개 분리 메시지 → `/aed` 통합 (축 덮어쓰기 버그 수정) |
+
+### v1e 완료 (2025-05) — Phase 1/2 측정 게이트 정량화
+
+| 항목 | 내용 |
+|------|------|
+| WebSocket RTT 측정 게이트 | 200-sample p50/p95/**p99** 분포, **p99 < 20 ms** Phase 1 게이트 |
+| WebGUI Canvas fps 카운터 | requestAnimationFrame 기반, `window.__fps` 노출 + 헤더 배지 |
+| WS throughput 헤드룸 | 60Hz / 120Hz burst broadcast 게이트 (실측 6300+ Hz, 손실 0) |
+| AzMAE baseline.json 회귀 가드 | 22 클립 per-clip 절대 (Δ ≤ 0.5°) + aggregate 상대 (+10%) 가드 |
+| Mode-switch p95/p99 스트레스 | 100-trial alternating switch, **p95 < 100 ms / p99 < 500 ms** |
+
+### v0e 완료 (2025-05) — v0 통합 회로 보강
+
+audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise / Transport 가 **모듈만 구현되고 SpatialEngine.cpp::audioBlock 통합 경로에 미연결** 상태였음. 본 라운드에서 통합 완성:
+
+| 항목 | 내용 |
+|------|------|
+| **SpatialEngine 통합 회로** | sine→**PerObjectChain**(EQ→Delay→DistGain→DistLPF→PropDelay→Send)→**per-algo dispatch**(VBAP/WFS/DBAP)→**FdnReverb**(균등 분배)→speaker bus + **BinauralMonitor** side-output (채널 n_spk/n_spk+1) |
+| **`/obj/algo` OSC** | `,ii obj_id algo_int` (0=VBAP, 1=WFS, 2=DBAP) — per-object 알고리즘 dispatch |
+| **`/obj/dsp` OSC (통합)** | `,iif obj_id param_id value` — param 0..3 EQ band dB, 4 delay ms, 5 k_hf, 6 reverb send |
+| **`/transport/play` & `/transport/stop` OSC** | atomic 게인 토글 (정지 시 모든 채널 0) |
+| **`/noise/{ch}/type|gain` 결선** | 이전엔 UI 가 송신해도 엔진 무시하던 dead-wire — xorshift32 white + 1-pole pink, 채널별 출력 mix |
+| **PySide6 ObjectInspector 재작성** | algorithm 콤보 + EQ 4밴드 + delay + HF + reverb_send 슬라이더 |
+| **PySide6 TransportPanel** | ▶ Play / ■ Stop, OSC 라우팅 |
+| **WebGUI 헤더 transport 버튼** | WebSocket `transport` → `_dispatch_to_osc` → `/transport/*` |
+| **WebGUI 디스패처 확장** | obj_algo / obj_dsp / noise / transport 메시지 타입 |
+| **RT 안전성** | `chains_` 힙 할당 (스택 오버플로 방지: 24MB 펄어레이), `prepareToPlay` 사전 할당, `audioBlock` alloc-free, `test_p1_rt_no_alloc` 통과 |
 
 ### 하드웨어 대기
 
@@ -459,10 +517,46 @@ for i in range(180):
 | 항목 | 결과 |
 |------|------|
 | C++ 빌드 (NO_JUCE=ON) | ✅ 34/34 ctest |
-| Python 테스트 | ✅ 44 passed, 3 skipped |
+| Python 테스트 | ✅ **149 passed, 3 skipped** |
 | RT-alloc 게이트 | ✅ SPE_RT_ASSERTS=ON 통과 |
 | 엔드투엔드 WAV | ✅ RMS > 2000 @ t=1s (5 오브젝트, 8ch) |
 | vid2spatial 연동 | ✅ RMS > 2000 @ t=1s (bridge 경유) |
+| Phase 1 RTT 게이트 | ✅ p99 < 20 ms (실측 0.17 ms) |
+| Phase 1 throughput | ✅ ≥ 60 Hz (실측 6300+ Hz) |
+| Phase 2 mode-switch | ✅ p99 < 500 ms (실측 < 1 ms) |
+| Phase 2 AzMAE | ✅ mean ≤ 2.0° (실측 1.36°, 22 클립 baseline) |
+
+---
+
+## OSC 명령 전체 (UI → Engine)
+
+### Object 제어
+| 주소 | 인수 | 동작 |
+|------|------|------|
+| `/obj/move` | `,ifff obj_id az el dist` | (legacy) 직접 위치 설정 |
+| `/obj/gain` | `,if obj_id gain_lin` | per-object 게인 |
+| `/obj/active` | `,ii obj_id 0\|1` | 활성화 |
+| `/obj/algo` | `,ii obj_id algo` | 0=VBAP, 1=WFS, 2=DBAP |
+| `/obj/dsp` | `,iif obj_id param value` | 0..3 EQ band dB, 4 delay ms, 5 k_hf, 6 reverb send |
+
+### ADM-OSC (외부 컨트롤러 호환)
+| 주소 | 인수 | 동작 |
+|------|------|------|
+| `/adm/obj/{n}/aed` | `,fff az el dist` | 통합 위치 메시지 |
+| `/adm/obj/{n}/azim\|elev\|dist\|gain\|mute` | `,f` 또는 `,i` | 분리 메시지 (외부 호환) |
+
+### System
+| 주소 | 인수 | 동작 |
+|------|------|------|
+| `/transport/play` | (없음) | 출력 게인 1.0 |
+| `/transport/stop` | (없음) | 출력 게인 0.0 (mute) |
+| `/sys/handshake` | `,i schema_ver` | 스키마 버전 협상 |
+| `/sys/algo_swap` | `,i algo` | 엔진 디폴트 알고리즘 변경 |
+| `/sys/reset` | (없음) | 모든 객체 초기화 |
+| `/scene/save\|load\|list` | `,s name` | 씬 스냅샷 |
+| `/noise/{ch}/type` | `,s "white"\|"pink"` | 채널별 노이즈 타입 |
+| `/noise/{ch}/gain` | `,f gain_db` | 채널별 노이즈 dB |
+| `/hb/ping\|pong` | `,t timestamp_ms` | 10 Hz 하트비트 |
 
 ---
 
