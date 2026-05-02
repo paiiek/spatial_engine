@@ -130,6 +130,12 @@
     <button id="btn-ai-mode" class="active">AI 추적</button>
     <button id="btn-lt-mode">저레이턴시</button>
     <span id="mode-status">모드: ai</span>
+    <div id="v2s-panel" style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;border-left:1px solid #333;padding-left:12px;">
+      <span style="font-size:11px;color:#aaa;">vid2spatial</span>
+      <button id="btn-v2s-start">시작</button>
+      <button id="btn-v2s-stop" disabled>정지</button>
+      <span id="v2s-status" style="font-size:11px;color:#666;">정지됨</span>
+    </div>
   </div>
   <div id="scene-panel" style="display:flex;align-items:center;gap:6px;margin-left:12px;">
     <input id="scene-name" type="text" value="default" style="width:90px;font-family:inherit;font-size:11px;padding:3px 6px;background:#1a1a2e;border:1px solid #2a2a4e;border-radius:4px;color:#ccc;" placeholder="씬 이름" />
@@ -192,6 +198,8 @@
     // Handle mode_change broadcast from server
     if (data && data.type === "mode_change") {
       _applyMode(data.mode);
+    } else if (data && data.type === "v2s_status") {
+      _v2sSetRunning(data.running);
     }
   });
 
@@ -228,6 +236,37 @@
 
   // Fetch initial mode on load
   fetch("/api/mode").then(r => r.json()).then(j => _applyMode(j.mode)).catch(() => {});
+
+  // vid2spatial bridge controls
+  const btnV2sStart = document.getElementById("btn-v2s-start");
+  const btnV2sStop  = document.getElementById("btn-v2s-stop");
+  const v2sStatus   = document.getElementById("v2s-status");
+
+  async function _v2sSetRunning(running) {
+    v2sStatus.textContent = running ? "실행 중 (:9000)" : "정지됨";
+    v2sStatus.style.color = running ? "#4caf50" : "#666";
+    btnV2sStart.disabled = running;
+    btnV2sStop.disabled  = !running;
+  }
+
+  btnV2sStart.addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/vid2spatial/start", { method: "POST" });
+      const j = await r.json();
+      _v2sSetRunning(j.running);
+    } catch(e) { console.error("[v2s] start failed:", e); }
+  });
+
+  btnV2sStop.addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/vid2spatial/stop", { method: "POST" });
+      const j = await r.json();
+      _v2sSetRunning(j.running);
+    } catch(e) { console.error("[v2s] stop failed:", e); }
+  });
+
+  // Poll initial status
+  fetch("/api/vid2spatial/status").then(r => r.json()).then(j => _v2sSetRunning(j.running)).catch(()=>{});
 
   // --- Scene save/load ---
   document.getElementById("btn-scene-save").addEventListener("click", () => {

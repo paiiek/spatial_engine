@@ -249,10 +249,10 @@ class BridgeServer:
         if not self.rate.allow(key):
             return
 
-        prefix = f"/adm/obj/{obj_n}"
-        self._client.send_message(f"{prefix}/azim", float(az_adm))
-        self._client.send_message(f"{prefix}/elev", float(el_adm))
-        self._client.send_message(f"{prefix}/dist", float(dist_adm))
+        # Send combined aed message: azimuth(deg), elevation(deg), distance(normalised)
+        # Separate azim/elev/dist messages overwrite each other in the engine's setMove().
+        self._client.send_message(f"/adm/obj/{obj_n}/aed",
+                                  [float(az_adm), float(el_adm), float(dist_adm)])
 
     # ------------------------------------------------------------------
     # OSC handlers

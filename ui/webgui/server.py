@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from typing import Set
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -170,6 +171,66 @@ def _dispatch_to_osc(msg: dict) -> None:
             osc_send_fn("/scene/list")
     else:
         logger.debug("Unknown message type: %s", mtype)
+
+
+# ---------------------------------------------------------------------------
+# vid2spatial bridge management
+# ---------------------------------------------------------------------------
+
+_v2s_bridge = None   # Vid2SpatialBridge instance
+_v2s_thread = None   # background thread running bridge.start()
+
+
+def _v2s_running() -> bool:
+    return _v2s_bridge is not None and getattr(_v2s_bridge, "_running", False)
+
+
+@app.post("/api/vid2spatial/start")
+async def v2s_start() -> JSONResponse:
+    """Start vid2spatial OSC bridge (port 9000 → 9100)."""
+    global _v2s_bridge, _v2s_thread
+    if _v2s_running():
+        return JSONResponse({"status": "already_running", "running": True})
+    try:
+        import sys as _sys
+        _sys.path.insert(0, "")
+        from bridge.vid2spatial_osc import BridgeServer  # noqa: PLC0415
+        _v2s_bridge = BridgeServer(
+            listen_port=9000, target_port=9100, target_host="127.0.0.1", mode=_bridge_mode
+        )
+        _v2s_thread = threading.Thread(target=_v2s_bridge.start, daemon=True)
+        _v2s_thread.start()
+        await asyncio.sleep(0.2)  # allow server socket to bind
+        await manager.broadcast(json.dumps({"type": "v2s_status", "running": True}))
+        logger.info("vid2spatial bridge started on port 9000")
+        return JSONResponse({"status": "started", "running": True})
+    except Exception as exc:
+        logger.error("vid2spatial bridge start failed: %s", exc)
+        return JSONResponse({"status": "error", "error": str(exc), "running": False}, status_code=500)
+
+
+@app.post("/api/vid2spatial/stop")
+async def v2s_stop() -> JSONResponse:
+    """Stop vid2spatial OSC bridge."""
+    global _v2s_bridge, _v2s_thread
+    if not _v2s_running():
+        return JSONResponse({"status": "not_running", "running": False})
+    try:
+        _v2s_bridge.stop()
+        _v2s_bridge = None
+        _v2s_thread = None
+        await manager.broadcast(json.dumps({"type": "v2s_status", "running": False}))
+        logger.info("vid2spatial bridge stopped")
+        return JSONResponse({"status": "stopped", "running": False})
+    except Exception as exc:
+        logger.error("vid2spatial bridge stop failed: %s", exc)
+        return JSONResponse({"status": "error", "error": str(exc), "running": False}, status_code=500)
+
+
+@app.get("/api/vid2spatial/status")
+async def v2s_status() -> JSONResponse:
+    """vid2spatial bridge 상태 조회."""
+    return JSONResponse({"running": _v2s_running(), "port": 9000})
 
 
 # ---------------------------------------------------------------------------
