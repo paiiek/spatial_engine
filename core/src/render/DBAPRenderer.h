@@ -31,6 +31,11 @@ private:
     geometry::SpeakerLayout layout_;
     double sr_ = 48000.0;
     std::array<std::array<spe::dsp::GainRamp, 64>, spe::MAX_OBJECTS> ramps_;
+
+    // Compute single-position DBAP gains into out_gains[0..num_speakers_-1].
+    // RT-safe: no allocation.
+    void dbapForPosition(float az_rad, float el_rad, float dist_m,
+                         float* out_gains) const noexcept;
 };
 
 } // namespace spe::render

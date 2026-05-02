@@ -188,3 +188,8 @@ add_executable(test_p_ir_loading test_p_ir_loading.cpp)
 target_link_libraries(test_p_ir_loading PRIVATE spe_core)
 add_test(NAME p_ir_loading COMMAND test_p_ir_loading)
 
+# B4: DBAP width 정밀화 — 3 가상소스 power-sum + energy 보존
+add_executable(test_p_dbap_width test_p_dbap_width.cpp)
+target_link_libraries(test_p_dbap_width PRIVATE spe_core)
+add_test(NAME p_dbap_width COMMAND test_p_dbap_width)
+
