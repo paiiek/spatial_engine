@@ -153,3 +153,8 @@ add_executable(test_p_ambi test_p_ambi.cpp)
 target_link_libraries(test_p_ambi PRIVATE spe_core)
 add_test(NAME p_ambi COMMAND test_p_ambi)
 
+# v1c: BinauralMonitor pure-C++ HRTF pipeline tests
+add_executable(test_p_binaural_stub test_p_binaural_stub.cpp)
+target_link_libraries(test_p_binaural_stub PRIVATE spe_core)
+add_test(NAME p_binaural_stub COMMAND test_p_binaural_stub)
+

@@ -105,8 +105,11 @@ set(SPE_CORE_SOURCES
     src/reverb/FdnReverb.cpp
     src/reverb/IRConvolutionStub.cpp
     src/reverb/ReverbEngine.cpp
-    # P9: BinauralMonitor stub
+    # P9 / v1c: BinauralMonitor + pure-C++ HRTF pipeline
     src/output_backend/BinauralMonitor.cpp
+    src/hrtf/SofaBinReader.cpp
+    src/hrtf/HrtfLookup.cpp
+    src/hrtf/OlaConvolver.cpp
     # F2: Ambisonics 1st-order encoder
     src/ambi/AmbisonicEncoder.cpp
 )
