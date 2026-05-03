@@ -95,6 +95,8 @@ set(SPE_CORE_SOURCES
     # US-001: Scene snapshot serialisation + controller
     src/ipc/SceneSnapshot.cpp
     src/ipc/SceneController.cpp
+    # M4: Time-based scene crossfade
+    src/scene/SceneCrossfade.cpp
     # P5: input chain
     src/input/FileInput.cpp
     src/input/SynthInput.cpp
