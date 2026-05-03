@@ -518,6 +518,30 @@ audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise /
 | **WebGUI 디스패처 확장** | obj_algo / obj_dsp / noise / transport 메시지 타입 |
 | **RT 안전성** | `chains_` 힙 할당 (스택 오버플로 방지: 24MB 펄어레이), `prepareToPlay` 사전 할당, `audioBlock` alloc-free, `test_p1_rt_no_alloc` 통과 |
 
+### v1f 완료 (2026-04 ~ 2026-05) — Phase A 기능 패리티
+
+| 항목 | 내용 |
+|------|------|
+| **M1** Source Width/Spread | per-object width 라디안 (`/obj/dsp param=7`), VBAP/DBAP/WFS/HOA 별 fan-out |
+| **M2** HOA AmbiDecoder + Renderer | 1차 모드매칭, AmbisonicRenderer 통합, `Ambisonic=3` 알고리즘 분기 |
+| **M3** IRConvReverb (OLA) | 런타임 FDN/IR 전환 `/reverb/select fdn\|ir` |
+| **M6** Per-speaker time-alignment | layout YAML `delay_ms`/`gain_db`, output 단계 적용 |
+| **M8** Object Trajectory Animation | circle/line/lissajous preset, `/api/trajectory/start\|stop\|list` |
+| **M9** Per-channel ChannelLimiter + trim | `/output/{ch}/gain` `/output/{ch}/limit` |
+
+### v1g 완료 (2026-05) — Phase B 정밀화 + 회귀 정리
+
+| 항목 | 내용 |
+|------|------|
+| **B1** pytest collection 충돌 해결 | `--import-mode=importlib`, ui/ ui/webgui/ 통합 실행 |
+| **B2** WebGUI Trajectory 패널 | `static/index.html` + `trajectory.js`, preset/speed UI |
+| **B3** IRConvReverb WAV 로딩 | `loadIRFromWav()` + `scripts/fetch_ir.py` (외부/합성 fallback) |
+| **B4** DBAP width 정밀화 | 3 가상소스 power-sum + energy 보존 정규화 |
+| **B5** HOA 2차/3차 디코더 | Tikhonov pseudo-inverse, `/sys/ambi_order ,i {1\|2\|3}`, AmbisonicRenderer 차수 atomic 전환 |
+| **M4** Snapshot Crossfade | 시간 비례 보간 (lerp az/dist/gain_db, shortest-arc 각도, midpoint 디스크리트 스냅) |
+| **M5** VST3 빌드 옵션 | `cmake -DSPATIAL_ENGINE_VST3=ON` (default OFF), `.vst3` shared object + entry symbols, Phase C SDK 통합 자리표시자 |
+| **M7** SMPTE LTC 디코더 | `core/src/sync/LTCDecoder` biphase-mark, 합성 LTC 1초 → 24 unique frames + 12:34:56:18 정확 매치 |
+
 ### 하드웨어 대기
 
 | 항목 | 내용 |
@@ -532,8 +556,8 @@ audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise /
 
 | 항목 | 결과 |
 |------|------|
-| C++ 빌드 (NO_JUCE=ON) | ✅ 34/34 ctest |
-| Python 테스트 | ✅ **149 passed, 3 skipped** |
+| C++ 빌드 (NO_JUCE=ON) | ✅ **43/43 ctest** (Phase A/B 통합) |
+| Python 테스트 | ✅ **193 passed, 3 skipped** |
 | RT-alloc 게이트 | ✅ SPE_RT_ASSERTS=ON 통과 |
 | 엔드투엔드 WAV | ✅ RMS > 2000 @ t=1s (5 오브젝트, 8ch) |
 | vid2spatial 연동 | ✅ RMS > 2000 @ t=1s (bridge 경유) |
@@ -552,8 +576,8 @@ audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise /
 | `/obj/move` | `,ifff obj_id az el dist` | (legacy) 직접 위치 설정 |
 | `/obj/gain` | `,if obj_id gain_lin` | per-object 게인 |
 | `/obj/active` | `,ii obj_id 0\|1` | 활성화 |
-| `/obj/algo` | `,ii obj_id algo` | 0=VBAP, 1=WFS, 2=DBAP |
-| `/obj/dsp` | `,iif obj_id param value` | 0..3 EQ band dB, 4 delay ms, 5 k_hf, 6 reverb send |
+| `/obj/algo` | `,ii obj_id algo` | 0=VBAP, 1=WFS, 2=DBAP, 3=Ambisonic |
+| `/obj/dsp` | `,iif obj_id param value` | 0..3 EQ band dB, 4 delay ms, 5 k_hf, 6 reverb send, 7 width rad |
 
 ### ADM-OSC (외부 컨트롤러 호환)
 | 주소 | 인수 | 동작 |
@@ -569,7 +593,11 @@ audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise /
 | `/sys/handshake` | `,i schema_ver` | 스키마 버전 협상 |
 | `/sys/algo_swap` | `,i algo` | 엔진 디폴트 알고리즘 변경 |
 | `/sys/reset` | (없음) | 모든 객체 초기화 |
+| `/sys/ambi_order` | `,i {1\|2\|3}` | Ambisonic 디코딩 차수 (B5) |
 | `/scene/save\|load\|list` | `,s name` | 씬 스냅샷 |
+| `/reverb/select` | `,s "fdn"\|"ir"` | 리버브 엔진 전환 (M3) |
+| `/output/{ch}/gain` | `,f gain_db` | 채널별 출력 trim (M9) |
+| `/output/{ch}/limit` | `,f threshold_db` | 채널별 limiter threshold (M9) |
 | `/noise/{ch}/type` | `,s "white"\|"pink"` | 채널별 노이즈 타입 |
 | `/noise/{ch}/gain` | `,f gain_db` | 채널별 노이즈 dB |
 | `/hb/ping\|pong` | `,t timestamp_ms` | 10 Hz 하트비트 |
