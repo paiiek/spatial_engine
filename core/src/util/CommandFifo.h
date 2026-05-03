@@ -29,6 +29,8 @@ struct QueuedCmd {
     // OutputGain / OutputLimit
     uint32_t output_ch       = 0;
     float    output_value_db = 0.f;
+    // SysAmbiOrder: 1, 2, or 3
+    uint8_t  ambi_order      = 1;
 };
 
 template<int N = 1024>

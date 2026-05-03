@@ -71,6 +71,11 @@ SpatialEngine::SpatialEngine(int listen_port)
                 break;
             case ipc::CommandTag::SysReset:
                 break;
+            case ipc::CommandTag::SysAmbiOrder:
+                if (auto* p = std::get_if<ipc::PayloadSysAmbiOrder>(&cmd.payload)) {
+                    qc.ambi_order = p->order;
+                }
+                break;
             case ipc::CommandTag::ReverbSelect:
                 if (auto* p = std::get_if<ipc::PayloadReverbSelect>(&cmd.payload)) {
                     qc.reverb_which = p->which;
@@ -256,6 +261,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             case ipc::CommandTag::ReverbSelect:
                 active_reverb_.store(static_cast<int>(qc.reverb_which),
                                      std::memory_order_relaxed);
+                break;
+            case ipc::CommandTag::SysAmbiOrder:
+                ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
                 break;
             case ipc::CommandTag::OutputGain:
                 if (qc.output_ch < spk_gain_lin_.size())

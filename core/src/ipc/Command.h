@@ -34,6 +34,7 @@ enum class CommandTag : uint8_t {
     SysHandshake  = 0x10, // /sys/handshake — client sends schema_version
     SysAlgoSwap   = 0x11, // /sys/algo_swap — engine-wide default algo
     SysReset      = 0x12, // /sys/reset     — reset all objects to defaults
+    SysAmbiOrder  = 0x13, // /sys/ambi_order ,i {1|2|3} — Ambisonic decoding order
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -99,6 +100,10 @@ struct PayloadSysAlgoSwap {
 };
 
 struct PayloadSysReset {};
+
+struct PayloadSysAmbiOrder {
+    uint8_t order = 1; // 1, 2, or 3 — clamps if out-of-range
+};
 
 struct PayloadHbPing {
     uint64_t timestamp_ms = 0; // wall-clock ms at publisher side
@@ -180,6 +185,7 @@ using CommandPayload = std::variant<
     PayloadSysHandshake,
     PayloadSysAlgoSwap,
     PayloadSysReset,
+    PayloadSysAmbiOrder,
     PayloadHbPing,
     PayloadHbPong,
     PayloadSceneSave,

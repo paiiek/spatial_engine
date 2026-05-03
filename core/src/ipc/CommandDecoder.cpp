@@ -215,6 +215,14 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
     } else if (addr == "/sys/reset") {
         cmd.tag = CommandTag::SysReset;
         cmd.payload = PayloadSysReset{};
+    } else if (addr == "/sys/ambi_order") {
+        cmd.tag = CommandTag::SysAmbiOrder;
+        PayloadSysAmbiOrder p;
+        int v = getInt(0);
+        if (v < 1) v = 1;
+        if (v > 3) v = 3;
+        p.order = static_cast<uint8_t>(v);
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;
@@ -480,6 +488,12 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
     }
     case CommandTag::SysReset: {
         addr = "/sys/reset";
+        break;
+    }
+    case CommandTag::SysAmbiOrder: {
+        addr = "/sys/ambi_order";
+        auto& p = std::get<PayloadSysAmbiOrder>(cmd.payload);
+        add_i(static_cast<int32_t>(p.order));
         break;
     }
     case CommandTag::HbPing: {
