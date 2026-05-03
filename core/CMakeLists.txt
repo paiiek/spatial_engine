@@ -24,6 +24,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # system deps (libasound2-dev, libx11-dev, ...). NullBackend + SpatialEngine
 # do not require JUCE; only DanteBackend does.
 option(SPATIAL_ENGINE_NO_JUCE "Force JUCE-free build (skip DanteBackend, juce::* link)" OFF)
+option(SPATIAL_ENGINE_VST3    "Build optional VST3 plugin scaffold (Phase C will integrate Steinberg vst3sdk)" OFF)
 
 if(SPATIAL_ENGINE_NO_JUCE)
     set(SPE_HAVE_JUCE OFF)
@@ -148,6 +149,15 @@ add_executable(spatial_engine_core
     src/bin/spatial_engine_core.cpp
     src/bin/WavWriter.cpp)
 target_link_libraries(spatial_engine_core PRIVATE spe_core)
+
+# --- VST3 plugin scaffold (Phase B placeholder, Phase C SDK integration) -
+if(SPATIAL_ENGINE_VST3)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../vst3/CMakeLists.txt")
+        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../vst3 vst3_build)
+    else()
+        message(WARNING "spatial_engine: SPATIAL_ENGINE_VST3=ON but vst3/CMakeLists.txt not found.")
+    endif()
+endif()
 
 # --- CTest scaffold ------------------------------------------------------
 add_subdirectory(tests/core_unit)

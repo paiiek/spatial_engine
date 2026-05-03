@@ -364,6 +364,22 @@ make -j$(nproc)
 |-----------|------|------|
 | `SPATIAL_ENGINE_NO_JUCE` | OFF | JUCE 없이 빌드. POSIX UDP로 OSC 수신 |
 | `SPATIAL_ENGINE_RT_ASSERTS` | ON | RT 스레드 내 동적 할당 감지 |
+| `SPATIAL_ENGINE_VST3` | OFF | VST3 플러그인 스캐폴드 빌드 (Phase B 자리표시자, Phase C에서 vst3sdk 통합) |
+
+#### VST3 플러그인 빌드 (Phase B 자리표시자)
+
+```bash
+# 옵션 ON 으로 cmake 재구성 후 vst3 타겟 빌드
+mkdir -p core/build && cd core/build
+cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON -DSPATIAL_ENGINE_VST3=ON
+make spatial_engine_vst3 -j$(nproc)
+# → vst3_build/spatial_engine_vst3.vst3 (shared object)
+```
+
+현 단계는 빌드 시스템 정비 + 표준 VST3 entry symbol (`GetPluginFactory`,
+`ModuleEntry`, `ModuleExit`) export. 호스트 로딩 시 클래스가 비어있어 안전하게
+스킵된다. 풀 플러그인 (IPluginFactory · AudioEffect · 파라미터 매핑) 은
+Phase C 에서 Steinberg vst3sdk 외부 클론과 함께 통합 예정.
 
 ---
 
