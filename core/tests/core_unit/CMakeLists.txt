@@ -198,3 +198,8 @@ add_executable(test_p_scene_crossfade test_p_scene_crossfade.cpp)
 target_link_libraries(test_p_scene_crossfade PRIVATE spe_core)
 add_test(NAME p_scene_crossfade COMMAND test_p_scene_crossfade)
 
+# M7: SMPTE LTC biphase-mark decoder
+add_executable(test_p_ltc_decoder test_p_ltc_decoder.cpp)
+target_link_libraries(test_p_ltc_decoder PRIVATE spe_core)
+add_test(NAME p_ltc_decoder COMMAND test_p_ltc_decoder)
+

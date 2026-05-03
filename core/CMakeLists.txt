@@ -98,6 +98,8 @@ set(SPE_CORE_SOURCES
     src/ipc/SceneController.cpp
     # M4: Time-based scene crossfade
     src/scene/SceneCrossfade.cpp
+    # M7: SMPTE LTC biphase decoder
+    src/sync/LTCDecoder.cpp
     # P5: input chain
     src/input/FileInput.cpp
     src/input/SynthInput.cpp
