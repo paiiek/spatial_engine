@@ -51,13 +51,23 @@ static std::vector<float> run_one_block(spe::render::VBAPRenderer& renderer,
     obj.active    = true;
     obj.width_rad = width_rad;
 
+    // Warm-up pass: gain ramps start at 0 after prepareToPlay; the impulse at
+    // sample 0 would otherwise be multiplied by ramp=0. Run one block first so
+    // the ramp settles at target, then measure on the second block where
+    // frame 0's gain equals the steady-state value.
+    renderer.processBlock(
+        std::span<const spe::render::ObjectState>(&obj, 1),
+        std::span<const float* const>(&dry_ptr, 1),
+        out.data(),
+        FRAMES);
+    std::fill(out.begin(), out.end(), 0.f);
     renderer.processBlock(
         std::span<const spe::render::ObjectState>(&obj, 1),
         std::span<const float* const>(&dry_ptr, 1),
         out.data(),
         FRAMES);
 
-    // Extract gains at sample 0 (first frame, interleaved)
+    // Extract gains at sample 0 (first frame, interleaved frame-major)
     std::vector<float> gains(static_cast<size_t>(num_speakers));
     for (int s = 0; s < num_speakers; ++s)
         gains[static_cast<size_t>(s)] = out[static_cast<size_t>(s)];  // frame 0

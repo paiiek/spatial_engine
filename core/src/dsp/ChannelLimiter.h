@@ -27,8 +27,11 @@ public:
 
     float processSample(float in) noexcept {
         const float abs_in = std::abs(in);
-        const float coef = (abs_in > envelope_) ? attack_coef_ : release_coef_;
-        envelope_ = coef * envelope_ + (1.f - coef) * abs_in;
+        if (abs_in > envelope_) {
+            envelope_ = abs_in;
+        } else {
+            envelope_ = release_coef_ * envelope_ + (1.f - release_coef_) * abs_in;
+        }
         float gain = 1.f;
         if (envelope_ > threshold_) {
             gain = threshold_ / envelope_;

@@ -1,5 +1,10 @@
 # core/tests/core_unit — CTest unit suite for the C++ audio core.
 
+# Tests rely on assert() for correctness checks. Release builds inject
+# -DNDEBUG which strips assertions and silently turns failures into PASS.
+# Re-enable assertions for every test target in this directory.
+add_compile_options(-UNDEBUG)
+
 add_executable(test_p0_smoke test_p0_smoke.cpp)
 target_link_libraries(test_p0_smoke PRIVATE spe_util)
 add_test(NAME p0_smoke COMMAND test_p0_smoke)
