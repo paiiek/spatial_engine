@@ -18,6 +18,12 @@ enable_testing()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Threads — required by NullBackend's std::thread worker and the C1.b
+# SpscRing two-thread roundtrip test. find_package(Threads) materialises
+# Threads::Threads which carries the right -pthread / -lpthread flag.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 # --- JUCE wiring ---------------------------------------------------------
 # SPATIAL_ENGINE_NO_JUCE forces a JUCE-free build even when the submodule is
 # present. Used by CI / RT-assert harnesses on hosts that lack JUCE's Linux
@@ -46,6 +52,7 @@ set(SPE_UTIL_SOURCES
 )
 add_library(spe_util STATIC ${SPE_UTIL_SOURCES})
 target_include_directories(spe_util PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(spe_util PUBLIC Threads::Threads)
 target_compile_definitions(spe_util PUBLIC
     SPE_VERSION_MAJOR=0
     SPE_VERSION_MINOR=1

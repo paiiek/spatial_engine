@@ -213,3 +213,8 @@ add_executable(test_p_audio_io_input test_p_audio_io_input.cpp)
 target_link_libraries(test_p_audio_io_input PRIVATE spe_core)
 add_test(NAME p_audio_io_input COMMAND test_p_audio_io_input)
 
+# C1.b: SPSC ring + QueuedCmd POD extension acceptance
+add_executable(test_p_spsc_ring test_p_spsc_ring.cpp)
+target_link_libraries(test_p_spsc_ring PRIVATE spe_util Threads::Threads)
+add_test(NAME p_spsc_ring COMMAND test_p_spsc_ring)
+
