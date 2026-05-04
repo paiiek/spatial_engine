@@ -107,6 +107,8 @@ set(SPE_CORE_SOURCES
     src/scene/SceneCrossfade.cpp
     # M7: SMPTE LTC biphase decoder
     src/sync/LTCDecoder.cpp
+    # C1.c: control-rate LTC consumer (audio→ring→control-thread decoder)
+    src/sync/LtcChase.cpp
     # P5: input chain
     src/input/FileInput.cpp
     src/input/SynthInput.cpp
