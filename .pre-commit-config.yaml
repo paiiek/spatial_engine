@@ -34,3 +34,12 @@ repos:
     hooks:
       - id: yamllint
         args: [-c=.yamllint.yml]
+
+  - repo: local
+    hooks:
+      - id: check-test-ndebug
+        name: Verify -UNDEBUG in test CMakeLists (Release-NDEBUG strip guard)
+        entry: bash scripts/check_test_ndebug.sh
+        language: system
+        pass_filenames: false
+        always_run: true

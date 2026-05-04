@@ -208,3 +208,8 @@ add_executable(test_p_ltc_decoder test_p_ltc_decoder.cpp)
 target_link_libraries(test_p_ltc_decoder PRIVATE spe_core)
 add_test(NAME p_ltc_decoder COMMAND test_p_ltc_decoder)
 
+# C1.a: NullBackend audio-input path acceptance
+add_executable(test_p_audio_io_input test_p_audio_io_input.cpp)
+target_link_libraries(test_p_audio_io_input PRIVATE spe_core)
+add_test(NAME p_audio_io_input COMMAND test_p_audio_io_input)
+

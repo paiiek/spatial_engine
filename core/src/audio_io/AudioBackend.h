@@ -46,9 +46,11 @@ public:
 };
 
 // Construct a NullBackend (alway available, no system deps).
+// input_channels=0 (default) preserves output-only behavior used pre-C1.
 std::unique_ptr<AudioBackend> make_null_backend(double sample_rate = 48000.0,
                                                 int output_channels = 8,
-                                                int block_size = 64);
+                                                int block_size = 64,
+                                                int input_channels = 0);
 
 #if defined(SPE_HAVE_JUCE)
 // Construct a DanteBackend (JACK device pick; pinned in configs/default.yaml).

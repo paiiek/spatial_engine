@@ -20,11 +20,12 @@ namespace spe::audio_io {
 
 class NullBackend final : public AudioBackend {
 public:
-    NullBackend(double sample_rate, int output_channels, int block_size);
+    NullBackend(double sample_rate, int output_channels, int block_size,
+                int input_channels = 0);
     ~NullBackend() override;
 
     int          outputChannelCount() const noexcept override { return out_channels_; }
-    int          inputChannelCount()  const noexcept override { return 0; }
+    int          inputChannelCount()  const noexcept override { return in_channels_; }
     double       sampleRate()         const noexcept override { return sample_rate_; }
     int          blockSize()          const noexcept override { return block_size_; }
     std::string  description()        const override;
@@ -38,15 +39,27 @@ public:
     // worker thread. Keeps unit tests deterministic.
     BackendError pump_synchronous(AudioCallback* callback, int blocks);
 
+    // Test hook (C1.a): feed a synthetic input source. Each per-channel sample
+    // sequence is circularly read into the corresponding input channel buffer
+    // every block. Must be called before start()/pump_synchronous(). Pre-allocates;
+    // not RT-safe — control thread only.
+    void set_input_fixture(std::vector<std::vector<float>> per_channel_samples);
+
 private:
     void thread_loop();
+    void fill_input_buffer();   // copies fixture into in_flat_buffer_, advances cursor
 
     double sample_rate_;
     int    out_channels_;
+    int    in_channels_;
     int    block_size_;
 
     std::vector<float>              flat_buffer_;        // out_channels_ * block_size_
     std::vector<float*>             channel_pointers_;   // size == out_channels_
+    std::vector<float>              in_flat_buffer_;     // in_channels_ * block_size_
+    std::vector<const float*>       in_channel_pointers_;// size == in_channels_
+    std::vector<std::vector<float>> input_fixture_;      // per-channel source
+    std::size_t                     fixture_cursor_{0};
     AudioCallback*                  callback_{nullptr};
     std::atomic<bool>               running_{false};
     std::thread                     worker_;
