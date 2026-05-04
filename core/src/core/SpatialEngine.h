@@ -17,6 +17,7 @@
 #include "render/WFSRenderer.h"
 #include "reverb/FdnReverb.h"
 #include "reverb/ReverbEngine.h"
+#include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/TraceRing.h"
 #include "util/XrunCounter.h"
@@ -49,6 +50,25 @@ public:
     // Safe to call from any thread.
     void setTransportPlay(bool play) noexcept { transport_play_.store(play); }
     bool isTransportPlaying() const noexcept  { return transport_play_.load(); }
+
+    // C1.d — LTC chase from input ch 0. When enabled, audioBlock() taps
+    // input_channels[0] (if present) and pushes the samples into the
+    // internal LtcChase ring. updateLtcChase() drains the ring on the
+    // control thread and runs the M7 biphase decoder.
+    void setLtcChaseEnable(bool enable) noexcept { ltc_chase_enable_.store(enable); }
+    bool isLtcChaseEnabled() const noexcept       { return ltc_chase_enable_.load(); }
+
+    // Control-thread tick: drain LTC ring + decode. Lock-free, fast; safe
+    // to call from any non-RT context (e.g. between audio blocks in tests
+    // or on a dedicated control timer in production).
+    void updateLtcChase() noexcept                { ltc_chase_.update(); }
+
+    bool getLtcCurrentTimecode(spe::sync::Timecode& out) const noexcept {
+        return ltc_chase_.getCurrentTimecode(out);
+    }
+    std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
+    std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
+    bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
 
 private:
     // OSC receive → command FIFO → StateModel on audio thread
@@ -131,6 +151,8 @@ private:
     std::atomic<bool>          prepared_{false};
     std::atomic<bool>          render_ready_{false};
     std::atomic<bool>          transport_play_{true};
+    std::atomic<bool>          ltc_chase_enable_{false};
+    spe::sync::LtcChase        ltc_chase_;
     std::atomic<std::uint64_t> blocks_processed_{0};
     double                     sample_rate_{48000.0};
     int                        max_block_size_{64};

@@ -76,6 +76,11 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.ambi_order = p->order;
                 }
                 break;
+            case ipc::CommandTag::SysLtcChase:
+                if (auto* p = std::get_if<ipc::PayloadSysLtcChase>(&cmd.payload)) {
+                    qc.ltc_chase_enable = p->enable ? 1 : 0;
+                }
+                break;
             case ipc::CommandTag::ReverbSelect:
                 if (auto* p = std::get_if<ipc::PayloadReverbSelect>(&cmd.payload)) {
                     qc.reverb_which = p->which;
@@ -164,6 +169,11 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         if (noise_chans_.empty()) noise_chans_.resize(1);
     }
 
+    // C1.d — initialise LtcChase ring + decoder for 25 fps default. The
+    // chase is gated by ltc_chase_enable_ at audioBlock entry; until /sys/
+    // ltc_chase ,i 1 fires, no input samples land in the ring.
+    ltc_chase_.prepare(sample_rate, /*fps_hint=*/25);
+
     // FDN reverb (mono send → mono wet)
     fdn_.prepareToPlay(sample_rate, max_block_size);
     // IR convolution reverb
@@ -215,6 +225,17 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         return;
     }
 
+    // C1.d — LTC chase tap. When chase is enabled and the backend supplies
+    // an input ch 0, push that block's samples into the LtcChase ring.
+    // Allocation-free (SpscRing<float>::push). Decoder runs on the control
+    // thread via SpatialEngine::updateLtcChase().
+    if (ltc_chase_enable_.load(std::memory_order_relaxed)
+        && block.input_channels != nullptr
+        && block.input_channel_count > 0
+        && block.input_channels[0] != nullptr) {
+        ltc_chase_.pushSamples(block.input_channels[0], block.num_frames);
+    }
+
     // Drain OSC command FIFO directly into obj_cache_ (RT-safe, no seq issues)
     {
         util::QueuedCmd qc;
@@ -264,6 +285,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 break;
             case ipc::CommandTag::SysAmbiOrder:
                 ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
+                break;
+            case ipc::CommandTag::SysLtcChase:
+                ltc_chase_enable_.store(qc.ltc_chase_enable != 0,
+                                        std::memory_order_relaxed);
                 break;
             case ipc::CommandTag::OutputGain:
                 if (qc.output_ch < spk_gain_lin_.size())

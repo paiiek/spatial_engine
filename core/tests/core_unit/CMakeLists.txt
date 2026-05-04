@@ -223,3 +223,8 @@ add_executable(test_p_ltc_chase test_p_ltc_chase.cpp)
 target_link_libraries(test_p_ltc_chase PRIVATE spe_core)
 add_test(NAME p_ltc_chase COMMAND test_p_ltc_chase)
 
+# C1.d: /sys/ltc_chase OSC roundtrip + engine integration acceptance
+add_executable(test_p_sys_ltc_chase test_p_sys_ltc_chase.cpp)
+target_link_libraries(test_p_sys_ltc_chase PRIVATE spe_core)
+add_test(NAME p_sys_ltc_chase COMMAND test_p_sys_ltc_chase)
+

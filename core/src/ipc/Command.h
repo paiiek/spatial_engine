@@ -35,6 +35,7 @@ enum class CommandTag : uint8_t {
     SysAlgoSwap   = 0x11, // /sys/algo_swap — engine-wide default algo
     SysReset      = 0x12, // /sys/reset     — reset all objects to defaults
     SysAmbiOrder  = 0x13, // /sys/ambi_order ,i {1|2|3} — Ambisonic decoding order
+    SysLtcChase   = 0x14, // /sys/ltc_chase ,i {0|1} — enable LTC chase from input ch 0
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -103,6 +104,10 @@ struct PayloadSysReset {};
 
 struct PayloadSysAmbiOrder {
     uint8_t order = 1; // 1, 2, or 3 — clamps if out-of-range
+};
+
+struct PayloadSysLtcChase {
+    bool enable = false; // true → audio-thread feeds input ch 0 → LtcChase ring
 };
 
 struct PayloadHbPing {
@@ -186,6 +191,7 @@ using CommandPayload = std::variant<
     PayloadSysAlgoSwap,
     PayloadSysReset,
     PayloadSysAmbiOrder,
+    PayloadSysLtcChase,
     PayloadHbPing,
     PayloadHbPong,
     PayloadSceneSave,

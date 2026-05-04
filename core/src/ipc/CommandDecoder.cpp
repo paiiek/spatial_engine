@@ -223,6 +223,11 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         if (v > 3) v = 3;
         p.order = static_cast<uint8_t>(v);
         cmd.payload = p;
+    } else if (addr == "/sys/ltc_chase") {
+        cmd.tag = CommandTag::SysLtcChase;
+        PayloadSysLtcChase p;
+        p.enable = (getInt(0) != 0);
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;
@@ -494,6 +499,12 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
         addr = "/sys/ambi_order";
         auto& p = std::get<PayloadSysAmbiOrder>(cmd.payload);
         add_i(static_cast<int32_t>(p.order));
+        break;
+    }
+    case CommandTag::SysLtcChase: {
+        addr = "/sys/ltc_chase";
+        auto& p = std::get<PayloadSysLtcChase>(cmd.payload);
+        add_i(p.enable ? 1 : 0);
         break;
     }
     case CommandTag::HbPing: {
