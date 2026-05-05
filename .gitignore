@@ -1,6 +1,8 @@
 # Build artifacts
 build/
 build-*/
+core/build/
+core/build_*/
 core/JuceLibraryCode/
 core/CMakeFiles/
 core/CMakeCache.txt
@@ -17,6 +19,10 @@ core/JUCE/
 **/.omc/project-memory.json
 **/.omc/research/
 **/.omc/logs/
+**/.omc/sessions/
+**/.omc/autopilot/
+**/.omc/drafts/
+.claude/scheduled_tasks.lock
 *.o
 *.a
 *.so
@@ -48,6 +54,8 @@ logs/
 xrun_forensics_*.json
 tests/latency_harness/baseline.json
 tests/soak_harness/results/
+/baseline.json
+/soak_report.json
 
 # Artifacts produced by harnesses
 tests/accuracy_harness/results/
