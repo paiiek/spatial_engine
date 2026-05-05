@@ -33,6 +33,12 @@ public:
     // Inject raw OSC bytes — for tests or internal loopback.
     void injectPacket(std::span<const uint8_t> packet) noexcept;
 
+    // In-process Command 주입 (encoder 우회) — Phase C C2 §15.A.
+    // Critic R3 권고: cmd.tag != Unknown guard 로 malformed Command 차단.
+    void injectCommand(Command const& cmd) noexcept {
+        if (cmd.tag != CommandTag::Unknown && sink_) sink_(cmd);
+    }
+
     CommandDecoder& decoder() noexcept { return decoder_; }
 
 private:

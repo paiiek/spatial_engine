@@ -9,8 +9,15 @@ core/CMakeCache.txt
 core/cmake_install.cmake
 core/Makefile
 
-# JUCE submodule clone (fetched by bootstrap.sh; not tracked here)
+# JUCE submodule clone (fetched by bootstrap_juce.sh; not tracked here)
 core/JUCE/
+
+# pluginval clone+build artifacts (fetched by bootstrap_pluginval.sh)
+scripts/_build/
+
+# Out-of-source baseline builds (Phase C C2 §15.B dual-gate)
+/build_off*/
+/build_vst3*/
 
 # OMC session/runtime state (plans/ and specs/ are tracked; state/ is not)
 # Use **/ prefix so nested .omc/ dirs (e.g. ui/.omc/) are also excluded.

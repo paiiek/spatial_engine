@@ -1,0 +1,68 @@
+name: VST3 build + pluginval
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vst3/**'
+      - 'core/**'
+      - 'scripts/bootstrap_*.sh'
+      - '.github/workflows/vst3.yml'
+  pull_request:
+    paths:
+      - 'vst3/**'
+      - 'core/**'
+      - 'scripts/bootstrap_*.sh'
+      - '.github/workflows/vst3.yml'
+
+jobs:
+  vst3-build-and-pluginval:
+    runs-on: ubuntu-22.04  # §15.B primary byte-gate pinning
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: core/JUCE
+          key: juce-7.0.12-bundled-vst3sdk-${{ hashFiles('scripts/bootstrap_juce.sh') }}
+      - name: Cache pluginval
+        uses: actions/cache@v4
+        with:
+          path: scripts/_build/pluginval
+          key: pluginval-${{ hashFiles('scripts/bootstrap_pluginval.sh') }}
+      - name: Bootstrap JUCE
+        run: bash scripts/bootstrap_juce.sh
+      - name: Bootstrap pluginval
+        run: bash scripts/bootstrap_pluginval.sh
+      - name: Build VST3
+        run: |
+          cmake -B build_vst3 -DSPATIAL_ENGINE_VST3=ON
+          cmake --build build_vst3 -j$(nproc)
+      - name: Run pluginval (strictness 5)
+        run: |
+          VST3_PATH=$(find build_vst3 -name "*.vst3" -type d | head -1)
+          scripts/_build/pluginval/build/pluginval \
+              --strictness-level 5 --skip-gui-tests --validate-in-process \
+              "$VST3_PATH"
+
+  off-byte-identical:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build OFF baseline
+        run: |
+          cmake -B build_off -DSPATIAL_ENGINE_VST3=OFF -DSPATIAL_ENGINE_NO_JUCE=ON
+          cmake --build build_off --target spe_core spatial_engine_core -j$(nproc)
+      - name: Verify byte-level (primary, pinned host)
+        run: |
+          sha256sum build_off/core/libspe_core.a build_off/core/spatial_engine_core \
+            | sed 's|build_off/||g' > /tmp/off.bytes.sha256
+          diff /tmp/off.bytes.sha256 .ci/off_baseline.bytes.sha256 \
+            || (echo "BYTE baseline mismatch"; exit 1)
+      - name: Verify symbol-level (secondary, cross-toolchain)
+        run: |
+          (nm --defined-only --extern-only build_off/core/libspe_core.a \
+            | awk '{print $2" "$3}' | LC_ALL=C sort -u | sha256sum
+           nm --defined-only build_off/core/spatial_engine_core \
+            | awk '{print $2" "$3}' | LC_ALL=C sort -u | sha256sum) > /tmp/off.symbols.sha256
+          diff /tmp/off.symbols.sha256 .ci/off_baseline.symbols.sha256 \
+            || (echo "SYMBOL baseline mismatch"; exit 1)

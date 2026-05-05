@@ -51,6 +51,13 @@ public:
     void setTransportPlay(bool play) noexcept { transport_play_.store(play); }
     bool isTransportPlaying() const noexcept  { return transport_play_.load(); }
 
+    // VST3 layer host→core control plane (Phase C C2 §15.A).
+    // Forwards in-process commands to the OSC backend's sink, bypassing
+    // OSC encode/decode. Lock-free (cmd_fifo_ enqueue inside sink_).
+    inline void dispatchCommand(spe::ipc::Command const& cmd) noexcept {
+        osc_backend_.injectCommand(cmd);
+    }
+
     // C1.d — LTC chase from input ch 0. When enabled, audioBlock() taps
     // input_channels[0] (if present) and pushes the samples into the
     // internal LtcChase ring. updateLtcChase() drains the ring on the
