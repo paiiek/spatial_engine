@@ -911,3 +911,45 @@ Test: 5 ctest 145 assertion / pluginval --strictness-level 5 clean / OFF byte-id
 | Critic R3 minor (skew, SHA pinning) | §15.G, §15.H |
 | Critic R3 missing (MAX_BLOCK, 재진입) | §15.J |
 | Critic R3 unscored Q5/Q7 → Q9 | §15.K |
+
+## 16. Option B 활성 결정 (2026-05-06, D+2 트리거 발현)
+
+### 16.1 트리거
+- **§11.395 D+2 fallback 발현:** 사용자 로컬 환경에 sudo 부재 → `libx11-dev`/`libfreetype6-dev`/`libasound2-dev`/`libxinerama-dev`/`libxrandr-dev`/`libxcursor-dev`/`libxext-dev`/`libxrender-dev`/`libxcomposite-dev`/`libwebkit2gtk-4.1-dev`/`libglu1-mesa-dev`/`mesa-common-dev` 시스템 패키지 영구 미설치.
+- 결과: `cmake -DSPATIAL_ENGINE_VST3=ON` configure 단계에서 `juceaide` 호스트툴 컴파일이 `X11/Xlib.h: No such file or directory` 로 실패. JUCE Option A 진행 불가.
+- EULA(C2-Q8)는 Educational tier 로 결정 완료 — 차단 사유 아님.
+
+### 16.2 결정
+**Option A (`juce_add_plugin` + APVTS) 폐기 → Option B (vst3sdk 직접 핸드롤) 활성.**
+
+§3.89 Option B 정의에 따라:
+- `core/JUCE/modules/juce_audio_processors/format_types/VST3_SDK/` 의 헤더만 사용 (JUCE 모듈 안에 번들됨)
+- `IPluginFactory` / `IComponent` / `IAudioProcessor` / `IEditController` 직접 구현
+- JUCE plugin client / APVTS / juceaide 의존 제거 → X11 sysdep 회피
+- VST3 SDK 라이선스: Steinberg Proprietary Agreement (C2-Q9 §15.D 권장 결론)
+
+### 16.3 폐기되는 §6 산출물 (워킹트리)
+다음 파일들은 Option A 산출물 → 별도 commit 으로 제거 (또는 §17 새 플랜에서 재작성):
+- `vst3/SpatialEngineProcessor.hpp` (untracked)
+- `vst3/SpatialEngineProcessor.cpp` (untracked)
+- `vst3/AudioBlockAdapter.hpp` (untracked, JUCE AudioBuffer 어댑터 — Option B 에서 불필요)
+- `vst3/tests/CMakeLists.txt` (untracked)
+- `vst3/tests/test_vst3_param_roundtrip.cpp` (untracked, APVTS 의존)
+- `vst3/tests/test_vst3_automation_offline.cpp` (untracked, APVTS 의존)
+- `vst3/CMakeLists.txt` (modified — `juce_add_plugin` 호출 → Option B 용으로 재작성 예정)
+
+### 16.4 유지되는 Step 0 산출물 (commit 572cc2d)
+- `scripts/bootstrap_juce.sh` — VST3 SDK 가 JUCE 트리 안 번들이므로 여전히 vst3sdk 의 단일 부트스트랩 채널 (Driver #3 유효)
+- `scripts/bootstrap_pluginval.sh` — pluginval 자체는 strictness 검증에 여전히 필요 (juceaide 와 별개; pluginval 도 JUCE 의존이라 X11 차단 영향 받음 → §17 새 플랜에서 게이트 조정 필요)
+- `.ci/off_baseline.bytes.sha256` / `.ci/off_baseline.symbols.sha256` — Driver #1 보호 게이트로 유지
+- `scripts/check_test_ndebug.sh` — 유지
+
+### 16.5 Open Questions 갱신
+- **C2-Q10 (신설):** pluginval 자체가 JUCE GUI 의존이라 X11 미보유 환경에서 빌드 불가 시, M2 게이트(`pluginval --strictness-level 5 --skip-gui-tests`)를 어떻게 만족할 것인가? 후보: ① validator-in-process VST3 host 직접 작성, ② Steinberg vst3sdk 의 `validator` 툴 사용, ③ 게이트 미달 = Phase D6 부채 회계.
+- **C2-Q7 (재발현):** D+2 트리거 발현 시 의사결정자 — 본 결정은 사용자 직접 합의로 처리 (2026-05-06).
+
+### 16.6 다음 액션
+- `(A)` 본 §16 amendment commit (현 작업)
+- `(B)` `/oh-my-claudecode:ralplan` 으로 Option B 새 플랜 (`spatial-engine-phaseC-C2-optionB.md`) 합의
+- `(C)` Option A 워킹트리 파일 제거 commit (`revert(C2): roll back JUCE Option A WIP`)
+- `(D)` `/oh-my-claudecode:autopilot` 으로 Option B 자율 구현
