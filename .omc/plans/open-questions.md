@@ -17,3 +17,13 @@
 - [x] C2-Q6 (v2 결정, C-M3): `setLatencySamples(0)` 보고. 동적 propagation delay reporting 은 Phase D6 (D6.a) 검토.
 - [ ] C2-Q7: D+2 bootstrap 실패 시 Option B 재활성화 의사결정자 — Architect 단독 vs Architect+Critic 합의? — 시간 손실 최소화를 위한 escalation 경로.
 - [x] C2-Q8 (2026-05-06 결정): **JUCE 7 Educational tier 채택** (paik402@snu.ac.kr SNU 학술 사용). VST3 SDK 는 JUCE 번들 그대로 — Educational tier 가 GPLv3 fallback 자동 회피. C2 진행 전제 해소.
+
+## spatial-engine-phaseC-C2-optionB - 2026-05-06
+
+- [ ] C2-Q9 (재발현): VST3 SDK 라이선스 — Steinberg agreement 등록 vs GPLv3 fallback. spatial_engine 자체 라이선스 미정 시 GPLv3 fallback 가능한가? — Step 0.a entry 게이트 결정 의존.
+- [ ] C2-Q10 (재정의): Option B 의 M2 strictness 게이트 후보 ① Steinberg validator (B.1) ② 자체 in-process VST3 host (B.2) ③ Phase D6 부채 회계 (B.3). 권장 라운드 1 draft = B.1 → B.3 fallback. — Architect/Critic 라운드 2 결정 필요.
+- [ ] C2-Q11: Option B.2 채택 시 in-process host fixture 위치 — `vst3/tests/` (Driver #1 격리) vs `core/tests/` (host 코드 재사용). 권장 라운드 1 draft = `vst3/tests/`. — Architect 검토.
+- [ ] C2-Q12 (신규): `process` audio thread 의 `inputParameterChanges` 를 control thread 로 forward 하는 layer 후보 ① component 측 std::thread ② host event-thread 신뢰 (controller→component IConnectionPoint) ③ Phase D6 부채. 권장 라운드 1 draft = ②. — SDK 문서 인용 검증 필요.
+- [ ] C2-Q13: `room_preset_idx` (Dry/Small/Medium/Large) ↔ `PayloadReverbSelect` (fdn/ir) semantic mismatch — preset 매핑 테이블 신설 vs Phase D6 deferral. — Phase B reverb 설계 정합 검토.
+- [ ] C2-Q14: `kSpatialEngineProcessor/ControllerUID` (128-bit CID) 자체 발급 (UUID v4) 시 호스트 충돌 가능성 — DEV prefix 표식 사용 여부, Phase D6 정식 등록 시 교체 정책.
+- [x] C2-Q15 (2026-05-07 Step 0.c gate 발현, v5 amendment): v4 AM-R4-4 화이트리스트 fact-error 정정 — `futils.{cpp,h}` 가 vendored 트리에 부재 (실측 `core/JUCE/.../VST3_SDK/base/source/`: `baseiids.cpp` + `fbuffer{.cpp,.h}` + `fdebug{.cpp,.h}` + `fobject{.cpp,.h}` + `fstreamer{.cpp,.h}` + `fstring{.cpp,.h}` + `updatehandler{.cpp,.h}` + headers `classfactoryhelpers.h` / `fcommandline.h`, `futils` 부재). Step 1 helper 진입 default 강등: **option-β vtable-only path (helper 6개 미사용)** — `IComponent` + `IAudioProcessor` 직접 다중 상속 + `FUnknown` 직접 구현. 추후 helper 사용 재검토는 vendored 트리 실측 file list 기준 (`baseiids` / `fstreamer` 추가, `futils` 제거) 으로 재구성. — Step 0 commit footer 잠금.
