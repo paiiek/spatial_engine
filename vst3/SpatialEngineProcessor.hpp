@@ -10,6 +10,7 @@
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/ivstmessage.h"  // IConnectionPoint
 
 #include <atomic>
 #include <memory>
@@ -40,6 +41,7 @@ enum ParamId : Steinberg::Vst::ParamID {
 class SpatialEngineProcessor
     : public Steinberg::Vst::IComponent
     , public Steinberg::Vst::IAudioProcessor
+    , public Steinberg::Vst::IConnectionPoint
 {
 public:
     SpatialEngineProcessor();
@@ -83,12 +85,26 @@ public:
     Steinberg::tresult PLUGIN_API process(Steinberg::Vst::ProcessData& data) SMTG_OVERRIDE;
     Steinberg::uint32  PLUGIN_API getTailSamples() SMTG_OVERRIDE;
 
+    // IConnectionPoint (AM-R3-10: notify returns kNotImplemented)
+    Steinberg::tresult PLUGIN_API connect(Steinberg::Vst::IConnectionPoint* other) SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API disconnect(Steinberg::Vst::IConnectionPoint* other) SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage* message) SMTG_OVERRIDE;
+
 private:
     std::atomic<Steinberg::uint32> ref_count_{1};
     std::unique_ptr<spe::core::SpatialEngine> engine_;
     double sample_rate_{48000.0};
     Steinberg::int32 max_block_{512};
     bool active_{false};
+
+    // Atomic norm value snapshot for 6 params (Step 2.4 — RT-safe audio thread reads)
+    std::atomic<float> norm_values_[6]{};
+
+    // Component ↔ Controller connection peer (host manages lifetime)
+    Steinberg::Vst::IConnectionPoint* peer_{nullptr};
+
+    // Dispatch a single normalized param change to the engine (Step 2.3/2.4)
+    void dispatchParamChange(Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue norm) noexcept;
 };
 
 } // namespace spe::vst3

@@ -44,5 +44,39 @@ target_compile_definitions(test_vst3_audio_smoke PRIVATE SPATIAL_ENGINE_VST3_BUI
 target_compile_options(test_vst3_audio_smoke PRIVATE -UNDEBUG)
 add_test(NAME vst3_audio_smoke COMMAND test_vst3_audio_smoke)
 
+# ---- test_vst3_param_layout (Step 2.6 — 10 assertions) ---------------------
+add_executable(test_vst3_param_layout
+    test_vst3_param_layout.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_param_layout PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_param_layout PRIVATE spe_core)
+target_compile_definitions(test_vst3_param_layout PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_param_layout PRIVATE -UNDEBUG)
+add_test(NAME vst3_param_layout COMMAND test_vst3_param_layout)
+
+# ---- test_vst3_param_roundtrip (Step 2.6 — 24 assertions) ------------------
+add_executable(test_vst3_param_roundtrip
+    test_vst3_param_roundtrip.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_param_roundtrip PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_param_roundtrip PRIVATE spe_core)
+target_compile_definitions(test_vst3_param_roundtrip PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_param_roundtrip PRIVATE -UNDEBUG)
+add_test(NAME vst3_param_roundtrip COMMAND test_vst3_param_roundtrip)
+
+# ---- test_vst3_dispatch_rt_safety (Step 2.6 — 1 alloc assertion) -----------
+add_executable(test_vst3_dispatch_rt_safety
+    test_vst3_dispatch_rt_safety.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_dispatch_rt_safety PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_dispatch_rt_safety PRIVATE spe_core)
+target_compile_definitions(test_vst3_dispatch_rt_safety PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_dispatch_rt_safety PRIVATE -UNDEBUG)
+add_test(NAME vst3_dispatch_rt_safety COMMAND test_vst3_dispatch_rt_safety)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
-# Future step tests will add: set_tests_properties(... PROPERTIES DEPENDS vst3_host_fixture)
+set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
+                     PROPERTIES DEPENDS vst3_host_fixture)
