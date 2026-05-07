@@ -161,14 +161,8 @@ add_executable(spatial_engine_core
     src/bin/WavWriter.cpp)
 target_link_libraries(spatial_engine_core PRIVATE spe_core)
 
-# --- VST3 plugin scaffold (Phase B placeholder, Phase C SDK integration) -
-if(SPATIAL_ENGINE_VST3)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../vst3/CMakeLists.txt")
-        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../vst3 vst3_build)
-    else()
-        message(WARNING "spatial_engine: SPATIAL_ENGINE_VST3=ON but vst3/CMakeLists.txt not found.")
-    endif()
-endif()
+# VST3 plugin is now added from the top-level CMakeLists.txt (Phase C C2 Option-B).
+# Removed from here to prevent duplicate target registration.
 
 # --- CTest scaffold ------------------------------------------------------
 add_subdirectory(tests/core_unit)

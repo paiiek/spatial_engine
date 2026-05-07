@@ -1,35 +1,64 @@
-# vst3/CMakeLists.txt — Phase B placeholder VST3 plugin target.
-#
-# Phase B goal: produce a build-system entry point so future Phase C work
-# can plug in the official Steinberg vst3sdk without restructuring CMake.
-# The current target builds a minimal shared library with the standard VST3
-# bundle entry symbols (GetPluginFactory / ModuleEntry / ModuleExit) — they
-# return inert values so a real host will cleanly skip the plugin instead
-# of crashing.
-#
-# Enable with: cmake .. -DSPATIAL_ENGINE_VST3=ON
-# Disable (default): the rest of the build is unaffected.
-#
-# Phase C TODO: clone https://github.com/steinbergmedia/vst3sdk and pass
-#   -DVST3_SDK_DIR=/path/to/vst3sdk to inherit the proper IPluginFactory,
-#   AudioEffect, and AudioProcessor base classes.
+# vst3/CMakeLists.txt — Phase C C2 Option-B
+# Direct add_library(MODULE) — juce_add_plugin NOT used (X11 sysdep avoidance).
+# Enable: cmake -B build -DSPATIAL_ENGINE_VST3=ON
+# Default OFF preserves byte-identical core artifacts (Principle 5 dual-gate).
 
-add_library(spatial_engine_vst3 SHARED SpatialEngineVST3.cpp)
+cmake_minimum_required(VERSION 3.20)
+
+set(VST3_SDK_ROOT "${CMAKE_SOURCE_DIR}/core/JUCE/modules/juce_audio_processors/format_types/VST3_SDK")
+
+# Verify the SDK is present
+if(NOT EXISTS "${VST3_SDK_ROOT}/pluginterfaces/base/funknown.h")
+    message(FATAL_ERROR "VST3 SDK not found at ${VST3_SDK_ROOT}. Run scripts/bootstrap_juce.sh first.")
+endif()
+
+# ---- Plugin shared library --------------------------------------------------
+add_library(spatial_engine_vst3 MODULE
+    # Our sources
+    SpatialEnginePluginFactory.cpp
+    SpatialEngineProcessor.cpp
+    SpatialEngineController.cpp
+
+    # SDK class IID definitions — vstinitiids.cpp emits ClassName::iid via
+    # DEF_CLASS_IID. Compiled WITHOUT INIT_CLASS_IID (SDK standard pattern):
+    # the header's DECLARE_CLASS_IID emits only the constexpr TUID xxx_iid
+    # (ODR-safe), and DEF_CLASS_IID in this TU emits the FUID definition once.
+    "${VST3_SDK_ROOT}/public.sdk/source/vst/vstinitiids.cpp"
+
+    # SDK base layer — FUnknown impl, FUnknownPrivate::atomicAdd, base IIDs
+    # (FUnknown / IBStream). Required by memorystream.cpp's queryInterface.
+    # BSD-3 file-level header verified.
+    "${VST3_SDK_ROOT}/pluginterfaces/base/funknown.cpp"
+    "${VST3_SDK_ROOT}/pluginterfaces/base/coreiids.cpp"
+
+    # State IO helpers — used from Step 3 onward; included now so the
+    # translation units are compiled and symbol table is stable.
+    "${VST3_SDK_ROOT}/public.sdk/source/common/memorystream.cpp"
+    "${VST3_SDK_ROOT}/public.sdk/source/common/readfile.cpp"
+)
+
+target_include_directories(spatial_engine_vst3 PRIVATE
+    "${VST3_SDK_ROOT}"
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+
 target_link_libraries(spatial_engine_vst3 PRIVATE spe_core)
-target_compile_definitions(spatial_engine_vst3 PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+
+target_compile_definitions(spatial_engine_vst3 PRIVATE
+    SPATIAL_ENGINE_VST3_BUILD=1
+)
+
+
 set_target_properties(spatial_engine_vst3 PROPERTIES
     PREFIX ""
-    SUFFIX ".vst3"
+    SUFFIX ".so"
+    OUTPUT_NAME "spatial_engine_vst3"
     POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
 
-if(VST3_SDK_DIR)
-    if(EXISTS "${VST3_SDK_DIR}/CMakeLists.txt")
-        message(STATUS "spatial_engine_vst3: VST3_SDK_DIR=${VST3_SDK_DIR} detected — Phase C will wire full plugin classes.")
-        target_include_directories(spatial_engine_vst3 PRIVATE "${VST3_SDK_DIR}")
-    else()
-        message(WARNING "spatial_engine_vst3: VST3_SDK_DIR=${VST3_SDK_DIR} not a valid SDK root.")
-    endif()
+# ---- Tests ------------------------------------------------------------------
+if(BUILD_TESTING)
+    add_subdirectory(tests)
 endif()

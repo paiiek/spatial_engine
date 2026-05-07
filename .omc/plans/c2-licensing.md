@@ -19,8 +19,17 @@
 **Decision:** 추가 동의 불필요, 호환 확인 완료.
 
 - **AM-R3-8 grep 결과 잠금:** `vstcomponentbase` / `vstcomponent` / `vsteditcontroller` / `vstparameters` / `vstbus` / `vstpresetfile` 6개 모두 file-level "Redistribution and use in source and binary forms ... AS IS" + Copyright 2023 Steinberg 표준 BSD-3 문구 verbatim 검출.
+- **추가 검증 (Step 1, 2026-05-07):** `public.sdk/source/vst/vstinitiids.cpp` + `public.sdk/source/common/{memorystream,readfile}.cpp` 도 BSD-3 file-level header verbatim 검출. Strand 2 동일 분류.
 - `module_linux.cpp` line 10-34 도 BSD-3 verbatim.
 - **법적 결론은 변호사 deferral** (Critic R3 R-2): technical fact 잠금 / legal conclusion = D6.f.
+
+## Strand 1.b — pluginterfaces/base/*.cpp (Steinberg LICENSE file 종속, 2026-05-07 Step 1 v6 amendment)
+
+**Decision:** Strand 1 (vst3sdk root LICENSE.txt dual-strand) 적용 → **GPLv3 fallback 자동 동의 default** (Strand 1 결정과 동일).
+
+**근거:** Step 1 link 단계에서 `Steinberg::FUnknown::iid` / `Steinberg::FUnknownPrivate::atomicAdd` / `Steinberg::IBStream::iid` undefined reference 발현 → SDK base layer (`pluginterfaces/base/funknown.cpp` + `pluginterfaces/base/coreiids.cpp`) link 필수 확인. 두 파일 모두 file-level header = "This file is part of a Steinberg SDK. It is subject to the license terms in the LICENSE file ... at www.steinberg.net/sdklicenses." (BSD-3 표준 문구 부재 = Strand 2 와 별개). 따라서 vst3sdk root LICENSE 의 Strand 1 (Steinberg agreement OR GPLv3) 적용.
+
+**v6 amendment 효과:** plan §1 Principle 2 화이트리스트 확장 — `pluginterfaces/base/{funknown,coreiids}.cpp` 추가. plan §4 시나리오 3 의 "helper 6개 BSD-3 별개 strand" 와 별도 axis 로 Strand 1 분류 명시.
 
 ## Strand 3 — spatial_engine 자체 라이선스
 

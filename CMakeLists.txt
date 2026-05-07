@@ -31,5 +31,23 @@ endif()
 # Test-build-only RT-asserts and click-detector
 option(SPATIAL_ENGINE_RT_ASSERTS "Enable RT_ASSERT_NO_ALLOC and ClickDetectorFFT in test build" OFF)
 
+# VST3 plugin (Option B — direct hand-roll, no juce_add_plugin).
+# OFF by default to preserve byte-identical core artifacts (Principle 5).
+option(SPATIAL_ENGINE_VST3 "Build VST3 plugin (Option B hand-roll)" OFF)
+
+# Option B requires JUCE-free build: JUCE's juce_audio_devices/juce_gui_extra
+# pull X11/freetype/alsa transitive deps via juceaide, defeating sysdep-free
+# (Principle 1, §6 Step 1.1, §16.1 D+2 trigger). Force NO_JUCE before
+# add_subdirectory(core) so core/CMakeLists.txt skips add_subdirectory(JUCE).
+if(SPATIAL_ENGINE_VST3)
+    set(SPATIAL_ENGINE_NO_JUCE ON CACHE BOOL "Auto-forced by SPATIAL_ENGINE_VST3" FORCE)
+    # Plugin .so (MODULE) requires PIC across all archive deps (spe_core / spe_util).
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 enable_testing()
 add_subdirectory(core)
+
+if(SPATIAL_ENGINE_VST3)
+    add_subdirectory(vst3)
+endif()
