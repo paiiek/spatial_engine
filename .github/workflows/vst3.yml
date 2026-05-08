@@ -70,17 +70,32 @@ jobs:
         run: |
           cmake -B build_off -DSPATIAL_ENGINE_VST3=OFF -DSPATIAL_ENGINE_NO_JUCE=ON
           cmake --build build_off --target spe_core spatial_engine_core -j$(nproc)
-      - name: Verify byte-level (primary, pinned host)
+      - name: Compute OFF hashes (bytes + symbols)
+        if: always()
         run: |
           sha256sum build_off/core/libspe_core.a build_off/core/spatial_engine_core \
             | sed 's|build_off/||g' > /tmp/off.bytes.sha256
-          diff /tmp/off.bytes.sha256 .ci/off_baseline.bytes.sha256 \
-            || (echo "BYTE baseline mismatch"; exit 1)
-      - name: Verify symbol-level (secondary, cross-toolchain)
-        run: |
           (nm --defined-only --extern-only build_off/core/libspe_core.a \
             | awk '{print $2" "$3}' | LC_ALL=C sort -u | sha256sum
            nm --defined-only build_off/core/spatial_engine_core \
             | awk '{print $2" "$3}' | LC_ALL=C sort -u | sha256sum) > /tmp/off.symbols.sha256
+          echo "=== /tmp/off.bytes.sha256 ===";  cat /tmp/off.bytes.sha256
+          echo "=== /tmp/off.symbols.sha256 ==="; cat /tmp/off.symbols.sha256
+      - name: Upload OFF hashes (for baseline re-pin if drift)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: off-hashes-${{ github.sha }}
+          path: |
+            /tmp/off.bytes.sha256
+            /tmp/off.symbols.sha256
+          retention-days: 30
+      - name: Verify byte-level (primary, pinned host)
+        run: |
+          diff /tmp/off.bytes.sha256 .ci/off_baseline.bytes.sha256 \
+            || (echo "BYTE baseline mismatch — see uploaded artifact 'off-hashes-${GITHUB_SHA}'"; exit 1)
+      - name: Verify symbol-level (secondary, cross-toolchain)
+        if: always()
+        run: |
           diff /tmp/off.symbols.sha256 .ci/off_baseline.symbols.sha256 \
-            || (echo "SYMBOL baseline mismatch"; exit 1)
+            || (echo "SYMBOL baseline mismatch — see uploaded artifact 'off-hashes-${GITHUB_SHA}'"; exit 1)
