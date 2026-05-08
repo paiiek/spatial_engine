@@ -1,4 +1,9 @@
-name: VST3 build + pluginval
+name: VST3 build + B.2 host fixture
+# Phase C C2 v4 Option B — JUCE-free vst3sdk hand-roll.
+# pluginval은 M2 strictness 게이트에서 폐기 (B.2 채택, plan §6 Step 4.1):
+# in-process host fixture (test_vst3_host_fixture) + 6 ctest 가 vstvalidator
+# 등가 검증 항목을 자체 정의. Driver #1 (sysdep-free) 보호를 위해 JUCE plugin
+# client / X11 / freetype / alsa transitive dep 0 게이트도 추가.
 on:
   push:
     branches: [main]
@@ -7,45 +12,58 @@ on:
       - 'core/**'
       - 'scripts/bootstrap_*.sh'
       - '.github/workflows/vst3.yml'
+      - '.ci/**'
+      - 'CMakeLists.txt'
   pull_request:
     paths:
       - 'vst3/**'
       - 'core/**'
       - 'scripts/bootstrap_*.sh'
       - '.github/workflows/vst3.yml'
+      - '.ci/**'
+      - 'CMakeLists.txt'
 
 jobs:
-  vst3-build-and-pluginval:
-    runs-on: ubuntu-22.04  # §15.B primary byte-gate pinning
+  vst3-build-and-host-fixture:
+    # ubuntu-24.04 = baseline 생성 host 와 동일 (GCC 13.3.0 / GLIBC 2.39).
+    # §15.B byte-gate pinning: baseline 은 OFF job 에서만 검증.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Cache JUCE
+      - name: Cache JUCE (vst3sdk vendored tree only — no juce_audio_plugin_client link)
         uses: actions/cache@v4
         with:
           path: core/JUCE
           key: juce-7.0.12-bundled-vst3sdk-${{ hashFiles('scripts/bootstrap_juce.sh') }}
-      - name: Cache pluginval
-        uses: actions/cache@v4
-        with:
-          path: scripts/_build/pluginval
-          key: pluginval-${{ hashFiles('scripts/bootstrap_pluginval.sh') }}
-      - name: Bootstrap JUCE
+      - name: Bootstrap JUCE (vst3sdk vendored tree only)
         run: bash scripts/bootstrap_juce.sh
-      - name: Bootstrap pluginval
-        run: bash scripts/bootstrap_pluginval.sh
-      - name: Build VST3
+      - name: Verify vst3sdk SHA pin (AM-8 시나리오 5)
         run: |
-          cmake -B build_vst3 -DSPATIAL_ENGINE_VST3=ON
-          cmake --build build_vst3 -j$(nproc)
-      - name: Run pluginval (strictness 5)
+          actual=$( cd core/JUCE && git ls-tree -r HEAD modules/juce_audio_processors/format_types/VST3_SDK | sha256sum)
+          expected=$(grep -E '^[0-9a-f]{64}' .ci/vst3sdk_sha.txt | tail -n1)
+          echo "actual:   $actual"
+          echo "expected: $expected"
+          test "$(echo "$actual" | awk '{print $1}')" = "$(echo "$expected" | awk '{print $1}')" \
+            || (echo "vst3sdk SHA pin mismatch"; exit 1)
+      - name: Build VST3 (Option B — JUCE-free auto-forced by SPATIAL_ENGINE_VST3=ON)
         run: |
-          VST3_PATH=$(find build_vst3 -name "*.vst3" -type d | head -1)
-          scripts/_build/pluginval/build/pluginval \
-              --strictness-level 5 --skip-gui-tests --validate-in-process \
-              "$VST3_PATH"
+          cmake -B build_vst3_on -DSPATIAL_ENGINE_VST3=ON
+          cmake --build build_vst3_on -j$(nproc)
+      - name: Sysdep-free gate (Driver #1 보호)
+        run: |
+          ldd build_vst3_on/vst3/spatial_engine_vst3.so > /tmp/ldd.out
+          n=$(grep -cE 'libX11|libfreetype|libasound|libwebkit' /tmp/ldd.out || true)
+          test "$n" = "0" \
+            || (cat /tmp/ldd.out; echo "sysdep transitive present (got $n)"; exit 1)
+      - name: Run M2 B.2 host fixture + 6 ctest (94+ assertion)
+        run: |
+          cd build_vst3_on
+          ctest --output-on-failure -R "vst3_"
 
   off-byte-identical:
-    runs-on: ubuntu-22.04
+    # ubuntu-24.04 = .ci/off_baseline.{bytes,symbols}.sha256 생성 host 와 동일.
+    # 다른 toolchain 으로 변경 시 baseline 재생성 필요 (§15.B).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Build OFF baseline

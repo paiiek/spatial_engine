@@ -22,7 +22,13 @@ target_link_libraries(test_p1_trace_ring PRIVATE spe_util)
 add_test(NAME p1_trace_ring COMMAND test_p1_trace_ring)
 
 # P2 tests
-set(SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/../configs")
+# CMAKE_SOURCE_DIR varies: 'spatial_engine/' (top-level build) vs 'core/'
+# (legacy `cd core/build` flow). Probe both — repo configs/ is at repo root.
+if(EXISTS "${CMAKE_SOURCE_DIR}/configs")
+    set(SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/configs")
+else()
+    set(SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/../configs")
+endif()
 
 add_executable(test_p2_coords test_p2_coords.cpp)
 target_link_libraries(test_p2_coords PRIVATE spe_core)
