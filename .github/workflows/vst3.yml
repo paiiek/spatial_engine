@@ -64,6 +64,9 @@ jobs:
     # ubuntu-24.04 = .ci/off_baseline.{bytes,symbols}.sha256 생성 host 와 동일.
     # 다른 toolchain 으로 변경 시 baseline 재생성 필요 (§15.B).
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # for commit-comment POST (drift visibility)
+
     steps:
       - uses: actions/checkout@v4
       - name: Build OFF baseline
@@ -90,6 +93,22 @@ jobs:
             /tmp/off.bytes.sha256
             /tmp/off.symbols.sha256
           retention-days: 30
+      - name: Post OFF hashes as commit comment (publicly readable)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BYTES=$(cat /tmp/off.bytes.sha256)
+          SYMS=$(cat /tmp/off.symbols.sha256)
+          BODY=$(printf 'OFF dual-gate hashes (run %s)\n\n```bytes\n%s\n```\n\n```symbols\n%s\n```\n' \
+                        "${{ github.run_id }}" "$BYTES" "$SYMS")
+          jq -n --arg body "$BODY" '{body: $body}' > /tmp/comment.json
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+            -d @/tmp/comment.json > /tmp/comment-response.json
+          cat /tmp/comment-response.json | head -20 || true
       - name: Verify byte-level (primary, pinned host)
         run: |
           diff /tmp/off.bytes.sha256 .ci/off_baseline.bytes.sha256 \
