@@ -11,6 +11,7 @@
 #include "ipc/Command.h"
 
 #include "pluginterfaces/base/funknown.h"
+#include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 
 // Pull in class IID definitions (DEF_CLASS_IID macro from vstinitiids.cpp
 // registers IComponent::iid / IAudioProcessor::iid / IEditController::iid).
@@ -120,8 +122,13 @@ SpatialEngineProcessor::getControllerClassId(Steinberg::TUID classId)
 }
 
 Steinberg::tresult PLUGIN_API
-SpatialEngineProcessor::setIoMode(Steinberg::Vst::IoMode /*mode*/)
+SpatialEngineProcessor::setIoMode(Steinberg::Vst::IoMode mode)
 {
+    // Step 3.1: kAdvanced (1) triggers bypass — silence outputs in process().
+    // SDK IoModes: kSimple=0, kAdvanced=1, kOfflineProcessing=2.
+    // Note: SDK has no kAdvancedKBypass — plan reference was a fact-error;
+    // kAdvanced is the intended bypass-enabling mode for this engine.
+    bypass_active_.store(mode == Steinberg::Vst::kAdvanced, std::memory_order_release);
     return Steinberg::kResultOk;
 }
 
@@ -190,18 +197,101 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
     return Steinberg::kResultOk;
 }
 
+// ---------------------------------------------------------------------------
+// State persistence helpers — Step 3.2
+// Binary format (32 bytes, little-endian):
+//   bytes  0-3:  magic 'S','P','E','1'
+//   bytes  4-5:  version uint16 = 1
+//   bytes  6-7:  param_count uint16 = 6
+//   bytes  8-31: 6 × float32 normalized values
+// ---------------------------------------------------------------------------
+namespace {
+static constexpr Steinberg::int32 kStateBytes    = 32;
+static constexpr Steinberg::int32 kStateMagic    = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::uint16 kStateVersion = 1;
+static constexpr Steinberg::uint16 kStateNParams = 6;
+} // namespace
+
 Steinberg::tresult PLUGIN_API
-SpatialEngineProcessor::setState(Steinberg::IBStream* /*state*/)
+SpatialEngineProcessor::setState(Steinberg::IBStream* state)
 {
-    // Step 3: full state restore
+    if (!state) return Steinberg::kInvalidArgument;
+
+    // Control thread (Driver #2) — stderr logging permitted.
+    uint8_t buf[kStateBytes];
+    Steinberg::int32 numRead = 0;
+    Steinberg::tresult r = state->read(buf, kStateBytes, &numRead);
+    if (r != Steinberg::kResultOk || numRead < kStateBytes) {
+        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
+        return Steinberg::kResultOk; // retain defaults
+    }
+
+    // Validate magic
+    Steinberg::int32 magic = 0;
+    std::memcpy(&magic, buf + 0, 4);
+    if (magic != kStateMagic) {
+        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    // Validate version
+    Steinberg::uint16 version = 0;
+    std::memcpy(&version, buf + 4, 2);
+    if (version != kStateVersion) {
+        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    // Validate param_count
+    Steinberg::uint16 nparams = 0;
+    std::memcpy(&nparams, buf + 6, 2);
+    if (nparams != kStateNParams) {
+        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    // Restore 6 float normalized values and dispatch
+    for (int i = 0; i < 6; ++i) {
+        float v = 0.f;
+        std::memcpy(&v, buf + 8 + i * 4, 4);
+        norm_values_[i].store(v, std::memory_order_relaxed);
+        dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
+                            static_cast<Steinberg::Vst::ParamValue>(v));
+    }
+
     return Steinberg::kResultOk;
 }
 
 Steinberg::tresult PLUGIN_API
-SpatialEngineProcessor::getState(Steinberg::IBStream* /*state*/)
+SpatialEngineProcessor::getState(Steinberg::IBStream* state)
 {
-    // Step 3: full state persist
-    return Steinberg::kResultOk;
+    if (!state) return Steinberg::kInvalidArgument;
+
+    uint8_t buf[kStateBytes];
+
+    // Magic
+    Steinberg::int32 magic = kStateMagic;
+    std::memcpy(buf + 0, &magic, 4);
+
+    // Version
+    Steinberg::uint16 version = kStateVersion;
+    std::memcpy(buf + 4, &version, 2);
+
+    // Param count
+    Steinberg::uint16 nparams = kStateNParams;
+    std::memcpy(buf + 6, &nparams, 2);
+
+    // 6 float normalized values
+    for (int i = 0; i < 6; ++i) {
+        float v = norm_values_[i].load(std::memory_order_relaxed);
+        std::memcpy(buf + 8 + i * 4, &v, 4);
+    }
+
+    Steinberg::int32 written = 0;
+    Steinberg::tresult r = state->write(buf, kStateBytes, &written);
+    return (r == Steinberg::kResultOk && written == kStateBytes)
+               ? Steinberg::kResultOk
+               : Steinberg::kResultFalse;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,11 +385,24 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
         }
     }
 
-    // --- Audio: adapt VST3 buffers -> AudioBlock -> engine ---
-    if (data.numSamples > 0 && active_) {
-        spe::audio_io::AudioBlock block =
-            ProcessDataAdapter::adapt(data, sample_rate_);
-        engine_->audioBlock(block);
+    // --- Audio: bypass or normal engine path ---
+    if (data.numSamples > 0) {
+        if (bypass_active_.load(std::memory_order_acquire)) {
+            // Step 3.1 bypass: silence all output channels — RT-safe, alloc=0.
+            if (data.outputs && data.numOutputs > 0) {
+                Steinberg::Vst::AudioBusBuffers& outBus = data.outputs[0];
+                for (Steinberg::int32 ch = 0; ch < outBus.numChannels; ++ch) {
+                    if (outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
+                        std::memset(outBus.channelBuffers32[ch], 0,
+                                    static_cast<std::size_t>(data.numSamples) * sizeof(float));
+                    }
+                }
+            }
+        } else if (active_) {
+            spe::audio_io::AudioBlock block =
+                ProcessDataAdapter::adapt(data, sample_rate_);
+            engine_->audioBlock(block);
+        }
     }
 
     return Steinberg::kResultOk;

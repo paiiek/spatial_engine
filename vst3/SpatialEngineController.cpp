@@ -6,6 +6,7 @@
 #include "SpatialEngineController.hpp"
 
 #include "pluginterfaces/base/funknown.h"
+#include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstmessage.h"
 
@@ -271,9 +272,61 @@ Steinberg::tresult PLUGIN_API SpatialEngineController::terminate()
 // IEditController
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// State persistence — Step 3.3
+// Same 32-byte binary format as SpatialEngineProcessor (magic 'SPE1', v1, 6 floats).
+// Controller decodes and reflects into norm_values_ (UI thread, no performEdit).
+// ---------------------------------------------------------------------------
+namespace {
+static constexpr Steinberg::int32  kCtlStateBytes   = 32;
+static constexpr Steinberg::int32  kCtlStateMagic   = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::uint16 kCtlStateVersion = 1;
+static constexpr Steinberg::uint16 kCtlStateNParams = 6;
+} // namespace
+
 Steinberg::tresult PLUGIN_API
-SpatialEngineController::setComponentState(Steinberg::IBStream* /*state*/)
+SpatialEngineController::setComponentState(Steinberg::IBStream* state)
 {
+    if (!state) return Steinberg::kInvalidArgument;
+
+    uint8_t buf[kCtlStateBytes];
+    Steinberg::int32 numRead = 0;
+    Steinberg::tresult r = state->read(buf, kCtlStateBytes, &numRead);
+    if (r != Steinberg::kResultOk || numRead < kCtlStateBytes) {
+        std::fprintf(stderr, "VST3 controller setComponentState: short read, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    Steinberg::int32 magic = 0;
+    std::memcpy(&magic, buf + 0, 4);
+    if (magic != kCtlStateMagic) {
+        std::fprintf(stderr, "VST3 controller setComponentState: magic mismatch, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    Steinberg::uint16 version = 0;
+    std::memcpy(&version, buf + 4, 2);
+    if (version != kCtlStateVersion) {
+        std::fprintf(stderr, "VST3 controller setComponentState: version mismatch, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    Steinberg::uint16 nparams = 0;
+    std::memcpy(&nparams, buf + 6, 2);
+    if (nparams != kCtlStateNParams) {
+        std::fprintf(stderr, "VST3 controller setComponentState: param_count mismatch, defaults retained\n");
+        return Steinberg::kResultOk;
+    }
+
+    // Reflect into controller norm_values_ (UI thread — host serialises access)
+    for (int i = 0; i < kParamCount; ++i) {
+        float v = 0.f;
+        std::memcpy(&v, buf + 8 + i * 4, 4);
+        if (v < 0.f) v = 0.f;
+        if (v > 1.f) v = 1.f;
+        norm_values_[i] = static_cast<double>(v);
+    }
+
     return Steinberg::kResultOk;
 }
 

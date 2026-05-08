@@ -97,6 +97,10 @@ private:
     Steinberg::int32 max_block_{512};
     bool active_{false};
 
+    // Step 3.1: bypass flag — set by setIoMode(kAdvanced), cleared by kSimple/kOfflineProcessing.
+    // RT-safe: atomic read in process(), non-RT write in setIoMode (control thread).
+    std::atomic<bool> bypass_active_{false};
+
     // Atomic norm value snapshot for 6 params (Step 2.4 — RT-safe audio thread reads)
     std::atomic<float> norm_values_[6]{};
 
