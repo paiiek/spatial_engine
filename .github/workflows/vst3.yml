@@ -90,6 +90,13 @@ jobs:
             | awk '{print $2" "$3}' | LC_ALL=C sort -u | sha256sum) > /tmp/off.symbols.sha256
           echo "=== /tmp/off.bytes.sha256 ===";  cat /tmp/off.bytes.sha256
           echo "=== /tmp/off.symbols.sha256 ==="; cat /tmp/off.symbols.sha256
+          echo "### OFF candidate hashes ($(git rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "# bytes:" >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/off.bytes.sha256 >> "$GITHUB_STEP_SUMMARY"
+          echo "# symbols:" >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/off.symbols.sha256 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload OFF hashes (for baseline re-pin if drift)
         if: always()
         uses: actions/upload-artifact@v4
