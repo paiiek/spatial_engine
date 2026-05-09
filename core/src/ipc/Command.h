@@ -28,7 +28,13 @@ enum class CommandTag : uint8_t {
     ObjGain    = 0x02,  // /obj/gain             — set per-object gain scalar
     ObjActive  = 0x03,  // /obj/active           — enable / disable object
     ObjAlgo    = 0x04,  // /obj/algo             — select rendering algorithm
-    ObjMute    = 0x05,  // /adm/obj/n/mute       — mute/unmute (ADM-OSC)
+    ObjMute      = 0x05,  // /adm/obj/n/mute       — mute/unmute (ADM-OSC)
+
+    // ADM-OSC v1.0 extended tags (Phase C3)
+    ObjXYZ       = 0x06,  // /adm/obj/n/xyz ,fff   — Cartesian position
+    ObjActiveAdm = 0x07,  // /adm/obj/n/active ,i  — active flag (ADM-OSC)
+    ObjWidth     = 0x08,  // /adm/obj/n/width ,f   — source width in radians
+    ObjName      = 0x09,  // /adm/obj/n/name ,s    — source label
 
     // System
     SysHandshake  = 0x10, // /sys/handshake — client sends schema_version
@@ -123,6 +129,30 @@ struct PayloadObjMute {
     bool     muted  = false;
 };
 
+// ADM-OSC Phase C3 extended payloads
+
+struct PayloadObjXYZ {
+    uint32_t obj_id = 0;
+    float    x      = 0.f;
+    float    y      = 0.f;
+    float    z      = 0.f;
+};
+
+struct PayloadObjActiveAdm {
+    uint32_t obj_id = 0;
+    bool     active = false;
+};
+
+struct PayloadObjWidth {
+    uint32_t obj_id    = 0;
+    float    width_rad = 0.f;
+};
+
+struct PayloadObjName {
+    uint32_t obj_id    = 0;
+    char     name[32]  = {};
+};
+
 struct PayloadSceneSave { char name[64] = {}; };
 struct PayloadSceneLoad { char name[64] = {}; };
 struct PayloadSceneList {};
@@ -187,6 +217,10 @@ using CommandPayload = std::variant<
     PayloadObjActive,
     PayloadObjAlgo,
     PayloadObjMute,
+    PayloadObjXYZ,
+    PayloadObjActiveAdm,
+    PayloadObjWidth,
+    PayloadObjName,
     PayloadSysHandshake,
     PayloadSysAlgoSwap,
     PayloadSysReset,

@@ -139,6 +139,11 @@ add_executable(test_p_adm_osc test_p_adm_osc.cpp)
 target_link_libraries(test_p_adm_osc PRIVATE spe_core)
 add_test(NAME p_adm_osc COMMAND test_p_adm_osc)
 
+# Phase C3: ADM-OSC v1.0 compatibility tests (new tags, round-trip, cross-prefix)
+add_executable(test_p_adm_osc_v1_compat test_p_adm_osc_v1_compat.cpp)
+target_link_libraries(test_p_adm_osc_v1_compat PRIVATE spe_core Threads::Threads)
+add_test(NAME p_adm_osc_v1_compat COMMAND test_p_adm_osc_v1_compat)
+
 # US-001: Scene snapshot tests
 add_executable(test_p_scene test_p_scene.cpp)
 target_link_libraries(test_p_scene PRIVATE spe_core)

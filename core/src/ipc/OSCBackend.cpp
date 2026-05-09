@@ -94,15 +94,15 @@ void OSCBackend::stop() {
 
 void OSCBackend::dispatch(Command const& cmd) {
     if (!running_) return;
-    // Encode to OSC bytes then decode back — validates codec round-trip.
+    // Encode to OSC bytes using the active dialect, then decode back.
     std::vector<uint8_t> buf;
-    if (decoder_.encode(cmd, buf)) {
+    if (decoder_.encode(cmd, buf, dialect_)) {
         Command decoded = decoder_.decode(std::span<const uint8_t>(buf));
         if (decoded.tag != CommandTag::Unknown && sink_) {
             sink_(decoded);
         }
     } else if (sink_) {
-        // For tags that encode() doesn't support, forward directly.
+        // For tags that encode() doesn't support in this dialect, forward directly.
         sink_(cmd);
     }
 }

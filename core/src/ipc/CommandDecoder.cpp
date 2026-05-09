@@ -2,10 +2,15 @@
 // Minimal OSC 1.1 subset decoder/encoder. No JUCE dependency.
 
 #include "ipc/CommandDecoder.h"
+#include "ipc/AdmOscConstants.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <vector>
+
+// Verify encoder and decoder share the same MAX_DIST constant.
+static_assert(spe::ipc::ADM_OSC_MAX_DIST == 20.0f,
+              "ADM_OSC_MAX_DIST encoder/decoder identity check failed");
 
 namespace spe::ipc {
 
@@ -138,6 +143,112 @@ static inline void copySceneName(char (&dst)[64], const std::string& src) noexce
     const std::size_t n = src.size() < 63 ? src.size() : 63;
     std::memcpy(dst, src.c_str(), n);
     dst[n] = '\0';
+}
+
+// ---- decodeAdmAddress ------------------------------------------------------
+// Handles all /adm/obj/{N}/{sub} patterns for ADM-OSC v1.0.
+// Extracted from buildCommand to keep that function readable (A-β decision).
+// INVARIANT: All ADM commands MUST use obj_cache_ path in SpatialEngine —
+//            NEVER StateModel::apply() (seq=0 would be silently dropped).
+
+static void decodeAdmAddress(const std::string& addr, const OscArgs& args,
+                             Command& cmd, uint32_t& reject_count) noexcept {
+    static constexpr float DEG2RAD  = 3.14159265358979323846f / 180.f;
+    // Use the shared constant (static_assert above verifies identity with encoder).
+    static constexpr float MAX_DIST = spe::ipc::ADM_OSC_MAX_DIST;
+
+    int obj_id = -1;
+    char sub[32] = {};
+    if (std::sscanf(addr.c_str(), "/adm/obj/%d/%31s", &obj_id, sub) != 2 || obj_id < 0) {
+        ++reject_count;
+        cmd.tag = CommandTag::Unknown;
+        PayloadUnknown pu; pu.address = addr;
+        cmd.payload = pu;
+        return;
+    }
+
+    const auto oid = static_cast<uint32_t>(obj_id);
+    cmd.seq = 0; // ADM-OSC carries no sequence number (ADR 0006)
+    cmd.id  = 0;
+
+    const std::string subpath(sub);
+
+    // Helper: build ObjMove payload from spherical components.
+    auto setMove = [&](float az, float el, float dist) {
+        cmd.tag = CommandTag::ObjMove;
+        PayloadObjMove p;
+        p.obj_id = oid;
+        p.az_rad = az;
+        p.el_rad = el;
+        p.dist_m = dist;
+        cmd.payload = p;
+    };
+
+    if (subpath == "azim") {
+        setMove(args.n_float > 0 ? args.floats[0] * DEG2RAD : 0.f, 0.f, 1.f);
+    } else if (subpath == "elev") {
+        setMove(0.f, args.n_float > 0 ? args.floats[0] * DEG2RAD : 0.f, 1.f);
+    } else if (subpath == "dist") {
+        // normalised [0..1] → metres via MAX_DIST
+        setMove(0.f, 0.f, (args.n_float > 0 ? args.floats[0] : 0.f) * MAX_DIST);
+    } else if (subpath == "aed") {
+        // ,fff  azimuth_deg  elevation_deg  distance_normalised
+        setMove((args.n_float > 0 ? args.floats[0] : 0.f) * DEG2RAD,
+                (args.n_float > 1 ? args.floats[1] : 0.f) * DEG2RAD,
+                (args.n_float > 2 ? args.floats[2] : 0.f) * MAX_DIST);
+    } else if (subpath == "gain") {
+        cmd.tag = CommandTag::ObjGain;
+        PayloadObjGain p;
+        p.obj_id = oid;
+        p.gain   = args.n_float > 0 ? args.floats[0] : 0.f;
+        cmd.payload = p;
+    } else if (subpath == "mute") {
+        cmd.tag = CommandTag::ObjMute;
+        PayloadObjMute p;
+        p.obj_id = oid;
+        p.muted  = (args.n_int > 0 ? args.ints[0] : 0) != 0;
+        cmd.payload = p;
+    } else if (subpath == "xyz") {
+        // Cartesian position: ,fff x y z
+        cmd.tag = CommandTag::ObjXYZ;
+        PayloadObjXYZ p;
+        p.obj_id = oid;
+        p.x = args.n_float > 0 ? args.floats[0] : 0.f;
+        p.y = args.n_float > 1 ? args.floats[1] : 0.f;
+        p.z = args.n_float > 2 ? args.floats[2] : 0.f;
+        cmd.payload = p;
+    } else if (subpath == "active") {
+        // ,i 0|1 — ADM-OSC active flag (separate from legacy /obj/active)
+        cmd.tag = CommandTag::ObjActiveAdm;
+        PayloadObjActiveAdm p;
+        p.obj_id = oid;
+        p.active = (args.n_int > 0 ? args.ints[0] : 0) != 0;
+        cmd.payload = p;
+    } else if (subpath == "width") {
+        // ,f radians — source width
+        cmd.tag = CommandTag::ObjWidth;
+        PayloadObjWidth p;
+        p.obj_id    = oid;
+        p.width_rad = args.n_float > 0 ? args.floats[0] : 0.f;
+        cmd.payload = p;
+    } else if (subpath == "name") {
+        // ,s — source label (truncated to 31 chars + null)
+        cmd.tag = CommandTag::ObjName;
+        PayloadObjName p;
+        p.obj_id = oid;
+        if (args.n_str > 0) {
+            const std::size_t n = args.strings[0].size() < 31u ? args.strings[0].size() : 31u;
+            std::memcpy(p.name, args.strings[0].c_str(), n);
+            p.name[n] = '\0';
+        }
+        cmd.payload = p;
+    } else {
+        // Unknown/unsupported ADM-OSC sub-address (e.g. /w, /h, /d, /divergence)
+        ++reject_count;
+        cmd.tag = CommandTag::Unknown;
+        PayloadUnknown pu; pu.address = addr;
+        cmd.payload = pu;
+    }
 }
 
 Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count) noexcept {
@@ -315,62 +426,10 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             } else { makeUnknown(); }
         } else { makeUnknown(); }
     } else if (addr.size() > 9 && addr.compare(0, 9, "/adm/obj/") == 0) {
-        // ADM-OSC Living Standard receive paths.
-        // No seq/id prefix — ADM-OSC uses pure float/int args only.
-        static constexpr float DEG2RAD  = 3.14159265358979323846f / 180.f;
-        static constexpr float MAX_DIST = 20.0f; // metres for normalised dist
-
-        int obj_id = -1;
-        char sub[32] = {};
-        // Parse "/adm/obj/{n}/{sub}"
-        if (std::sscanf(addr.c_str(), "/adm/obj/%d/%31s", &obj_id, sub) == 2 && obj_id >= 0) {
-            const std::string subpath(sub);
-            const auto oid = static_cast<uint32_t>(obj_id);
-            cmd.seq = 0; // ADM-OSC carries no sequence number
-            cmd.id  = 0;
-
-            // Helper: build an ObjMove payload from per-axis components.
-            auto setMove = [&](float az, float el, float dist) {
-                cmd.tag = CommandTag::ObjMove;
-                PayloadObjMove p;
-                p.obj_id = oid;
-                p.az_rad = az;
-                p.el_rad = el;
-                p.dist_m = dist;
-                cmd.payload = p;
-            };
-
-            if (subpath == "azim") {
-                setMove(getFloat(0) * DEG2RAD, 0.f, 1.f);
-            } else if (subpath == "elev") {
-                setMove(0.f, getFloat(0) * DEG2RAD, 1.f);
-            } else if (subpath == "dist") {
-                setMove(0.f, 0.f, getFloat(0) * MAX_DIST); // normalised 0..1 → metres
-            } else if (subpath == "aed") {
-                // ,fff  azimuth_deg  elevation_deg  distance_normalised
-                setMove(getFloat(0) * DEG2RAD,
-                        getFloat(1) * DEG2RAD,
-                        getFloat(2) * MAX_DIST);
-            } else if (subpath == "gain") {
-                cmd.tag = CommandTag::ObjGain;
-                PayloadObjGain p;
-                p.obj_id = oid;
-                p.gain   = getFloat(0);
-                cmd.payload = p;
-            } else if (subpath == "mute") {
-                cmd.tag = CommandTag::ObjMute;
-                PayloadObjMute p;
-                p.obj_id = oid;
-                p.muted  = (args.n_int > 0 ? args.ints[0] : 0) != 0;
-                cmd.payload = p;
-            } else {
-                // "w" (width/spread) and any other ADM-OSC sub-address are
-                // not implemented in v0 — fall through as Unknown.
-                makeUnknown();
-            }
-        } else {
-            makeUnknown();
-        }
+        // ADM-OSC Living Standard receive paths (Phase C3 full v1.0 subset).
+        // All new tags route through obj_cache_ — NEVER via StateModel::apply().
+        // (See ADR 0006: StateModel seq-drop would kill ADM traffic at seq=0.)
+        decodeAdmAddress(addr, args, cmd, reject_count);
     } else {
         makeUnknown();
     }
@@ -419,7 +478,8 @@ void CommandDecoder::appendUint64(std::vector<uint8_t>& buf, uint64_t v) noexcep
 
 // ---- encode ----------------------------------------------------------------
 
-bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexcept {
+bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
+                            WireDialect dialect) noexcept {
     out.clear();
     std::string addr;
     std::string tags = ",ii"; // seq, id always first
@@ -450,6 +510,91 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out) noexc
         writeU32(tmp, cmd.id);  args_buf.insert(args_buf.end(), tmp, tmp + 4);
     }
 
+    // ---- ADM-V1 dialect: encode ObjMove/ObjGain/ObjMute as /adm/obj/N/... ----
+    if (dialect == WireDialect::AdmV1) {
+        // For ADM dialect, use pure float args (no seq/id prefix on wire).
+        // We still have seq/id in args_buf from the header above; discard and restart.
+        out.clear();
+        args_buf.clear();
+        tags = ","; // reset — ADM has no seq/id prefix
+
+        static constexpr float RAD2DEG = 180.f / 3.14159265358979323846f;
+        // Same constant as decoder — identity enforced by static_assert at top of file.
+        static constexpr float MAX_DIST_ADM = spe::ipc::ADM_OSC_MAX_DIST;
+
+        auto add_f_adm = [&](float v) {
+            tags += 'f';
+            uint32_t u; std::memcpy(&u, &v, 4);
+            uint8_t tmp[4]; writeU32(tmp, u);
+            args_buf.insert(args_buf.end(), tmp, tmp + 4);
+        };
+        auto add_i_adm = [&](int32_t v) {
+            tags += 'i';
+            uint8_t tmp[4]; writeU32(tmp, static_cast<uint32_t>(v));
+            args_buf.insert(args_buf.end(), tmp, tmp + 4);
+        };
+
+        switch (cmd.tag) {
+        case CommandTag::ObjMove: {
+            auto& p = std::get<PayloadObjMove>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/aed";
+            // ADM-OSC: az degrees, el degrees, dist normalised [0..1]
+            add_f_adm(p.az_rad * RAD2DEG);
+            add_f_adm(p.el_rad * RAD2DEG);
+            add_f_adm(MAX_DIST_ADM > 0.f ? p.dist_m / MAX_DIST_ADM : 0.f);
+            break;
+        }
+        case CommandTag::ObjGain: {
+            auto& p = std::get<PayloadObjGain>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/gain";
+            add_f_adm(p.gain);
+            break;
+        }
+        case CommandTag::ObjMute: {
+            auto& p = std::get<PayloadObjMute>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/mute";
+            add_i_adm(p.muted ? 1 : 0);
+            break;
+        }
+        case CommandTag::ObjXYZ: {
+            auto& p = std::get<PayloadObjXYZ>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/xyz";
+            add_f_adm(p.x); add_f_adm(p.y); add_f_adm(p.z);
+            break;
+        }
+        case CommandTag::ObjActiveAdm: {
+            auto& p = std::get<PayloadObjActiveAdm>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/active";
+            add_i_adm(p.active ? 1 : 0);
+            break;
+        }
+        case CommandTag::ObjWidth: {
+            auto& p = std::get<PayloadObjWidth>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/width";
+            add_f_adm(p.width_rad);
+            break;
+        }
+        case CommandTag::ObjName: {
+            auto& p = std::get<PayloadObjName>(cmd.payload);
+            addr = "/adm/obj/" + std::to_string(p.obj_id) + "/name";
+            tags += 's';
+            for (const char* q = p.name; *q; ++q)
+                args_buf.push_back(static_cast<uint8_t>(*q));
+            args_buf.push_back(0);
+            while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+            break;
+        }
+        default:
+            return false; // tag not encodable in AdmV1 dialect
+        }
+
+        appendPaddedString(out, addr);
+        appendPaddedString(out, tags);
+        out.insert(out.end(), args_buf.begin(), args_buf.end());
+        return true;
+    }
+
+    // ---- Legacy dialect (default) -------------------------------------------
     switch (cmd.tag) {
     case CommandTag::ObjMove: {
         addr = "/obj/move";

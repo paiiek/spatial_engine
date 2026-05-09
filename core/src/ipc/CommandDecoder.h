@@ -26,6 +26,13 @@ struct OscArgs {
     int n_int = 0, n_float = 0, n_u64 = 0, n_str = 0;
 };
 
+// Wire dialect for encode() — default is Legacy to preserve all existing tests.
+// Switch to AdmV1 via --osc-dialect adm CLI flag (ADR 0006).
+enum class WireDialect : uint8_t {
+    Legacy = 0,  // /obj/... prefix (existing behaviour)
+    AdmV1  = 1,  // /adm/obj/... prefix (ADM-OSC v1.0)
+};
+
 class CommandDecoder {
 public:
     CommandDecoder() = default;
@@ -34,9 +41,12 @@ public:
     // Returns CommandTag::Unknown and increments reject_count() on error.
     Command decode(std::span<const uint8_t> packet) noexcept;
 
-    // Encode a Command back to OSC bytes (for round-trip tests).
-    // Returns false if encoding is not supported for this tag.
-    bool encode(const Command& cmd, std::vector<uint8_t>& out) noexcept;
+    // Encode a Command back to OSC bytes.
+    // dialect=Legacy (default): /obj/... schema (backward compat).
+    // dialect=AdmV1: /adm/obj/... schema (ADM-OSC v1.0).
+    // Returns false if encoding is not supported for this tag/dialect.
+    bool encode(const Command& cmd, std::vector<uint8_t>& out,
+                WireDialect dialect = WireDialect::Legacy) noexcept;
 
     uint32_t rejectCount() const noexcept { return reject_count_; }
     void     resetRejectCount() noexcept  { reject_count_ = 0; }

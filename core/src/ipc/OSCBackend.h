@@ -11,6 +11,7 @@
 #include <span>
 #include <cstdint>
 #include <thread>
+#include <atomic>
 
 namespace spe::ipc {
 
@@ -41,10 +42,16 @@ public:
 
     CommandDecoder& decoder() noexcept { return decoder_; }
 
+    // Set wire dialect for encode() (--osc-dialect CLI flag).
+    // Default is Legacy; call setDialect(WireDialect::AdmV1) for ADM-OSC output.
+    void setDialect(WireDialect d) noexcept { dialect_ = d; }
+    WireDialect dialect() const noexcept { return dialect_; }
+
 private:
     CommandSink    sink_;
     CommandDecoder decoder_;
-    bool           running_ = false;
+    WireDialect    dialect_     = WireDialect::Legacy;
+    bool           running_     = false;
     int            listen_port_ = 0;
     int            udp_fd_      = -1;
     std::thread    udp_thread_;

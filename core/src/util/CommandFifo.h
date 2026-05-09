@@ -35,6 +35,12 @@ struct QueuedCmd {
     // Kept POD (int32_t) so QueuedCmd remains trivially copyable on the
     // audio thread; no std::string anywhere.
     int32_t  ltc_chase_enable = 0;
+    // Phase C3 ADM-OSC v1.0 extended fields
+    float    xyz_x     = 0.f;   // ObjXYZ Cartesian x
+    float    xyz_y     = 0.f;   // ObjXYZ Cartesian y
+    float    xyz_z     = 0.f;   // ObjXYZ Cartesian z
+    float    width_rad = 0.f;   // ObjWidth source width in radians
+    char     obj_name[32] = {}; // ObjName label (truncated, null-terminated)
 };
 
 template<int N = 1024>

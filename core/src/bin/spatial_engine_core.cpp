@@ -5,6 +5,7 @@
 #include "core/Constants.h"
 #include "core/SpatialEngine.h"
 #include "geometry/LayoutLoader.h"
+#include "ipc/CommandDecoder.h"
 #include "util/RtAssertNoAlloc.h"
 #include "WavWriter.h"
 
@@ -75,6 +76,7 @@ int main(int argc, char** argv) {
     int         osc_port     = 9100;
     std::string wav_path;
     std::string layout_path  = "../configs/lab_8ch.yaml";
+    std::string osc_dialect  = "legacy"; // "legacy" or "adm"
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -84,18 +86,20 @@ int main(int argc, char** argv) {
         auto nexti = [&](int def) -> int {
             return (i + 1 < argc) ? std::atoi(argv[++i]) : def;
         };
-        if      (a == "--backend")  backend_name = nexts("null");
-        else if (a == "--seconds")  run_seconds  = nexti(run_seconds);
-        else if (a == "--block")    block_size   = nexti(block_size);
-        else if (a == "--channels") channels     = nexti(channels);
-        else if (a == "--rate")     sr           = nexti(static_cast<int>(sr));
-        else if (a == "--osc-port") osc_port     = nexti(osc_port);
-        else if (a == "--wav")      wav_path     = nexts("");
-        else if (a == "--layout")   layout_path  = nexts(layout_path.c_str());
+        if      (a == "--backend")     backend_name = nexts("null");
+        else if (a == "--seconds")     run_seconds  = nexti(run_seconds);
+        else if (a == "--block")       block_size   = nexti(block_size);
+        else if (a == "--channels")    channels     = nexti(channels);
+        else if (a == "--rate")        sr           = nexti(static_cast<int>(sr));
+        else if (a == "--osc-port")    osc_port     = nexti(osc_port);
+        else if (a == "--wav")         wav_path     = nexts("");
+        else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
+        else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
         else if (a == "--help" || a == "-h") {
             std::printf("Usage: spatial_engine_core [--backend null|dante] "
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
-                        "[--osc-port 9100] [--wav OUTPUT.wav] [--layout PATH.yaml]\n");
+                        "[--osc-port 9100] [--wav OUTPUT.wav] [--layout PATH.yaml] "
+                        "[--osc-dialect legacy|adm]\n");
             return 0;
         }
     }
@@ -105,6 +109,14 @@ int main(int argc, char** argv) {
 
     // Engine
     spe::core::SpatialEngine engine(osc_port);
+
+    // Apply OSC dialect (--osc-dialect legacy|adm)
+    if (osc_dialect == "adm") {
+        engine.oscBackend().setDialect(spe::ipc::WireDialect::AdmV1);
+        std::printf("  osc-dialect: adm (ADM-OSC v1.0 encode)\n");
+    } else {
+        std::printf("  osc-dialect: legacy\n");
+    }
 
     // Load speaker layout
     auto layout_result = spe::geometry::load_layout(layout_path);

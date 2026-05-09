@@ -166,3 +166,4 @@ target_link_libraries(spatial_engine_core PRIVATE spe_core)
 
 # --- CTest scaffold ------------------------------------------------------
 add_subdirectory(tests/core_unit)
+add_subdirectory(tests/perf)

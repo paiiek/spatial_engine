@@ -58,6 +58,9 @@ public:
         osc_backend_.injectCommand(cmd);
     }
 
+    // Expose OSCBackend for dialect configuration (--osc-dialect CLI flag).
+    ipc::OSCBackend& oscBackend() noexcept { return osc_backend_; }
+
     // C1.d — LTC chase from input ch 0. When enabled, audioBlock() taps
     // input_channels[0] (if present) and pushes the samples into the
     // internal LtcChase ring. updateLtcChase() drains the ring on the

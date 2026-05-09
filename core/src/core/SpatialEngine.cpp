@@ -98,6 +98,39 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.output_value_db = p->threshold_db;
                 }
                 break;
+            // Phase C3 ADM-OSC v1.0 extended tags — obj_cache_ path only (ADR 0006)
+            case ipc::CommandTag::ObjMute:
+                if (auto* p = std::get_if<ipc::PayloadObjMute>(&cmd.payload)) {
+                    qc.obj_id = p->obj_id;
+                    qc.active = !p->muted; // mute=true → active=false
+                }
+                break;
+            case ipc::CommandTag::ObjXYZ:
+                if (auto* p = std::get_if<ipc::PayloadObjXYZ>(&cmd.payload)) {
+                    qc.obj_id = p->obj_id;
+                    qc.xyz_x  = p->x;
+                    qc.xyz_y  = p->y;
+                    qc.xyz_z  = p->z;
+                }
+                break;
+            case ipc::CommandTag::ObjActiveAdm:
+                if (auto* p = std::get_if<ipc::PayloadObjActiveAdm>(&cmd.payload)) {
+                    qc.obj_id = p->obj_id;
+                    qc.active = p->active;
+                }
+                break;
+            case ipc::CommandTag::ObjWidth:
+                if (auto* p = std::get_if<ipc::PayloadObjWidth>(&cmd.payload)) {
+                    qc.obj_id    = p->obj_id;
+                    qc.width_rad = p->width_rad;
+                }
+                break;
+            case ipc::CommandTag::ObjName:
+                if (auto* p = std::get_if<ipc::PayloadObjName>(&cmd.payload)) {
+                    qc.obj_id = p->obj_id;
+                    std::memcpy(qc.obj_name, p->name, 32);
+                }
+                break;
             default:
                 return; // not queued
             }
@@ -311,6 +344,37 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 case 7: c.width_rad     = qc.dsp_value; break;
                 default: break;
                 }
+                break;
+            // Phase C3 ADM-OSC v1.0 extended — all via obj_cache_ (ADR 0006)
+            case ipc::CommandTag::ObjMute:
+                c.active = qc.active; // muted → active=false
+                break;
+            case ipc::CommandTag::ObjActiveAdm:
+                c.active = qc.active;
+                break;
+            case ipc::CommandTag::ObjXYZ:
+                // Store Cartesian; renderers use spherical (az/el/dist).
+                // Convert: x=right y=up z=forward → az/el via atan2.
+                {
+                    float r = std::sqrt(qc.xyz_x * qc.xyz_x +
+                                        qc.xyz_y * qc.xyz_y +
+                                        qc.xyz_z * qc.xyz_z);
+                    if (r > 1e-6f) {
+                        c.az   = std::atan2(qc.xyz_x, qc.xyz_z);
+                        c.el   = std::asin(qc.xyz_y / r);
+                        c.dist = r;
+                    }
+                    c.active = true;
+                }
+                break;
+            case ipc::CommandTag::ObjWidth:
+                c.width_rad = qc.width_rad;
+                break;
+            case ipc::CommandTag::ObjName:
+                // Name stored in ObjCache if the field exists; otherwise no-op.
+                // (ObjCache does not currently have a name field — this is a
+                //  Phase C3 stub; the name is decoded and forwarded but not
+                //  yet rendered. Phase C4 can surface it in /sys/state.)
                 break;
             default: break;
             }
