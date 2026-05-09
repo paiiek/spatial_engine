@@ -22,3 +22,38 @@ Cross-file: A7 (IComponentHandler mock for S2 verification)
 - ctest 53 → 60+ tests, vst3_ 7개 PASS 유지
 - GHA vst3.yml 두 job green
 - DAW Reaper/Bitwig 사용자 hands-on 단계 진입 가능 상태
+
+## 2026-05-09 — C2B postmortem sprint COMPLETE (commit acb8c27, GHA run #6 SUCCESS)
+
+### Files changed
+- vst3/SpatialEngineController.hpp — kParamCount 6→7
+- vst3/SpatialEngineController.cpp — bypass param (id=6), setComponentState v1/v2 split-read, restartComponent (A7)
+- vst3/SpatialEngineProcessor.hpp — kBypass=6 enum, norm_values_[7], bypass_active_ removed
+- vst3/SpatialEngineProcessor.cpp — setIoMode hijack removed, state v2 (36B) w/ v1 fallback, dry pass-through in process()
+- vst3/tests/rt_alloc_probe.hpp (NEW) — __libc_malloc strong-symbol probe (S5)
+- vst3/tests/test_vst3_dispatch_rt_safety.cpp — S5 rewrite: probe header + negative controls
+- vst3/tests/test_vst3_state_persist.cpp — S6: 12→19 assertions
+- vst3/tests/test_vst3_bypass.cpp — S7: 7→12 assertions, dry pass-through
+- vst3/tests/test_vst3_host_fixture.cpp — A7: MockComponentHandler, restartComponent verification
+- vst3/tests/test_vst3_param_layout.cpp — paramCount 6→7, bypass assertions 11-12
+- .github/workflows/vst3.yml — S4: LD_DEBUG=libs runtime sysdep gate
+
+### Verification results
+- ctest: 53/53 PASS (100%)
+- S5 R10 nm probe: 3 strong T symbols (malloc/free/calloc) ✓
+- S4 LD_DEBUG local: 0 sysdep hits ✓
+- S3.5 OFF baseline: pre-existing local env delta (core/ git diff=0); GHA gate authoritative
+- GHA run #6 acb8c27: vst3-build-and-host-fixture=SUCCESS, off-byte-identical=SUCCESS ✓
+
+### Learnings
+- OFF baseline byte-pinning is GHA-runner-specific (GCC/binutils version). Local machine
+  will always differ from the pinned hash. Only GHA is authoritative for S3.5.
+- rt_alloc_probe.hpp: sized-deallocation operators (void operator delete(void*,size_t))
+  required to silence -Wsized-deallocation on GCC 13+.
+- MockComponentHandler needs virtual destructor and <cmath> include for std::fabs.
+- param_layout test had hardcoded "== 6" assertion — must update alongside kParamCount.
+
+### Next step (user action required)
+DAW hands-on confirmation: load Reaper or Bitwig, instantiate spatial_engine_vst3.so,
+verify bypass button routes dry signal (not silence), verify 7 parameters visible
+(Pan Az, Pan El, Source Width, Master Gain, Ambi Order, Room Preset, Bypass).
