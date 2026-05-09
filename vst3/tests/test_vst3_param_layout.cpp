@@ -44,8 +44,8 @@ int main()
     tresult r = ctrl.initialize(nullptr);
     ASSERT_EQ(r, kResultOk, "initialize");
 
-    // Assertion 2: getParameterCount == 6
-    ASSERT_EQ(ctrl.getParameterCount(), 6, "paramCount");
+    // Assertion 2: getParameterCount == 7 (C2B postmortem S1: kBypass added)
+    ASSERT_EQ(ctrl.getParameterCount(), 7, "paramCount");
 
     // Assertions 3-8: ParameterInfo for each param
     // param 0: pan_az
@@ -96,6 +96,22 @@ int main()
         ctrl.getParameterInfo(3, info);
         ctrl.setParamNormalized(3, info.defaultNormalizedValue);
         ASSERT_NEAR(ctrl.getParamNormalized(3), info.defaultNormalizedValue, 1e-5, "gain.roundtrip");
+    }
+
+    // Assertion 11: getParameterCount() == 7 (C2B postmortem S1)
+    ASSERT_EQ(ctrl.getParameterCount(), 7, "paramCount_7");
+
+    // Assertion 12: param 6 has kIsBypass flag set
+    {
+        ParameterInfo info{};
+        ctrl.getParameterInfo(6, info);
+        ASSERT_EQ(info.id, 6, "bypass.id");
+        ASSERT_EQ(info.stepCount, 1, "bypass.stepCount");
+        int isBypass = (info.flags & ParameterInfo::kIsBypass) != 0 ? 1 : 0;
+        ASSERT_EQ(isBypass, 1, "bypass.kIsBypass");
+        int canAutomate = (info.flags & ParameterInfo::kCanAutomate) != 0 ? 1 : 0;
+        ASSERT_EQ(canAutomate, 1, "bypass.kCanAutomate");
+        ASSERT_NEAR(info.defaultNormalizedValue, 0.0, 1e-5, "bypass.default_0");
     }
 
     printf("param_layout: %d pass, %d fail\n", g_pass, g_fail);

@@ -1,34 +1,139 @@
 {
-  "version": "1.0",
-  "project": "spatial_engine v1 features",
+  "version": "2.0",
+  "project": "Phase C2B postmortem sprint — VST3 critic 4 MAJOR + 3 HIGH defects 청산",
+  "ralplan_consensus": "Round 3 ACCEPT (Architect APPROVE + Critic ACCEPT)",
+  "plan_path": ".omc/plans/spatial-engine-phaseC-C2B-postmortem.md",
+  "_archive_v1": "Previous v1 stories (US-001/002/003) all passed; archived in git history",
   "stories": [
     {
-      "id": "US-001",
-      "title": "스냅샷/씬 시스템",
-      "passes": true,
+      "id": "US-S1",
+      "title": "kIsBypass 7th param 추가",
+      "passes": false,
       "acceptanceCriteria": [
-        "SceneSnapshot toJson/fromJson 라운드트립 테스트 통과",
-        "/scene/save|load|list OSC 커맨드 디코드 테스트 통과",
-        "scene_panel.py + test_scene_panel.py 5/5 pytest 통과"
+        "vst3/SpatialEngineController.hpp 에 kBypass=6 enum 항목 추가",
+        "vst3/SpatialEngineController.cpp 의 initialize() 에 7번째 RangeParameter 등록 (StepCount=1, flags |= ParameterInfo::kIsBypass)",
+        "kParamCount 6 → 7 변경 (controller + processor 양쪽)",
+        "기존 6 param IID/UID 무변경 (id 0..5 보존)",
+        "ctest test_vst3_param_layout 통과 (param_count==7 verify)",
+        "ctest test_vst3_param_roundtrip 통과 (기존 6 + 신규 1 round-trip)"
       ]
     },
     {
-      "id": "US-002",
-      "title": "MAX_OBJECTS 16→64 스케일업",
-      "passes": true,
+      "id": "US-S2",
+      "title": "state binary v2 + v1 fallback (controller + processor 양쪽 split-read + restartComponent)",
+      "passes": false,
       "acceptanceCriteria": [
-        "Constants.h MAX_OBJECTS=64",
-        "test_p_max_objects 통과",
-        "29/29 ctest 통과"
+        "vst3/SpatialEngineProcessor.cpp getState 가 36-byte v2 stream (8-byte header [magic 'SPE1' u32][version u16=2][param_count u16=7] + 28-byte body=7 floats) 출력",
+        "vst3/SpatialEngineProcessor.cpp setState 가 8-byte header read 후 version branch: v=1 → 24-byte body read + norm_values_[6].store(0.f); v=2 → 28-byte body read",
+        "vst3/SpatialEngineController.cpp setComponentState 가 동일 split-read 패턴 (8-byte header → branch → 24/28-byte body)",
+        "controller setComponentState 끝에 if (comp_handler_) comp_handler_->restartComponent(Steinberg::Vst::kParamValuesChanged) 호출 (nullptr guard 필수)",
+        "kStateBytesV1=32 + kStateBytesV2=36 상수 분리 (controller + processor 모두)",
+        "ctest test_vst3_state_persist 통과 (rename 12 + 신규 13-19 = 19 assertions)"
       ]
     },
     {
-      "id": "US-003",
-      "title": "IR 컨볼루션 SOFA 로더 확장",
-      "passes": true,
+      "id": "US-S3",
+      "title": "bypass dry pass-through 구현 + setIoMode hijack 폐기",
+      "passes": false,
       "acceptanceCriteria": [
-        "IRConvolutionStub.loadFromSofa() 구현",
-        "ir_sofa_loader.py + test_ir_loader.py 6/6 pytest 통과"
+        "vst3/SpatialEngineProcessor.cpp:131 의 setIoMode → bypass 우회 로직 제거 (return kResultOk only, kAdvanced/kSimple 양쪽)",
+        "vst3/SpatialEngineProcessor.cpp:392-399 의 bypass branch 가 channel-wise input→output memcpy (for ch < min(numIn, numOut), null-buffer guards)",
+        "bypass active flag 가 norm_values_[6].load() > 0.5f 로 결정 (controller 동기화)",
+        "ctest test_vst3_bypass 통과 (assertion 6 강화 + 신규 8-12 = 12 assertions)"
+      ]
+    },
+    {
+      "id": "US-S3.5",
+      "title": "로컬 OFF baseline checkpoint (mandatory blocking gate)",
+      "passes": false,
+      "acceptanceCriteria": [
+        "S3 commit 직후 / S4 push 직전 cmake -B build_off_check -DSPATIAL_ENGINE_VST3=OFF -DSPATIAL_ENGINE_NO_JUCE=ON 빌드 통과",
+        "sha256sum build_off_check/core/libspe_core.a build_off_check/core/spatial_engine_core | sed 's|build_off_check/||g' 가 .ci/off_baseline.bytes.sha256 와 정확히 일치 (diff exit 0)",
+        "fail 시 transitive header include leak 진단 + 수정 후 재실행 (최대 2회)"
+      ]
+    },
+    {
+      "id": "US-S5",
+      "title": "RT-safety guard 강화 (__libc_malloc strong-symbol + R10 LTO defence)",
+      "passes": false,
+      "acceptanceCriteria": [
+        "vst3/tests/rt_alloc_probe.hpp 신규 — extern \"C\" void* __libc_malloc(size_t); + __libc_calloc + __libc_free direct declaration. NO dlsym, NO call_once, NO warmup",
+        "strong-symbol overrides extern \"C\" void* malloc(size_t) / calloc / free 가 g_real_malloc/calloc/free 로 위임 + g_rt_guard_active 시 g_alloc_count++",
+        "vst3/tests/test_vst3_dispatch_rt_safety.cpp 의 operator new/new[] 에서 if (g_rt_guard_active) ++g_alloc_count 제거 (double-count 방지)",
+        "negative-control assertions 추가: probe_observes_malloc (calls std::malloc(64) → assert g_alloc_count==1), probe_observes_calloc (calls std::calloc(1,64) → assert g_alloc_count==1)",
+        "rt_alloc_probe.hpp doc comment: 'test TUs MUST NOT enable -flto' 명시",
+        "post-build sanity: nm build_full_check/vst3/tests/test_vst3_dispatch_rt_safety | grep -E '^[0-9a-f]+ T (malloc|free|calloc)$' | wc -l == 3 (R10 Layer 1)",
+        "ctest test_vst3_dispatch_rt_safety 1000-iter PASS 유지",
+        "vst3/tests/CMakeLists.txt 에 -flto 미사용 유지 (R10 Layer 3)"
+      ]
+    },
+    {
+      "id": "US-S4",
+      "title": "LD_DEBUG=libs CI gate 추가 (.github/workflows/vst3.yml)",
+      "passes": false,
+      "acceptanceCriteria": [
+        ".github/workflows/vst3.yml 의 vst3-build-and-host-fixture job 에 'LD_DEBUG sysdep runtime gate' step 추가",
+        "step 은 LD_DEBUG=libs ./build_vst3_on/vst3/tests/test_vst3_host_fixture 2>&1 | grep -cE 'X11|freetype|alsa|webkit' == 0 verify",
+        "fail 시 echo 'Runtime sysdep leakage detected' + exit 1",
+        "host fixture step 직후 위치"
+      ]
+    },
+    {
+      "id": "US-S6",
+      "title": "state IO test 12 → 19 assertions",
+      "passes": false,
+      "acceptanceCriteria": [
+        "assertion 12 rename: 12_getState_32_bytes → 12_getState_36_bytes + literal pos==32 → pos==36",
+        "NEW 13 multi_block_roundtrip_fresh_instance_bit_equal: 두 fresh SpatialEngineProcessor 인스턴스가 동일 v2 setState 후 process(512) ×1 block 결과 0 ULP bit-equal",
+        "NEW 14 state_oversize_33byte_short_read_default: 33-byte stream 시 setState 가 default 유지 (no crash)",
+        "NEW 15 concurrent_setState_getState_1000_iter: 1000-iter 양쪽 thread concurrent setState/getState 무crash, 무UAF",
+        "NEW 16 state_v2_36byte_single_block_roundtrip: setState v2 → process 1 block → output non-degenerate",
+        "NEW 17 controller_setComponentState_v1_32byte_ok: controller 가 v1 state 복원, norm_values_[6]==0.0",
+        "NEW 18 controller_setComponentState_v2_36byte_ok: controller 가 v2 state 복원, norm_values_[6]==1.0 if bypass=on encoded",
+        "NEW 19 multicall_v2_then_v1_bypass_reset: setState(v2 bypass=1) → setState(v1) → getState verify norm_values_[6]==0.0 (v1 fallback reset)",
+        "ctest test_vst3_state_persist 19 assertion 모두 PASS"
+      ]
+    },
+    {
+      "id": "US-S7",
+      "title": "bypass test 7 → 12 assertions",
+      "passes": false,
+      "acceptanceCriteria": [
+        "strengthen 6 setIoMode_clear_bypass_ok: 실 audio output non-zero verify (input copy 또는 engine output)",
+        "NEW 8 kIsBypass_param_toggle_round_trip: setParamNormalized(6, 1.0) → getParamNormalized(6)==1.0 → toggle 0.0",
+        "NEW 9 bypass_dry_passthrough_identity: bypass on, ramp signal input, output==input on min(numIn, numOut) channels",
+        "NEW 10 bypass_cardinality_1in_2out: mono input → stereo output bus, output[0]==input[0], output[1] (정의 명시)",
+        "NEW 11 bypass_state_integration: bypass on → getState → setState fresh instance → bypass restored",
+        "NEW 12 setIoMode_no_longer_affects_bypass: setIoMode(kAdvanced) → bypass param 0.0 유지 (hijack 제거 verify)",
+        "ctest test_vst3_bypass 12 assertion 모두 PASS"
+      ]
+    },
+    {
+      "id": "US-A7",
+      "title": "host fixture mock IComponentHandler 확장",
+      "passes": false,
+      "acceptanceCriteria": [
+        "vst3/tests/test_vst3_host_fixture.cpp 에 class MockComponentHandler : public Steinberg::Vst::IComponentHandler 신규 (~30-50 LOC)",
+        "FUnknown stubs: ref count atomic (addRef/release) + queryInterface (IComponentHandler::iid + FUnknown::iid 양쪽 처리)",
+        "restartComponent_call_count 멤버 + restartComponent(int32 flags) override 가 ++count",
+        "stub beginEdit/performEdit/endEdit (no-op + counter)",
+        "controller->setComponentHandler(&mock) wiring 추가",
+        "신규 assertion host_fixture_restartComponent_called_once: v2 setState 후 mock.restartComponent_call_count == 1",
+        "ctest test_vst3_host_fixture 22+ assertions PASS (현재 21 + 1 신규)"
+      ]
+    },
+    {
+      "id": "US-FINAL",
+      "title": "전체 검증 + GHA CI green confirmation",
+      "passes": false,
+      "acceptanceCriteria": [
+        "로컬 build: cd build_full_check && cmake .. -DSPATIAL_ENGINE_VST3=ON && cmake --build . -j$(nproc) 빌드 clean",
+        "로컬 ctest: cd build_full_check && ctest --output-on-failure -R 'vst3_' 7 tests 모두 PASS (60+ assertions 누계)",
+        "S3.5 OFF baseline diff PASS",
+        "S5 R10 nm probe == 3",
+        "S4 LD_DEBUG runtime gate == 0",
+        "git commit + push (prefix feat(C2B-postmortem):, Co-Authored-By 라인 포함)",
+        "GHA vst3.yml 두 job (vst3-build-and-host-fixture, off-byte-identical) 모두 SUCCESS — curl GH API 로 verify"
       ]
     }
   ]

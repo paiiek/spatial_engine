@@ -1,6 +1,7 @@
 // vst3/SpatialEngineProcessor.cpp
 // Phase C C2 Option-B: IComponent + IAudioProcessor direct vtable.
 // No helper base classes. FUnknown implemented with atomic ref-count.
+// C2B postmortem S2/S3: state v2 (36 bytes), kIsBypass param, dry pass-through.
 
 #include "SpatialEngineProcessor.hpp"
 #include "SpatialEngineProcessData.hpp"
@@ -122,13 +123,12 @@ SpatialEngineProcessor::getControllerClassId(Steinberg::TUID classId)
 }
 
 Steinberg::tresult PLUGIN_API
-SpatialEngineProcessor::setIoMode(Steinberg::Vst::IoMode mode)
+SpatialEngineProcessor::setIoMode(Steinberg::Vst::IoMode /*mode*/)
 {
-    // Step 3.1: kAdvanced (1) triggers bypass — silence outputs in process().
-    // SDK IoModes: kSimple=0, kAdvanced=1, kOfflineProcessing=2.
-    // Note: SDK has no kAdvancedKBypass — plan reference was a fact-error;
-    // kAdvanced is the intended bypass-enabling mode for this engine.
-    bypass_active_.store(mode == Steinberg::Vst::kAdvanced, std::memory_order_release);
+    // C2B postmortem S3: setIoMode hijack REMOVED. Bypass is now controlled
+    // exclusively by the kIsBypass parameter (id=6) per VST3 SDK convention
+    // (pluginterfaces/vst/ivsteditcontroller.h:71 kIsBypass = 1<<16).
+    // Accept any IoMode silently — matches SDK example behaviour.
     return Steinberg::kResultOk;
 }
 
@@ -198,18 +198,24 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 }
 
 // ---------------------------------------------------------------------------
-// State persistence helpers — Step 3.2
-// Binary format (32 bytes, little-endian):
-//   bytes  0-3:  magic 'S','P','E','1'
-//   bytes  4-5:  version uint16 = 1
-//   bytes  6-7:  param_count uint16 = 6
-//   bytes  8-31: 6 × float32 normalized values
+// State persistence — C2B postmortem S2: v2 format (36 bytes), v1 fallback.
+// Binary format v2 (36 bytes, little-endian):
+//   bytes  0-3:  magic 'S','P','E','1' (0x31455053)
+//   bytes  4-5:  version uint16 = 2
+//   bytes  6-7:  param_count uint16 = 7
+//   bytes  8-35: 7 × float32 normalized values (params 0..6, [6]=bypass)
+//
+// v1 format (32 bytes): same header with version=1, param_count=6, 6 floats.
+// Reader handles both. Writer always emits v2.
 // ---------------------------------------------------------------------------
 namespace {
-static constexpr Steinberg::int32 kStateBytes    = 32;
-static constexpr Steinberg::int32 kStateMagic    = 0x31455053; // 'SPE1' LE
-static constexpr Steinberg::uint16 kStateVersion = 1;
-static constexpr Steinberg::uint16 kStateNParams = 6;
+static constexpr Steinberg::int32  kStateMagic      = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::int32  kStateBytesV1    = 32;
+static constexpr Steinberg::int32  kStateBytesV2    = 36;
+static constexpr Steinberg::uint16 kStateVersionV1  = 1;
+static constexpr Steinberg::uint16 kStateVersionV2  = 2;
+static constexpr Steinberg::uint16 kStateNParamsV1  = 6;
+static constexpr Steinberg::uint16 kStateNParamsV2  = 7;
 } // namespace
 
 Steinberg::tresult PLUGIN_API
@@ -218,15 +224,15 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
     if (!state) return Steinberg::kInvalidArgument;
 
     // Control thread (Driver #2) — stderr logging permitted.
-    uint8_t buf[kStateBytes];
+    // Phase 1: read header (8 bytes)
+    uint8_t buf[kStateBytesV2];
     Steinberg::int32 numRead = 0;
-    Steinberg::tresult r = state->read(buf, kStateBytes, &numRead);
-    if (r != Steinberg::kResultOk || numRead < kStateBytes) {
-        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
-        return Steinberg::kResultOk; // retain defaults
+    Steinberg::tresult r = state->read(buf, 8, &numRead);
+    if (r != Steinberg::kResultOk || numRead < 8) {
+        std::fprintf(stderr, "VST3 setState: short header read, defaults retained\n");
+        return Steinberg::kResultOk;
     }
 
-    // Validate magic
     Steinberg::int32 magic = 0;
     std::memcpy(&magic, buf + 0, 4);
     if (magic != kStateMagic) {
@@ -234,29 +240,50 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
         return Steinberg::kResultOk;
     }
 
-    // Validate version
     Steinberg::uint16 version = 0;
     std::memcpy(&version, buf + 4, 2);
-    if (version != kStateVersion) {
-        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
-        return Steinberg::kResultOk;
-    }
-
-    // Validate param_count
     Steinberg::uint16 nparams = 0;
     std::memcpy(&nparams, buf + 6, 2);
-    if (nparams != kStateNParams) {
-        std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
-        return Steinberg::kResultOk;
-    }
 
-    // Restore 6 float normalized values and dispatch
-    for (int i = 0; i < 6; ++i) {
-        float v = 0.f;
-        std::memcpy(&v, buf + 8 + i * 4, 4);
-        norm_values_[i].store(v, std::memory_order_relaxed);
-        dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
-                            static_cast<Steinberg::Vst::ParamValue>(v));
+    // Phase 2: branch on version
+    if (version == kStateVersionV1 && nparams == kStateNParamsV1) {
+        // v1: read 24 bytes (6 floats)
+        numRead = 0;
+        r = state->read(buf + 8, 24, &numRead);
+        if (r != Steinberg::kResultOk || numRead < 24) {
+            std::fprintf(stderr, "VST3 setState: v1 payload short read, defaults retained\n");
+            return Steinberg::kResultOk;
+        }
+        for (int i = 0; i < 6; ++i) {
+            float v = 0.f;
+            std::memcpy(&v, buf + 8 + i * 4, 4);
+            norm_values_[i].store(v, std::memory_order_relaxed);
+            dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
+                                static_cast<Steinberg::Vst::ParamValue>(v));
+        }
+        // v1 fallback: bypass defaults to off
+        norm_values_[6].store(0.f, std::memory_order_relaxed);
+    } else if (version == kStateVersionV2 && nparams == kStateNParamsV2) {
+        // v2: read 28 bytes (7 floats)
+        numRead = 0;
+        r = state->read(buf + 8, 28, &numRead);
+        if (r != Steinberg::kResultOk || numRead < 28) {
+            std::fprintf(stderr, "VST3 setState: v2 payload short read, defaults retained\n");
+            return Steinberg::kResultOk;
+        }
+        for (int i = 0; i < 7; ++i) {
+            float v = 0.f;
+            std::memcpy(&v, buf + 8 + i * 4, 4);
+            norm_values_[i].store(v, std::memory_order_relaxed);
+            if (i < 6) {
+                dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
+                                    static_cast<Steinberg::Vst::ParamValue>(v));
+            }
+            // kBypass (i==6): audio path reads norm_values_[6] directly in process()
+        }
+    } else {
+        std::fprintf(stderr, "VST3 setState: version/nparams mismatch (v=%u n=%u), defaults retained\n",
+                     (unsigned)version, (unsigned)nparams);
     }
 
     return Steinberg::kResultOk;
@@ -267,29 +294,30 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
 {
     if (!state) return Steinberg::kInvalidArgument;
 
-    uint8_t buf[kStateBytes];
+    // Always write v2 (36 bytes)
+    uint8_t buf[kStateBytesV2];
 
     // Magic
     Steinberg::int32 magic = kStateMagic;
     std::memcpy(buf + 0, &magic, 4);
 
-    // Version
-    Steinberg::uint16 version = kStateVersion;
+    // Version = 2
+    Steinberg::uint16 version = kStateVersionV2;
     std::memcpy(buf + 4, &version, 2);
 
-    // Param count
-    Steinberg::uint16 nparams = kStateNParams;
+    // Param count = 7
+    Steinberg::uint16 nparams = kStateNParamsV2;
     std::memcpy(buf + 6, &nparams, 2);
 
-    // 6 float normalized values
-    for (int i = 0; i < 6; ++i) {
+    // 7 float normalized values (including bypass at index 6)
+    for (int i = 0; i < 7; ++i) {
         float v = norm_values_[i].load(std::memory_order_relaxed);
         std::memcpy(buf + 8 + i * 4, &v, 4);
     }
 
     Steinberg::int32 written = 0;
-    Steinberg::tresult r = state->write(buf, kStateBytes, &written);
-    return (r == Steinberg::kResultOk && written == kStateBytes)
+    Steinberg::tresult r = state->write(buf, kStateBytesV2, &written);
+    return (r == Steinberg::kResultOk && written == kStateBytesV2)
                ? Steinberg::kResultOk
                : Steinberg::kResultFalse;
 }
@@ -375,8 +403,8 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
             ParamValue       normValue    = 0.0;
             if (queue->getPoint(numPts - 1, sampleOffset, normValue) != Steinberg::kResultOk) continue;
 
-            // Step 2.4: atomic store before dispatch (stale reads by other params use this)
-            if (paramId < 6u) {
+            // Step 2.4: atomic store before dispatch
+            if (paramId < 7u) {
                 norm_values_[paramId].store(static_cast<float>(normValue),
                                             std::memory_order_relaxed);
             }
@@ -385,13 +413,32 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
         }
     }
 
-    // --- Audio: bypass or normal engine path ---
+    // --- Audio: bypass (dry pass-through) or normal engine path ---
+    // C2B postmortem S3: bypass reads norm_values_[6] (kBypass param).
+    // Dry pass-through: ch-by-ch identity copy up to min(in,out) channels;
+    // remaining output channels zeroed. Decision C option-α.
     if (data.numSamples > 0) {
-        if (bypass_active_.load(std::memory_order_acquire)) {
-            // Step 3.1 bypass: silence all output channels — RT-safe, alloc=0.
-            if (data.outputs && data.numOutputs > 0) {
-                Steinberg::Vst::AudioBusBuffers& outBus = data.outputs[0];
-                for (Steinberg::int32 ch = 0; ch < outBus.numChannels; ++ch) {
+        if (norm_values_[kBypass].load(std::memory_order_acquire) >= 0.5f) {
+            // Bypass: dry pass-through — RT-safe, alloc=0, no mutex.
+            if (data.inputs  && data.numInputs  > 0 &&
+                data.outputs && data.numOutputs > 0) {
+                const AudioBusBuffers& inBus  = data.inputs[0];
+                AudioBusBuffers&       outBus = data.outputs[0];
+                const Steinberg::int32 minCh =
+                    (inBus.numChannels < outBus.numChannels)
+                    ? inBus.numChannels : outBus.numChannels;
+
+                // Identity copy for min(in,out) channels
+                for (Steinberg::int32 ch = 0; ch < minCh; ++ch) {
+                    if (inBus.channelBuffers32  && inBus.channelBuffers32[ch] &&
+                        outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
+                        std::memcpy(outBus.channelBuffers32[ch],
+                                    inBus.channelBuffers32[ch],
+                                    static_cast<std::size_t>(data.numSamples) * sizeof(float));
+                    }
+                }
+                // Zero remaining output channels (if outBus has more than inBus)
+                for (Steinberg::int32 ch = minCh; ch < outBus.numChannels; ++ch) {
                     if (outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
                         std::memset(outBus.channelBuffers32[ch], 0,
                                     static_cast<std::size_t>(data.numSamples) * sizeof(float));
@@ -496,6 +543,10 @@ void SpatialEngineProcessor::dispatchParamChange(Steinberg::Vst::ParamID id,
         }
         case kRoomPreset:
             // Phase D6 deferral — MVP no audio side-effect, passthrough.
+            break;
+        case kBypass:
+            // No engine-side action — bypass is read directly in process()
+            // via norm_values_[kBypass]. Param is addressable for round-trip.
             break;
         default:
             break;

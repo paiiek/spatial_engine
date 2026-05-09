@@ -1,10 +1,9 @@
 // vst3/tests/test_vst3_host_fixture.cpp
-// Phase C C2 AM-7: in-process host fixture — 9 assertions.
-// NOTE-R3-C: IPluginFactory2 negative test included (assertion 8).
+// Phase C C2 AM-7: in-process host fixture.
+// C2B postmortem A7: MockComponentHandler added (~30-50 LOC).
+// Tests restartComponent(kParamValuesChanged) call after setComponentState.
 //
-// Build: compiled by vst3/tests/CMakeLists.txt, run via ctest.
-// This test links directly against the plugin objects (no dlopen) to avoid
-// needing a .so on the path for the in-process fixture.
+// Total assertions: ~25 (9 original + A7 host fixture block).
 
 #include "../SpatialEngineProcessor.hpp"
 #include "../SpatialEngineController.hpp"
@@ -13,13 +12,14 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
+#include "public.sdk/source/common/memorystream.h"
 
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <cmath>
 
-// GetPluginFactory is defined in SpatialEnginePluginFactory.cpp (compiled as
-// a separate TU in this test target — no #include of the .cpp here).
 extern "C" Steinberg::IPluginFactory* PLUGIN_API GetPluginFactory();
 
 using namespace Steinberg;
@@ -36,6 +36,47 @@ static int g_failures = 0;
             std::printf("PASS: %s\n", #expr); \
         } \
     } while(0)
+
+// ---------------------------------------------------------------------------
+// A7: MockComponentHandler — IComponentHandler stub that counts restartComponent calls.
+// ---------------------------------------------------------------------------
+class MockComponentHandler : public IComponentHandler
+{
+public:
+    std::atomic<int> restart_count{0};
+    int32            last_flags{0};
+    virtual ~MockComponentHandler() = default;
+
+    // FUnknown
+    tresult PLUGIN_API queryInterface(const TUID _iid, void** obj) SMTG_OVERRIDE
+    {
+        if (!obj) return kInvalidArgument;
+        if (FUnknownPrivate::iidEqual(_iid, IComponentHandler_iid)) {
+            addRef(); *obj = static_cast<IComponentHandler*>(this); return kResultOk;
+        }
+        if (FUnknownPrivate::iidEqual(_iid, FUnknown_iid)) {
+            addRef(); *obj = static_cast<IComponentHandler*>(this); return kResultOk;
+        }
+        *obj = nullptr; return kNoInterface;
+    }
+    uint32 PLUGIN_API addRef()  SMTG_OVERRIDE { return ++ref_; }
+    uint32 PLUGIN_API release() SMTG_OVERRIDE
+    { auto r=--ref_; if(r==0) delete this; return r; }
+
+    // IComponentHandler
+    tresult PLUGIN_API beginEdit(ParamID) SMTG_OVERRIDE { return kResultOk; }
+    tresult PLUGIN_API performEdit(ParamID, ParamValue) SMTG_OVERRIDE { return kResultOk; }
+    tresult PLUGIN_API endEdit(ParamID) SMTG_OVERRIDE { return kResultOk; }
+    tresult PLUGIN_API restartComponent(int32 flags) SMTG_OVERRIDE
+    {
+        last_flags = flags;
+        ++restart_count;
+        return kResultOk;
+    }
+
+private:
+    std::atomic<uint32> ref_{1};
+};
 
 int main()
 {
@@ -104,25 +145,79 @@ int main()
     ASSERT_OK(comp->setActive(false) == kResultOk);
     ASSERT_OK(comp->terminate() == kResultOk);
 
-    // ---- Assertion 8: NOTE-R3-C — IPluginFactory2 queryInterface -> kNotImplemented, out=null ----
+    // ---- Assertion 8: IPluginFactory2 queryInterface -> kNotImplemented/kNoInterface ----
     void* factory2 = reinterpret_cast<void*>(0xDEADBEEF); // poison
-    // IPluginFactory2 IID: 0x0007B650, 0xF24B4C0B, 0xA464EDB9, 0xF00B2ABB
     static constexpr TUID kIPluginFactory2_iid = INLINE_UID(0x0007B650, 0xF24B4C0B, 0xA464EDB9, 0xF00B2ABB);
     tresult qi2 = factory->queryInterface(kIPluginFactory2_iid, &factory2);
     ASSERT_OK(qi2 == kNotImplemented || qi2 == kNoInterface);
     ASSERT_OK(factory2 == nullptr);
 
-    // ---- Assertion 9: ref count reaches 0 after release ----
-    // ap was addRef'd by queryInterface — release it
+    // ---- Assertion 9: ref count sanity ----
     uint32 apRef = ap->release();
     (void)apRef;
-    // comp was addRef'd by createInstance (already has ref=1 from ctor, +1 from QI)
-    // We release the QI ref. comp still alive.
     uint32 compRef = comp->release();
-    // compRef should be 0 or 1 depending on internal accounting; just check it doesn't crash
-    ASSERT_OK(compRef < 0x10000u); // sanity: not garbage
+    ASSERT_OK(compRef < 0x10000u);
 
-    // Release factory ref from GetPluginFactory()
+    // ---- A7: MockComponentHandler + restartComponent verification ----
+    // Create controller directly (in-process), wire up MockComponentHandler,
+    // feed a v2 state stream, verify restartComponent(kParamValuesChanged) called once.
+    {
+        spe::vst3::SpatialEngineController ctrl;
+        ASSERT_OK(ctrl.initialize(nullptr) == kResultOk);
+
+        // Wire mock handler
+        MockComponentHandler* mock = new MockComponentHandler();
+        ASSERT_OK(ctrl.setComponentHandler(mock) == kResultOk);
+
+        // Build a v2 state stream (7 params, bypass=1.0)
+        static constexpr int kV2Bytes = 36;
+        uint8_t v2buf[kV2Bytes]{};
+        int32    magic   = 0x31455053; // 'SPE1'
+        uint16_t version = 2, nparams = 7;
+        std::memcpy(v2buf + 0, &magic,   4);
+        std::memcpy(v2buf + 4, &version, 2);
+        std::memcpy(v2buf + 6, &nparams, 2);
+        float vals[7] = {0.1f,0.2f,0.35f,0.5f,0.75f,0.9f,1.0f};
+        for (int i=0;i<7;++i) std::memcpy(v2buf+8+i*4,&vals[i],4);
+
+        MemoryStream* ms = new MemoryStream();
+        int32 written=0;
+        ms->write(v2buf, kV2Bytes, &written);
+        int64 res=0; ms->seek(0, IBStream::kIBSeekSet, &res);
+
+        ASSERT_OK(ctrl.setComponentState(ms) == kResultOk);
+        ms->release();
+
+        // restartComponent must have been called exactly once with kParamValuesChanged
+        ASSERT_OK(mock->restart_count.load() == 1);
+        ASSERT_OK(mock->last_flags == kParamValuesChanged);
+
+        // bypass param (id=6) must reflect 1.0
+        ASSERT_OK(std::fabs(ctrl.getParamNormalized(6) - 1.0) < 1e-5);
+
+        // param 0..5 restored correctly
+        ASSERT_OK(std::fabs(ctrl.getParamNormalized(0) - 0.1) < 1e-5);
+        ASSERT_OK(std::fabs(ctrl.getParamNormalized(5) - 0.9) < 1e-5);
+
+        // Now test v1 stream: bypass should revert to 0, restart called again
+        {
+            uint8_t v1buf[32]{};
+            int32 m2 = 0x31455053; uint16_t v1=1, n1=6;
+            std::memcpy(v1buf+0,&m2,4); std::memcpy(v1buf+4,&v1,2); std::memcpy(v1buf+6,&n1,2);
+            float v1vals[6]={0.2f,0.3f,0.4f,0.5f,0.6f,0.7f};
+            for(int i=0;i<6;++i) std::memcpy(v1buf+8+i*4,&v1vals[i],4);
+            MemoryStream* ms2=new MemoryStream(); ms2->write(v1buf,32,&written);
+            ms2->seek(0,IBStream::kIBSeekSet,&res);
+            ASSERT_OK(ctrl.setComponentState(ms2)==kResultOk);
+            ms2->release();
+        }
+        ASSERT_OK(mock->restart_count.load() == 2);
+        ASSERT_OK(std::fabs(ctrl.getParamNormalized(6) - 0.0) < 1e-5); // bypass reset
+
+        ctrl.terminate();
+        mock->release();
+    }
+
     factory->release();
 
     if (g_failures == 0) {

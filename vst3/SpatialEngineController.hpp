@@ -21,7 +21,7 @@ static constexpr Steinberg::TUID kSpatialEngineControllerUID = {
     (Steinberg::int8)0x34,(Steinberg::int8)0x45,(Steinberg::int8)0x56,(Steinberg::int8)0x67
 };
 
-static constexpr int kParamCount = 6;
+static constexpr int kParamCount = 7;
 
 class SpatialEngineController
     : public Steinberg::Vst::IEditController

@@ -59,6 +59,13 @@ jobs:
         run: |
           cd build_vst3_on
           ctest --output-on-failure -R "vst3_"
+      - name: Runtime sysdep gate (LD_DEBUG=libs, S4 Driver #1 belt-and-suspenders)
+        run: |
+          cd build_vst3_on
+          LD_DEBUG=libs ./vst3/tests/test_vst3_host_fixture 2>&1             | tee /tmp/ld_debug.out             | grep -cE 'libX11|libfreetype|libasound|libwebkit' > /tmp/sysdep_count.txt             || echo 0 > /tmp/sysdep_count.txt
+          n=$(cat /tmp/sysdep_count.txt)
+          echo "sysdep transitive runtime hits: $n"
+          test "$n" = "0"             || (echo "RUNTIME sysdep loaded — see /tmp/ld_debug.out"; head -50 /tmp/ld_debug.out; exit 1)
 
   off-byte-identical:
     # baseline 은 GHA ubuntu-24.04 runner image 호스트에 pin (run #4 의 sha256).

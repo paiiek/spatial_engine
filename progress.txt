@@ -1,0 +1,24 @@
+# Phase C2B postmortem sprint — progress
+
+## 2026-05-09 11:55 — Sprint 시작
+
+### 컨텍스트
+- v0.1.0 + Phase C2 Option B M2 PASS (commit d1261f1)
+- GHA CI green (run #5 ec2510d)
+- VST3 critic ACCEPT-WITH-RESERVATIONS — 4 MAJOR + 3 HIGH 부채
+- RALPLAN-DR Round 3 ACCEPT (Architect APPROVE + Critic ACCEPT)
+- Plan: .omc/plans/spatial-engine-phaseC-C2B-postmortem.md (526줄, 70 file:line, 12 amendments)
+
+### Critical path
+S1 (kIsBypass param) → S2 (state v2 + restartComponent) → S3 (dry pass-through) → S3.5 (OFF baseline gate) → S7 (bypass tests)
+Parallel branch: S5 (RT probe __libc_malloc) → S4 (LD_DEBUG CI) → S6 (state IO tests)
+Cross-file: A7 (IComponentHandler mock for S2 verification)
+
+### 기존 ctest baseline
+- 53 tests (vst3_ 7개), 100% PASS at commit ec2510d
+- vst3_host_fixture (21 assertion), audio_smoke, param_layout (10), param_roundtrip (24), dispatch_rt_safety (1), bypass (7), state_persist (12)
+
+### Sprint 목표
+- ctest 53 → 60+ tests, vst3_ 7개 PASS 유지
+- GHA vst3.yml 두 job green
+- DAW Reaper/Bitwig 사용자 hands-on 단계 진입 가능 상태

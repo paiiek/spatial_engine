@@ -28,7 +28,7 @@ static constexpr Steinberg::TUID kSpatialEngineProcessorUID = {
     (Steinberg::int8)0x23,(Steinberg::int8)0x34,(Steinberg::int8)0x45,(Steinberg::int8)0x56
 };
 
-// Param IDs for 6 parameters (Step 2 wiring, skeleton here)
+// Param IDs for 7 parameters (Step 2 wiring; kBypass added in C2B postmortem S1/S3)
 enum ParamId : Steinberg::Vst::ParamID {
     kPanAz        = 0,
     kPanEl        = 1,
@@ -36,6 +36,7 @@ enum ParamId : Steinberg::Vst::ParamID {
     kMasterGain   = 3,
     kAmbiOrder    = 4,
     kRoomPreset   = 5,
+    kBypass       = 6,
 };
 
 class SpatialEngineProcessor
@@ -97,12 +98,10 @@ private:
     Steinberg::int32 max_block_{512};
     bool active_{false};
 
-    // Step 3.1: bypass flag — set by setIoMode(kAdvanced), cleared by kSimple/kOfflineProcessing.
-    // RT-safe: atomic read in process(), non-RT write in setIoMode (control thread).
-    std::atomic<bool> bypass_active_{false};
-
-    // Atomic norm value snapshot for 6 params (Step 2.4 — RT-safe audio thread reads)
-    std::atomic<float> norm_values_[6]{};
+    // Atomic norm value snapshot for 7 params (Step 2.4 — RT-safe audio thread reads)
+    // norm_values_[6] = bypass (0.0=off, 1.0=on). Read directly in process().
+    // bypass_active_ removed in C2B postmortem S3 — norm_values_[6] is the single source of truth.
+    std::atomic<float> norm_values_[7]{};
 
     // Component ↔ Controller connection peer (host manages lifetime)
     Steinberg::Vst::IConnectionPoint* peer_{nullptr};
