@@ -202,6 +202,38 @@ Warning type codes (v0):
 
 ---
 
+## Ambisonics Control Commands (M2-HOA extended)
+
+Added in M2-HOA sprint (A-γ revision). Applies to the Ambisonics rendering path.
+
+### `/sys/ambi_order`
+
+Set the active Ambisonics decode order.
+
+```
+/sys/ambi_order  ,iii  <seq> <id> <order>
+```
+
+- `order`: integer 1, 2, or 3. Values outside this range are clamped.
+
+### `/sys/ambi_decoder_type`
+
+Select the Ambisonics decoder algorithm. Takes effect on next audio prepare cycle.
+
+```
+/sys/ambi_decoder_type  ,iii  <seq> <id> <type>
+```
+
+- `type`:
+  - `0` = PINV (Tikhonov pseudo-inverse, default, backward-compatible)
+  - `1` = MAX_RE (max-rE weighted; Zotter & Frank 2019 eq. 4.49)
+  - `2` = ALLRAD (All-Round Ambisonic Decoding via virtual loudspeakers; Zotter 2012)
+  - `3` = EPAD (Energy-Preserving Ambi Decoding, Jacobi SVD; Zotter & Frank 2012)
+  - `4` = IN_PHASE (in-phase decoder; Daniel 2000 §3.30)
+- Unknown values clamp to `0` (PINV).
+
+---
+
 ## Schema Versioning
 
 - `schema_version = 1` for all v0 packets.

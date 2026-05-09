@@ -31,6 +31,8 @@ struct QueuedCmd {
     float    output_value_db = 0.f;
     // SysAmbiOrder: 1, 2, or 3
     uint8_t  ambi_order      = 1;
+    // SysAmbiDecoderType: 0=PINV,1=MAX_RE,2=ALLRAD,3=EPAD,4=IN_PHASE
+    uint8_t  ambi_decoder_type = 0;
     // SysLtcChase (C1.d): 0 = chase disabled, 1 = chase enabled.
     // Kept POD (int32_t) so QueuedCmd remains trivially copyable on the
     // audio thread; no std::string anywhere.

@@ -334,6 +334,15 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         if (v > 3) v = 3;
         p.order = static_cast<uint8_t>(v);
         cmd.payload = p;
+    } else if (addr == "/sys/ambi_decoder_type") {
+        // HOA decoder type: 0=PINV,1=MAX_RE,2=ALLRAD,3=EPAD,4=IN_PHASE.
+        // Out-of-range clamps to PINV (mirrors /sys/ambi_order clamp pattern, AC-S4.2).
+        cmd.tag = CommandTag::SysAmbiDecoderType;
+        PayloadSysAmbiDecoderType p;
+        int v = getInt(0);
+        if (v < 0 || v > 4) v = 0;
+        p.type = static_cast<uint8_t>(v);
+        cmd.payload = p;
     } else if (addr == "/sys/ltc_chase") {
         cmd.tag = CommandTag::SysLtcChase;
         PayloadSysLtcChase p;
@@ -644,6 +653,12 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         addr = "/sys/ambi_order";
         auto& p = std::get<PayloadSysAmbiOrder>(cmd.payload);
         add_i(static_cast<int32_t>(p.order));
+        break;
+    }
+    case CommandTag::SysAmbiDecoderType: {
+        addr = "/sys/ambi_decoder_type";
+        auto& p = std::get<PayloadSysAmbiDecoderType>(cmd.payload);
+        add_i(static_cast<int32_t>(p.type));
         break;
     }
     case CommandTag::SysLtcChase: {

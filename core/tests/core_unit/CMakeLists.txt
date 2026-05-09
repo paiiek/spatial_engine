@@ -239,3 +239,20 @@ add_executable(test_p_sys_ltc_chase test_p_sys_ltc_chase.cpp)
 target_link_libraries(test_p_sys_ltc_chase PRIVATE spe_core)
 add_test(NAME p_sys_ltc_chase COMMAND test_p_sys_ltc_chase)
 
+# M2-HOA extended: 4 new decoder algorithm tests
+add_executable(test_p_ambi_decoder_max_re test_p_ambi_decoder_max_re.cpp)
+target_link_libraries(test_p_ambi_decoder_max_re PRIVATE spe_core)
+add_test(NAME p_ambi_decoder_max_re COMMAND test_p_ambi_decoder_max_re)
+
+add_executable(test_p_ambi_decoder_allrad test_p_ambi_decoder_allrad.cpp)
+target_link_libraries(test_p_ambi_decoder_allrad PRIVATE spe_core)
+add_test(NAME p_ambi_decoder_allrad COMMAND test_p_ambi_decoder_allrad)
+
+add_executable(test_p_ambi_decoder_epad test_p_ambi_decoder_epad.cpp)
+target_link_libraries(test_p_ambi_decoder_epad PRIVATE spe_core)
+add_test(NAME p_ambi_decoder_epad COMMAND test_p_ambi_decoder_epad)
+
+add_executable(test_p_ambi_decoder_in_phase test_p_ambi_decoder_in_phase.cpp)
+target_link_libraries(test_p_ambi_decoder_in_phase PRIVATE spe_core)
+add_test(NAME p_ambi_decoder_in_phase COMMAND test_p_ambi_decoder_in_phase)
+

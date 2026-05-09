@@ -40,8 +40,9 @@ enum class CommandTag : uint8_t {
     SysHandshake  = 0x10, // /sys/handshake — client sends schema_version
     SysAlgoSwap   = 0x11, // /sys/algo_swap — engine-wide default algo
     SysReset      = 0x12, // /sys/reset     — reset all objects to defaults
-    SysAmbiOrder  = 0x13, // /sys/ambi_order ,i {1|2|3} — Ambisonic decoding order
-    SysLtcChase   = 0x14, // /sys/ltc_chase ,i {0|1} — enable LTC chase from input ch 0
+    SysAmbiOrder       = 0x13, // /sys/ambi_order ,i {1|2|3} — Ambisonic decoding order
+    SysLtcChase        = 0x14, // /sys/ltc_chase ,i {0|1} — enable LTC chase from input ch 0
+    SysAmbiDecoderType = 0x15, // /sys/ambi_decoder_type ,i {0..4} — decoder algorithm
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -114,6 +115,12 @@ struct PayloadSysAmbiOrder {
 
 struct PayloadSysLtcChase {
     bool enable = false; // true → audio-thread feeds input ch 0 → LtcChase ring
+};
+
+// HOA decoder algorithm selector (M2 sprint).
+// 0=PINV,1=MAX_RE,2=ALLRAD,3=EPAD,4=IN_PHASE — clamps if out-of-range.
+struct PayloadSysAmbiDecoderType {
+    uint8_t type = 0;
 };
 
 struct PayloadHbPing {
@@ -226,6 +233,7 @@ using CommandPayload = std::variant<
     PayloadSysReset,
     PayloadSysAmbiOrder,
     PayloadSysLtcChase,
+    PayloadSysAmbiDecoderType,
     PayloadHbPing,
     PayloadHbPong,
     PayloadSceneSave,

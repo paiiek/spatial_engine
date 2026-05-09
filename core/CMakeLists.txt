@@ -129,6 +129,12 @@ set(SPE_CORE_SOURCES
     # F2: Ambisonics 1st-order encoder + M2 decoder
     src/ambi/AmbisonicEncoder.cpp
     src/ambi/AmbiDecoder.cpp
+    # M2-HOA: 4 new decoder algorithms (HOA Decoder Diversification sprint)
+    src/ambi/MaxREDecoder.cpp
+    src/ambi/InPhaseDecoder.cpp
+    src/ambi/EPADDecoder.cpp
+    src/ambi/AllRADDecoder.cpp
+    src/ambi/AllRADTDesigns.cpp
 )
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})

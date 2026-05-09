@@ -76,6 +76,11 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.ambi_order = p->order;
                 }
                 break;
+            case ipc::CommandTag::SysAmbiDecoderType:
+                if (auto* p = std::get_if<ipc::PayloadSysAmbiDecoderType>(&cmd.payload)) {
+                    qc.ambi_decoder_type = p->type;
+                }
+                break;
             case ipc::CommandTag::SysLtcChase:
                 if (auto* p = std::get_if<ipc::PayloadSysLtcChase>(&cmd.payload)) {
                     qc.ltc_chase_enable = p->enable ? 1 : 0;
@@ -165,6 +170,7 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         vbap_.prepareToPlay(layout_, sample_rate);
         dbap_.prepareToPlay(layout_, sample_rate);
         wfs_.prepareToPlay(layout_, sample_rate);
+        ambisonic_.applyPendingDecoderTypeChange(); // apply any pending type before prepare
         ambisonic_.prepareToPlay(layout_, sample_rate);
         const int n_spk = vbap_.numSpeakers();
         const size_t total = static_cast<size_t>(n_spk) * max_block_size;
@@ -318,6 +324,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 break;
             case ipc::CommandTag::SysAmbiOrder:
                 ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
+                break;
+            case ipc::CommandTag::SysAmbiDecoderType:
+                ambisonic_.setDecoderType(static_cast<int>(qc.ambi_decoder_type));
                 break;
             case ipc::CommandTag::SysLtcChase:
                 ltc_chase_enable_.store(qc.ltc_chase_enable != 0,

@@ -18,6 +18,8 @@ Schema version handshake must complete before any object commands are accepted.
 | `/sys/handshake`   | `,iii`        | seq, id, schema_version(uint16 as int)       | Client declares schema version. Engine replies OK or mismatch. |
 | `/sys/algo_swap`   | `,iii`        | seq, id, algo(0=VBAP,1=WFS,2=DBAP)          | Set engine-wide default rendering algorithm.        |
 | `/sys/reset`       | `,ii`         | seq, id                                      | Reset all object states to defaults.                |
+| `/sys/ambi_order`  | `,iii`        | seq, id, order(1..3)                         | Set Ambisonics decode order (clamped 1..3).         |
+| `/sys/ambi_decoder_type` | `,iii`  | seq, id, type(0=PINV,1=MAX_RE,2=ALLRAD,3=EPAD,4=IN_PHASE) | Select Ambisonic decoder algorithm. |
 | `/obj/move`        | `,iifff`      | seq, id, obj_id, az_rad, el_rad, dist_m      | Set spatial position of one object.                 |
 | `/obj/gain`        | `,iiif`       | seq, id, obj_id, gain                        | Set per-object gain scalar (linear, 0.0–2.0).       |
 | `/obj/active`      | `,iiii`       | seq, id, obj_id, active(0=off,1=on)          | Enable or disable an object.                        |

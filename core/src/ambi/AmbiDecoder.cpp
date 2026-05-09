@@ -1,21 +1,18 @@
 // core/src/ambi/AmbiDecoder.cpp
 //
-// Pseudo-inverse mode-matching decoder for Ambisonics orders 1..3.
+// Multi-algorithm Ambisonics decoder for orders 1..3.
+// Default: Tikhonov-regularised pseudo-inverse (PINV).
+// Additional: MAX_RE, ALLRAD, EPAD, IN_PHASE (HOA Decoder Diversification sprint).
 //
-// For each order build the encoding matrix E (K × S) where column s holds
-// the K real spherical-harmonic coefficients (ACN, SN3D-consistent) at the
-// position of speaker s. The decoding matrix D (S × K) is the Tikhonov-
-// regularised left pseudo-inverse:
-//
-//   D = (E^T E + λI_S)^{-1} E^T
-//
-// This formulation works in both regimes (K ≤ S and K > S) and tolerates
-// rank-deficient layouts (e.g. horizontal-only rigs where Y_1^0 = sin(el) is
-// identically zero).  Audio-thread decode() is a plain S×K matrix-vector
-// multiply per sample.
+// Audio-thread decode() is a plain S×K matrix-vector multiply per sample —
+// identical regardless of DecoderType (all type-specific logic in prepare()).
 
 #include "ambi/AmbiDecoder.h"
 #include "ambi/AmbisonicEncoder.h"
+#include "ambi/MaxREDecoder.hpp"
+#include "ambi/AllRADDecoder.hpp"
+#include "ambi/EPADDecoder.hpp"
+#include "ambi/InPhaseDecoder.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -35,7 +32,6 @@ static void solveSPD(int S, int K,
                      std::vector<double>& G,
                      std::vector<double>& Et) noexcept {
     for (int i = 0; i < S; ++i) {
-        // Pivot: max |G[r][i]| for r ≥ i.
         int piv = i;
         double piv_abs = std::abs(G[static_cast<size_t>(i) * S + i]);
         for (int r = i + 1; r < S; ++r) {
@@ -47,7 +43,7 @@ static void solveSPD(int S, int K,
             for (int c = 0; c < K; ++c) std::swap(Et[static_cast<size_t>(i)*K+c], Et[static_cast<size_t>(piv)*K+c]);
         }
         const double diag = G[static_cast<size_t>(i)*S+i];
-        if (std::abs(diag) < 1e-18) return; // numerical disaster; caller's λ should prevent
+        if (std::abs(diag) < 1e-18) return;
         const double inv = 1.0 / diag;
         for (int c = 0; c < S; ++c) G[static_cast<size_t>(i)*S+c]  *= inv;
         for (int c = 0; c < K; ++c) Et[static_cast<size_t>(i)*K+c] *= inv;
@@ -63,28 +59,26 @@ static void solveSPD(int S, int K,
 
 } // namespace
 
-void AmbiDecoder::prepare(const geometry::SpeakerLayout& layout) {
-    num_speakers_ = static_cast<int>(layout.speakers.size());
-    if (num_speakers_ <= 0) return;
-    for (int order = 1; order <= MAX_ORDER; ++order) {
-        buildDecoderForOrder(layout, order);
-    }
-}
+// ---- S0.5: buildEncodingMatrixE — single source of truth for E construction --
+// E[k * S + s] = SH_k(speaker s), ACN ordering, SN3D normalisation.
+// ACN re-map for 1st order: AmbiCoeffs1st {W,X,Y,Z} → ACN {W,Y,Z,X}
+//   E[1]=c.Y, E[2]=c.Z, E[3]=c.X  — do NOT "fix" this, it is correct ACN.
 
-void AmbiDecoder::buildDecoderForOrder(const geometry::SpeakerLayout& layout, int order) {
-    const int S = num_speakers_;
+void AmbiDecoder::buildEncodingMatrixE(const geometry::SpeakerLayout& layout,
+                                        int order,
+                                        std::vector<double>& E) {
+    const int S = static_cast<int>(layout.speakers.size());
     const int K = kK[order - 1];
+    E.assign(static_cast<size_t>(K) * S, 0.0);
 
-    // E[k * S + s] = SH_k(speaker s).  ACN ordering, SN3D normalisation.
-    std::vector<double> E(static_cast<size_t>(K) * S, 0.0);
     for (int s = 0; s < S; ++s) {
-        const auto& spk  = layout.speakers[static_cast<size_t>(s)];
+        const auto& spk   = layout.speakers[static_cast<size_t>(s)];
         const float horiz = std::sqrt(spk.x * spk.x + spk.z * spk.z);
         const float az    = std::atan2(spk.x, spk.z);
         const float el    = std::atan2(spk.y, horiz);
         if (order == 1) {
             const auto c = AmbisonicEncoder::encode_1st_order(az, el);
-            // ACN 0=W, 1=Y_1^-1 (legacy .Y), 2=Y_1^0 (legacy .Z), 3=Y_1^1 (legacy .X)
+            // ACN 0=W, 1=Y_1^{-1}(legacy .Y), 2=Y_1^0(legacy .Z), 3=Y_1^1(legacy .X)
             E[0 * S + s] = c.W;
             E[1 * S + s] = c.Y;
             E[2 * S + s] = c.Z;
@@ -92,52 +86,110 @@ void AmbiDecoder::buildDecoderForOrder(const geometry::SpeakerLayout& layout, in
         } else if (order == 2) {
             const auto c = AmbisonicEncoder::encode_2nd_order(az, el);
             for (int k = 0; k < 9; ++k) E[static_cast<size_t>(k) * S + s] = c[static_cast<size_t>(k)];
-        } else { // order == 3
+        } else {
             const auto c = AmbisonicEncoder::encode_3rd_order(az, el);
             for (int k = 0; k < 16; ++k) E[static_cast<size_t>(k) * S + s] = c[static_cast<size_t>(k)];
         }
     }
+}
 
-    // G = E^T E   (S × S)
+// ---- PINV helper: Tikhonov pseudo-inverse decode matrix from E --------------
+
+static void buildPinvMatrix(int S, int K,
+                             const std::vector<double>& E,
+                             std::vector<float>& M_out) {
     std::vector<double> G(static_cast<size_t>(S) * S, 0.0);
-    for (int s1 = 0; s1 < S; ++s1) {
+    for (int s1 = 0; s1 < S; ++s1)
         for (int s2 = 0; s2 < S; ++s2) {
             double sum = 0.0;
-            for (int k = 0; k < K; ++k) {
-                sum += E[static_cast<size_t>(k) * S + s1] *
-                       E[static_cast<size_t>(k) * S + s2];
-            }
-            G[static_cast<size_t>(s1) * S + s2] = sum;
+            for (int k = 0; k < K; ++k)
+                sum += E[static_cast<size_t>(k)*S+s1] * E[static_cast<size_t>(k)*S+s2];
+            G[static_cast<size_t>(s1)*S+s2] = sum;
         }
-    }
 
-    // Tikhonov regularisation: λ = max(1e-9, 1e-6 * trace/S).  Keeps the
-    // matrix solvable when E is rank-deficient (degenerate layouts) without
-    // perturbing well-conditioned cases.
     double trace = 0.0;
-    for (int s = 0; s < S; ++s) trace += G[static_cast<size_t>(s) * S + s];
+    for (int s = 0; s < S; ++s) trace += G[static_cast<size_t>(s)*S+s];
     const double lambda = std::max(1e-9, 1e-6 * trace / std::max(S, 1));
-    for (int s = 0; s < S; ++s) G[static_cast<size_t>(s) * S + s] += lambda;
+    for (int s = 0; s < S; ++s) G[static_cast<size_t>(s)*S+s] += lambda;
 
-    // RHS = E^T arranged as (S × K) so solveSPD produces M = G^{-1} E^T.
     std::vector<double> Et(static_cast<size_t>(S) * K, 0.0);
-    for (int s = 0; s < S; ++s) {
-        for (int k = 0; k < K; ++k) {
-            Et[static_cast<size_t>(s) * K + k] = E[static_cast<size_t>(k) * S + s];
-        }
-    }
+    for (int s = 0; s < S; ++s)
+        for (int k = 0; k < K; ++k)
+            Et[static_cast<size_t>(s)*K+k] = E[static_cast<size_t>(k)*S+s];
 
     solveSPD(S, K, G, Et);
 
+    M_out.assign(static_cast<size_t>(S) * static_cast<size_t>(K), 0.f);
+    for (int s = 0; s < S; ++s)
+        for (int k = 0; k < K; ++k)
+            M_out[static_cast<size_t>(s)*K+k] = static_cast<float>(Et[static_cast<size_t>(s)*K+k]);
+}
+
+// ---- prepare / buildDecoderForOrder ----------------------------------------
+
+void AmbiDecoder::prepare(const geometry::SpeakerLayout& layout) {
+    num_speakers_ = static_cast<int>(layout.speakers.size());
+    if (num_speakers_ <= 0) return;
+    for (int order = 1; order <= MAX_ORDER; ++order)
+        buildDecoderForOrder(layout, order);
+}
+
+void AmbiDecoder::buildDecoderForOrder(const geometry::SpeakerLayout& layout, int order) {
+    const int S = num_speakers_;
+    const int K = kK[order - 1];
+
+    std::vector<double> E;
+    buildEncodingMatrixE(layout, order, E);  // S0.5 single source of truth
+
     auto& M = decode_matrices_[static_cast<size_t>(order - 1)];
-    M.assign(static_cast<size_t>(S) * static_cast<size_t>(K), 0.f);
-    for (int s = 0; s < S; ++s) {
-        for (int k = 0; k < K; ++k) {
-            M[static_cast<size_t>(s) * K + k] =
-                static_cast<float>(Et[static_cast<size_t>(s) * K + k]);
-        }
+
+    // 5-way dispatch. All paths produce S×K float matrix in M.
+    // decode() reads M unchanged — no type_ switch there (Principle 4).
+    switch (type_) {
+    default:               // unknown value → clamp to PINV (AC-S3.4)
+    case DecoderType::PINV:
+        buildPinvMatrix(S, K, E, M);
+        break;
+
+    case DecoderType::MAX_RE: {
+        // PINV base, then SH-side pre-multiply by max-rE weights g_l (M2HOA-Q2 decision).
+        buildPinvMatrix(S, K, E, M);
+        const auto w = MaxREDecoder::compute_max_re_weights(order);
+        for (int s = 0; s < S; ++s)
+            for (int k = 0; k < K; ++k) {
+                const int l = static_cast<int>(std::sqrt(static_cast<double>(k)));
+                M[static_cast<size_t>(s)*K+k] *= w[static_cast<size_t>(l)];
+            }
+        break;
+    }
+
+    case DecoderType::ALLRAD:
+        M = AllRADDecoder::build_allrad_matrix(order, layout);
+        break;
+
+    case DecoderType::EPAD:
+        M = EPADDecoder::build_epad_matrix(order, layout);
+        break;
+
+    case DecoderType::IN_PHASE: {
+        // PINV base, then SH-side pre-multiply by in-phase weights g_l (M2HOA-Q2).
+        buildPinvMatrix(S, K, E, M);
+        const auto w = InPhaseDecoder::compute_in_phase_weights(order);
+        for (int s = 0; s < S; ++s)
+            for (int k = 0; k < K; ++k) {
+                const int l = static_cast<int>(std::sqrt(static_cast<double>(k)));
+                M[static_cast<size_t>(s)*K+k] *= w[static_cast<size_t>(l)];
+            }
+        break;
+    }
     }
 }
+
+// ---- decode (audio thread — RT-safe, no allocation) ------------------------
+//
+// CONTROL THREAD ONLY responsibility: do NOT add any switch on type_ here.
+// All decoder-type-specific logic lives in prepare() / buildDecoderForOrder().
+// See HOA Decoder Diversification plan Principles 2 and 4.
 
 void AmbiDecoder::decode(int order, const float* const* sh_planar,
                           int num_samples, float* out_interleaved) const noexcept
