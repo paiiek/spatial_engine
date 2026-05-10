@@ -57,3 +57,38 @@ Cross-file: A7 (IComponentHandler mock for S2 verification)
 DAW hands-on confirmation: load Reaper or Bitwig, instantiate spatial_engine_vst3.so,
 verify bypass button routes dry signal (not silence), verify 7 parameters visible
 (Pan Az, Pan El, Source Width, Master Gain, Ambi Order, Room Preset, Bypass).
+
+---
+
+# M2-HOA Extended Sprint (A-γ revision) — 2026-05-10
+
+## Sprint 결과
+
+### 구현 완료 항목
+- S0.5: buildEncodingMatrixE() 단일 소스로 리팩터
+- S1: MaxREDecoder (Legendre-root, M2HOA-Q7 해결: g_1(N=1)=0.5774)
+- S2: AllRADDecoder (t-design quadrature projection, O(n×K))
+- S2.5: EPADDecoder (two-sided Jacobi SVD, cond>1e10 fallback)
+- S2.7: InPhaseDecoder (Daniel 2000 §3.30, golden vectors 검증)
+- S3: 5-value DecoderType enum, RT-safe dispatch
+- S4: OSC /sys/ambi_decoder_type i {0..4}
+- S4.5: AmbisonicRenderer plumbing (setDecoderType + applyPendingDecoderTypeChange)
+- S5: 4 ctest fixtures (total 51 tests, 100% pass)
+- S6: OFF baseline re-pin (.ci/off_baseline.*.sha256 업데이트)
+
+### 검증 결과
+- ctest: 51/51 PASS (100%)
+- AllRAD: t-design projection으로 O(n³)→O(n×K) (5200pt 타임아웃 해결)
+- MaxRE N=3 root 수식 수정: (30+√480)/70 (이전 오류: (15+√105)/35)
+- GHA run #8 (316f920): vst3-build-and-host-fixture=SUCCESS, off-byte-identical=byte-mismatch
+  → step 7 symbol-level=SUCCESS (symbols stable across re-pin)
+  → step 6 byte-level=FAILURE → step summary로 GHA-canonical bytes 회수 후 .ci/off_baseline.bytes.sha256 재re-pin
+- 최종 GHA bytes (ubuntu-24.04 runner):
+  - core/libspe_core.a: 25f1f4b2…2e15b
+  - core/spatial_engine_core: b0663c5e…6e8c
+
+### 커밋
+- feat(M2-hoa-extended): e5924da
+- chore(off-baseline): 8c0ca2d (로컬 hash 기반 re-pin — GHA와 불일치)
+- ci(off-baseline): 316f920 (step summary echo 추가 — public re-pin 경로 확보)
+- chore(off-baseline): GHA-canonical bytes 재re-pin (symbols 변동 없음)

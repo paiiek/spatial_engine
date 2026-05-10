@@ -18,6 +18,7 @@ scripts/_build/
 # Out-of-source baseline builds (Phase C C2 §15.B dual-gate)
 /build_off*/
 /build_vst3*/
+/build_full_check*/
 
 # OMC session/runtime state (plans/ and specs/ are tracked; state/ is not)
 # Use **/ prefix so nested .omc/ dirs (e.g. ui/.omc/) are also excluded.
