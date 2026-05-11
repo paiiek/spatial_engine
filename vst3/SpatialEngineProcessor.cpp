@@ -746,9 +746,16 @@ SpatialEngineProcessor::connect(Steinberg::Vst::IConnectionPoint* other)
     ctrl_for_reverse_path_ = nullptr;
     if (other) {
         void* ctrl_ptr = nullptr;
-        if (other->queryInterface(kSpatialEngineControllerUID, &ctrl_ptr)
+        // Query IEditController_iid (not the class UID) — the controller's
+        // queryInterface only registers interface IIDs, not class IIDs.
+        // Cast chain: void* → IEditController* → SpatialEngineController*
+        // (safe because SpatialEngineController is the only IEditController
+        //  in this binary and the host wires only matching processor/controller
+        //  pairs).
+        if (other->queryInterface(Steinberg::Vst::IEditController_iid, &ctrl_ptr)
                 == Steinberg::kResultOk && ctrl_ptr) {
-            ctrl_for_reverse_path_ = static_cast<SpatialEngineController*>(ctrl_ptr);
+            auto* as_ctrl = static_cast<Steinberg::Vst::IEditController*>(ctrl_ptr);
+            ctrl_for_reverse_path_ = static_cast<SpatialEngineController*>(as_ctrl);
             // Release the ref we just grabbed — we hold a raw non-owning pointer.
             ctrl_for_reverse_path_->release();
         }

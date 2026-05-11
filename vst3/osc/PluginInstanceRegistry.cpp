@@ -8,11 +8,12 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
 #include <sys/file.h>   // flock
-#include <sys/stat.h>   // mkdir, open
+#include <sys/stat.h>   // mkdir, open, lstat
 #include <fcntl.h>
 #include <unistd.h>
 #include <thread>
@@ -45,7 +46,7 @@ static void ensureDir(const std::string& file_path)
     for (size_t i = 1; i <= dir.size(); ++i) {
         if (i == dir.size() || dir[i] == '/') {
             std::string sub = dir.substr(0, i);
-            ::mkdir(sub.c_str(), 0755); // ignore EEXIST
+            ::mkdir(sub.c_str(), 0700); // ignore EEXIST; 0700 per ADR 0011 §security
         }
     }
 }
@@ -67,11 +68,48 @@ std::string PluginInstanceRegistry::readBootId()
 // PluginInstanceRegistry::pidAlive
 // ---------------------------------------------------------------------------
 
-bool PluginInstanceRegistry::pidAlive(pid_t pid)
+uint64_t PluginInstanceRegistry::readPidStarttime(pid_t pid)
 {
-    std::string path = "/proc/" + std::to_string(pid) + "/comm";
+    std::string path = "/proc/" + std::to_string(pid) + "/stat";
     std::ifstream f(path);
-    return f.is_open() && f.peek() != std::ifstream::traits_type::eof();
+    if (!f.is_open()) return 0;
+    // /proc/{pid}/stat fields are space-separated.
+    // Field 1 = pid, field 2 = comm (may contain spaces, wrapped in parens),
+    // field 22 = starttime (0-indexed field 21).
+    // Strategy: skip past the closing ')' of the comm field, then count tokens.
+    std::string line;
+    if (!std::getline(f, line)) return 0;
+    // Find the last ')' that closes the comm field.
+    size_t comm_end = line.rfind(')');
+    if (comm_end == std::string::npos) return 0;
+    // After ')' the remaining fields start (space-separated).
+    // Fields after comm: [3]=state, [4]=ppid, ..., [22]=starttime (0-indexed from field 3 = index 0).
+    // We need the 20th token after comm (0-indexed: token 19).
+    const char* p = line.c_str() + comm_end + 1;
+    int token_idx = 0;
+    uint64_t starttime = 0;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '\0') break;
+        if (token_idx == 19) { // 20th token = starttime
+            char* ep = nullptr;
+            starttime = std::strtoull(p, &ep, 10);
+            break;
+        }
+        while (*p && *p != ' ' && *p != '\t') ++p;
+        ++token_idx;
+    }
+    return starttime;
+}
+
+bool PluginInstanceRegistry::pidAlive(pid_t pid, uint64_t stored_starttime)
+{
+    uint64_t current_starttime = readPidStarttime(pid);
+    if (current_starttime == 0) return false;  // process does not exist
+    if (stored_starttime != 0 && current_starttime != stored_starttime) {
+        return false;  // PID reused: different process
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +149,7 @@ std::string PluginInstanceRegistry::emitJson(const std::vector<InstanceEntry>& e
           << "      \"port\": "        << e.port        << ",\n"
           << "      \"pid\": "         << static_cast<long>(e.pid) << ",\n"
           << "      \"boot_id\": \""   << jsonEscapeStr(e.boot_id) << "\",\n"
+          << "      \"starttime\": "   << e.starttime   << ",\n"
           << "      \"schema_version\": " << e.schema_version << "\n"
           << "    }";
         if (i + 1 < entries.size()) o << ",";
@@ -257,6 +296,7 @@ bool PluginInstanceRegistry::parseJson(const std::string& json,
                         else if (field == "port")           e.port           = static_cast<uint16_t>(ival);
                         else if (field == "pid")            e.pid            = static_cast<pid_t>(ival);
                         else if (field == "schema_version") e.schema_version = static_cast<uint64_t>(ival);
+                        else if (field == "starttime")      e.starttime      = static_cast<uint64_t>(ival);
                         // unknown fields: ignore
                     }
                 }
@@ -287,9 +327,9 @@ bool PluginInstanceRegistry::atomicWrite(const std::string& registry_path,
     ensureDir(registry_path);
 
     // Open (or create) the final path file just for flock purposes.
-    // We use O_CREAT|O_RDONLY so existing content is preserved while locked.
+    // Mode 0600: registry file is private to this user (ADR 0011 §security).
     int lock_fd = ::open(registry_path.c_str(),
-                         O_RDWR | O_CREAT, 0644);
+                         O_RDWR | O_CREAT | O_NOFOLLOW, 0600);
     if (lock_fd < 0) {
         std::fprintf(stderr, "[PluginInstanceRegistry] open lock fd failed: %s\n",
                      std::strerror(errno));
@@ -311,17 +351,28 @@ bool PluginInstanceRegistry::atomicWrite(const std::string& registry_path,
         return false;
     }
 
-    // Write to tmpfile in same directory.
-    std::string tmp_path = registry_path + ".tmp." + std::to_string(static_cast<long>(::getpid()));
-    int tmp_fd = ::open(tmp_path.c_str(),
-                        O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // Write to tmpfile in same directory using mkstemp for randomized suffix.
+    // O_EXCL is implicit in mkstemp; file is created with mode 0600 (secure by default).
+    // Template must reside in same directory as registry_path to keep rename atomic.
+    auto last_slash = registry_path.rfind('/');
+    std::string tmp_dir = (last_slash != std::string::npos)
+        ? registry_path.substr(0, last_slash)
+        : ".";
+    std::string tmp_tmpl = tmp_dir + "/.reg_tmp_XXXXXX";
+    // mkstemp requires a writable char buffer.
+    std::vector<char> tmp_buf(tmp_tmpl.begin(), tmp_tmpl.end());
+    tmp_buf.push_back('\0');
+    int tmp_fd = ::mkstemp(tmp_buf.data());
     if (tmp_fd < 0) {
-        std::fprintf(stderr, "[PluginInstanceRegistry] open tmp failed: %s\n",
+        std::fprintf(stderr, "[PluginInstanceRegistry] mkstemp failed: %s\n",
                      std::strerror(errno));
         ::flock(lock_fd, LOCK_UN);
         ::close(lock_fd);
         return false;
     }
+    // mkstemp creates with mode 0600 on Linux; set explicitly to be certain.
+    ::fchmod(tmp_fd, 0600);
+    std::string tmp_path(tmp_buf.data());
 
     const char* buf = json_content.c_str();
     size_t remaining = json_content.size();
@@ -342,6 +393,21 @@ bool PluginInstanceRegistry::atomicWrite(const std::string& registry_path,
 
     ::fsync(tmp_fd);
     ::close(tmp_fd);
+
+    // Defense against TOCTOU symlink attack: reject if target is a symlink.
+    // This is inherently best-effort (there is a window between lstat and rename),
+    // but it eliminates the trivial persistent-symlink attack vector (ADR 0011 §H1).
+    {
+        struct stat st{};
+        if (::lstat(registry_path.c_str(), &st) == 0 && S_ISLNK(st.st_mode)) {
+            std::fprintf(stderr,
+                "[PluginInstanceRegistry] registry path is a symlink, refusing rename\n");
+            ::unlink(tmp_path.c_str());
+            ::flock(lock_fd, LOCK_UN);
+            ::close(lock_fd);
+            return false;
+        }
+    }
 
     // Atomic rename.
     if (::rename(tmp_path.c_str(), registry_path.c_str()) != 0) {
@@ -372,6 +438,7 @@ InstanceEntry PluginInstanceRegistry::registerSelf(uint16_t requested_port,
     const std::string boot_id = readBootId();
     const pid_t       my_pid  = ::getpid();
     const uint32_t    my_id   = ++g_instance_id_counter;
+    const uint64_t    my_starttime = readPidStarttime(my_pid);
 
     // Read existing entries.
     std::string existing_json = readFile(path);
@@ -394,11 +461,11 @@ InstanceEntry PluginInstanceRegistry::registerSelf(uint16_t requested_port,
         }
     }
 
-    // Writer-side GC: drop dead PIDs and stale boot_ids.
+    // Writer-side GC: drop dead PIDs (with starttime check) and stale boot_ids.
     std::vector<InstanceEntry> fresh;
     for (const auto& e : entries) {
-        if (!pidAlive(e.pid)) continue;          // (a) dead PID
-        if (e.boot_id != boot_id) continue;      // (b) stale boot_id
+        if (!pidAlive(e.pid, e.starttime)) continue; // (a) dead or reused PID
+        if (e.boot_id != boot_id) continue;           // (b) stale boot_id
         fresh.push_back(e);
     }
 
@@ -406,7 +473,7 @@ InstanceEntry PluginInstanceRegistry::registerSelf(uint16_t requested_port,
     // resolves the port by actually binding the socket).  For now, accept the
     // requested_port as resolved; SpatialEnginePluginUdp will call registerSelf
     // with the already-bound port.
-    InstanceEntry my_entry{my_id, requested_port, my_pid, boot_id, kSupportedSchemaVersion};
+    InstanceEntry my_entry{my_id, requested_port, my_pid, boot_id, kSupportedSchemaVersion, my_starttime};
     fresh.push_back(my_entry);
 
     std::string new_json = emitJson(fresh);
@@ -437,7 +504,7 @@ void PluginInstanceRegistry::unregisterSelf(uint32_t instance_id)
     std::vector<InstanceEntry> fresh;
     for (const auto& e : entries) {
         if (e.instance_id == instance_id && e.pid == my_pid) continue; // remove self
-        if (!pidAlive(e.pid)) continue;
+        if (!pidAlive(e.pid, e.starttime)) continue;
         if (e.boot_id != boot_id) continue;
         fresh.push_back(e);
     }

@@ -100,6 +100,34 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// OSC packet builder: /adm/obj/N/mute ,i <value>  (1=muted, 0=unmuted)
+// ---------------------------------------------------------------------------
+static std::vector<uint8_t> buildOscMute(int obj_id, int muted)
+{
+    char addr[64];
+    std::snprintf(addr, sizeof(addr), "/adm/obj/%d/mute", obj_id);
+    const char type_tag[] = ",i";
+
+    std::vector<uint8_t> pkt;
+    auto appendPadded = [&](const char* s) {
+        size_t len = std::strlen(s) + 1;
+        for (size_t i = 0; i < len; ++i)
+            pkt.push_back(static_cast<uint8_t>(s[i]));
+        while (pkt.size() % 4 != 0)
+            pkt.push_back(0);
+    };
+    appendPadded(addr);
+    appendPadded(type_tag);
+
+    uint32_t iv = static_cast<uint32_t>(muted);
+    pkt.push_back((iv >> 24) & 0xFF);
+    pkt.push_back((iv >> 16) & 0xFF);
+    pkt.push_back((iv >>  8) & 0xFF);
+    pkt.push_back((iv >>  0) & 0xFF);
+    return pkt;
+}
+
+// ---------------------------------------------------------------------------
 // OSC packet builder: /adm/obj/N/azim ,f <value>
 // ---------------------------------------------------------------------------
 static std::vector<uint8_t> buildOscAzim(int obj_id, float az_deg)
@@ -288,11 +316,49 @@ int main()
                      p99, kP99LimitMs);
     }
 
-    udp.stop();
-    ctrl.terminate();
-
     assert(p50_pass && "A.7: p50 latency exceeds 5ms limit");
     assert(p99_pass && "A.7: p99 latency exceeds 30ms limit");
+
+    // -----------------------------------------------------------------------
+    // kMute round-trip test: send /adm/obj/1/mute 1 → expect performEdit(7, 1.0)
+    // -----------------------------------------------------------------------
+    std::printf("[test_vst3_reverse_path] kMute round-trip test...\n");
+    {
+        // Snapshot record count before mute test.
+        size_t before_count = fake_handler.recordCount();
+
+        int mute_send_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+        assert(mute_send_fd >= 0);
+
+        auto mute_pkt = buildOscMute(1, 1);
+        ::sendto(mute_send_fd, mute_pkt.data(), mute_pkt.size(), 0,
+                 reinterpret_cast<const struct sockaddr*>(&dest), sizeof(dest));
+        ::close(mute_send_fd);
+
+        // Give drain thread time to process (100ms is sufficient).
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        ctrl.drainParamEdits();
+
+        auto all_records = fake_handler.copyRecords();
+        bool found_mute = false;
+        for (size_t i = before_count; i < all_records.size(); ++i) {
+            if (all_records[i].param_id == 7 && all_records[i].value == 1.0) {
+                found_mute = true;
+                break;
+            }
+        }
+        if (!found_mute) {
+            std::fprintf(stderr,
+                "[test_vst3_reverse_path] FAIL kMute: performEdit(7, 1.0) not found "
+                "(new records since snapshot: %zu)\n",
+                all_records.size() - before_count);
+        }
+        assert(found_mute && "kMute round-trip: performEdit(7, 1.0) must be called");
+        std::printf("[test_vst3_reverse_path] kMute round-trip PASS\n");
+    }
+
+    udp.stop();
+    ctrl.terminate();
 
     std::printf("[test_vst3_reverse_path] PASS — p50=%.2f ms, p99=%.2f ms "
                 "(A.7 short-duration criteria met)\n", p50, p99);

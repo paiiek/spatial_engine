@@ -54,6 +54,10 @@ public:
     // Drop counter: incremented when cmd_ring_ is full or tag is audio-irrelevant.
     uint64_t dropCount() const noexcept { return drop_count_.load(); }
 
+    // Reverse-path drop counter: incremented when push_param_edit_ returns false
+    // (controller marshaling ring full).
+    uint64_t reverseDropCount() const noexcept { return reverse_drop_count_.load(); }
+
 private:
     void recvLoop();
 
@@ -65,6 +69,7 @@ private:
     std::atomic<uint16_t> bound_port_{0};
     std::atomic<uint64_t> packet_count_{0};
     std::atomic<uint64_t> drop_count_{0};
+    std::atomic<uint64_t> reverse_drop_count_{0};
     int                   udp_fd_{-1};
     std::thread           recv_thread_;
     osc::PluginInstanceRegistry registry_;

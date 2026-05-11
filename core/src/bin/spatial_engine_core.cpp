@@ -59,7 +59,22 @@ static std::string forwarder_registry_path()
     return base + "/spatial_engine/instances.json";
 }
 
+// Current boot_id (cached on first call; empty string on error).
+static std::string read_boot_id()
+{
+    std::ifstream f("/proc/sys/kernel/random/boot_id");
+    if (!f.is_open()) return {};
+    std::string s;
+    std::getline(f, s);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+        s.pop_back();
+    return s;
+}
+
+static constexpr long long kSupportedSchemaVersion = 1;
+
 // Parse the instances array from the registry JSON.
+// Validates schema_version, port range, and boot_id before accepting entries.
 // Tolerates parse errors (returns empty on any fault) per ADR 0011 §4.
 static std::vector<ForwardEntry> read_registry()
 {
@@ -71,18 +86,43 @@ static std::vector<ForwardEntry> read_registry()
     if (json.empty()) return {};
 
     std::vector<ForwardEntry> result;
+    int registry_entry_rejected_count = 0;
 
-    // Minimal line-scan parser — sufficient for the fixed schema.
-    // Find each '"port":' occurrence inside the instances array.
+    // Validate top-level schema_version before processing instances.
+    auto extractTopInt = [&](const std::string& key) -> long long {
+        size_t k = json.find('"' + key + '"');
+        if (k == std::string::npos) return -1LL;
+        size_t colon = json.find(':', k);
+        if (colon == std::string::npos) return -1LL;
+        size_t num_start = colon + 1;
+        while (num_start < json.size() &&
+               (json[num_start] == ' ' || json[num_start] == '\t' ||
+                json[num_start] == '\n' || json[num_start] == '\r'))
+            ++num_start;
+        char* ep = nullptr;
+        long long v = std::strtoll(json.c_str() + num_start, &ep, 10);
+        return (ep != json.c_str() + num_start) ? v : -1LL;
+    };
+
+    long long top_schema = extractTopInt("schema_version");
+    if (top_schema != kSupportedSchemaVersion) {
+        std::fprintf(stderr,
+            "[forwarder] registry schema_version=%lld != supported=%lld, ignoring file\n",
+            top_schema, kSupportedSchemaVersion);
+        return {};
+    }
+
+    // Read current boot_id for staleness check.
+    const std::string current_boot_id = read_boot_id();
+
+    // Extract per-entry fields by scanning for object boundaries inside "instances".
     size_t pos = json.find("\"instances\"");
     if (pos == std::string::npos) return {};
 
-    // Extract per-entry fields by scanning for object boundaries.
     size_t cursor = pos;
     while ((cursor = json.find('{', cursor)) != std::string::npos) {
         ++cursor;
         ForwardEntry e{};
-        bool has_port = false;
 
         // Scan fields within this object.
         size_t obj_end = json.find('}', cursor);
@@ -102,18 +142,64 @@ static std::vector<ForwardEntry> read_registry()
             return (end_ptr != obj.c_str() + num_start) ? v : -1LL;
         };
 
-        long long iid = extractInt("instance_id");
-        long long port = extractInt("port");
+        auto extractStr = [&](const std::string& key) -> std::string {
+            std::string needle = '"' + key + '"';
+            size_t k = obj.find(needle);
+            if (k == std::string::npos) return {};
+            size_t colon = obj.find(':', k + needle.size());
+            if (colon == std::string::npos) return {};
+            size_t q1 = obj.find('"', colon + 1);
+            if (q1 == std::string::npos) return {};
+            size_t q2 = obj.find('"', q1 + 1);
+            if (q2 == std::string::npos) return {};
+            return obj.substr(q1 + 1, q2 - q1 - 1);
+        };
 
-        if (iid >= 0 && port > 0 && port <= 65535) {
+        long long iid          = extractInt("instance_id");
+        long long port         = extractInt("port");
+        long long entry_schema = extractInt("schema_version");
+        std::string boot_id    = extractStr("boot_id");
+
+        bool reject = false;
+
+        // Validate per-entry schema_version.
+        if (entry_schema != kSupportedSchemaVersion) {
+            std::fprintf(stderr,
+                "[forwarder] entry schema_version=%lld rejected\n", entry_schema);
+            reject = true;
+        }
+
+        // Validate port is in [1024, 65535] strictly (reject 0 and ephemeral-leak 0).
+        if (!reject && (port < 1024 || port > 65535)) {
+            std::fprintf(stderr,
+                "[forwarder] entry port=%lld out of range [1024,65535], rejected\n", port);
+            reject = true;
+        }
+
+        // Validate boot_id matches current boot.
+        if (!reject && !current_boot_id.empty() && boot_id != current_boot_id) {
+            std::fprintf(stderr,
+                "[forwarder] entry boot_id mismatch (stale), rejected\n");
+            reject = true;
+        }
+
+        if (!reject && iid >= 0) {
             e.instance_id = static_cast<uint32_t>(iid);
             e.port        = static_cast<uint16_t>(port);
             result.push_back(e);
-            has_port = true;
+        } else if (reject) {
+            ++registry_entry_rejected_count;
         }
-        (void)has_port;
+
         cursor = obj_end + 1;
     }
+
+    if (registry_entry_rejected_count > 0) {
+        std::fprintf(stderr,
+            "[forwarder] tag=registry_entry_rejected_count value=%d\n",
+            registry_entry_rejected_count);
+    }
+
     return result;
 }
 

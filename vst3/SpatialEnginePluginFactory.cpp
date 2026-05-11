@@ -11,6 +11,10 @@
 #include "SpatialEngineProcessor.hpp"
 #include "SpatialEngineController.hpp"
 
+// Ensure the param count is consistent between processor and controller.
+static_assert(spe::vst3::kNumParams == spe::vst3::kParamCount,
+              "param count must match across processor and controller");
+
 #include <atomic>
 #include <cstring>
 

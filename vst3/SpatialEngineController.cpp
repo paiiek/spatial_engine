@@ -589,7 +589,7 @@ SpatialEngineController::plainParamToNormalized(Steinberg::Vst::ParamID id,
 Steinberg::Vst::ParamValue PLUGIN_API
 SpatialEngineController::getParamNormalized(Steinberg::Vst::ParamID id)
 {
-    if (id >= static_cast<Steinberg::Vst::ParamID>(kParamCount)) return 0.0;
+    if (static_cast<int>(id) < 0 || id >= static_cast<Steinberg::Vst::ParamID>(kParamCount)) return 0.0;
     return norm_values_[id];
 }
 
@@ -597,7 +597,7 @@ Steinberg::tresult PLUGIN_API
 SpatialEngineController::setParamNormalized(Steinberg::Vst::ParamID id,
                                              Steinberg::Vst::ParamValue value)
 {
-    if (id >= static_cast<Steinberg::Vst::ParamID>(kParamCount))
+    if (static_cast<int>(id) < 0 || id >= static_cast<Steinberg::Vst::ParamID>(kParamCount))
         return Steinberg::kInvalidArgument;
     if (value < 0.0) value = 0.0;
     if (value > 1.0) value = 1.0;

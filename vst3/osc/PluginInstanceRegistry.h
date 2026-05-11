@@ -20,6 +20,7 @@ struct InstanceEntry {
     pid_t       pid;             // OS process ID
     std::string boot_id;         // content of /proc/sys/kernel/random/boot_id
     uint64_t    schema_version;  // always kSupportedSchemaVersion when written
+    uint64_t    starttime{0};    // field 22 of /proc/{pid}/stat (clock ticks since boot)
 };
 
 class PluginInstanceRegistry {
@@ -45,8 +46,13 @@ private:
     // Read current boot_id from /proc/sys/kernel/random/boot_id.
     static std::string readBootId();
 
-    // Check /proc/{pid}/comm exists and is readable (non-empty).
-    static bool pidAlive(pid_t pid);
+    // Read field 22 (starttime, clock ticks since boot) from /proc/{pid}/stat.
+    // Returns 0 if the file cannot be read (process does not exist).
+    static uint64_t readPidStarttime(pid_t pid);
+
+    // Check PID is alive and starttime matches the stored value.
+    // If stored_starttime == 0 (legacy entry), falls back to comm-existence check.
+    static bool pidAlive(pid_t pid, uint64_t stored_starttime = 0);
 
     // Low-level atomic write: takes the new JSON content and writes it via
     // tmpfile + flock + fsync + rename. Returns true on success.

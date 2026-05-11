@@ -135,7 +135,7 @@ void SpatialEnginePluginUdp::stop()
 
 // ---------------------------------------------------------------------------
 // S4: ADM-OSC command → controller ParamID/normalizedValue mapping (Option A).
-// Maps the 7 currently-active params (kMute=S7 deferred).
+// Maps all 8 params (kMute=7 activated in Phase 4 validation followup).
 // Returns false if this command type has no controller-side parameter mapping.
 //
 // Normalization mirrors SpatialEngineController param table:
@@ -148,7 +148,7 @@ void SpatialEnginePluginUdp::stop()
 //   kAmbiOrder (4):  discrete int 1..3 → norm = (order-1)/2.0
 //   kRoomPreset (5): discrete int 0..3 → norm = idx/3.0
 //   kBypass (6):     boolean → norm = 0.0 or 1.0
-// kMute (7): DEFERRED to S7.  ObjMute packets are not forwarded to controller ring.
+//   kMute (7):       boolean → norm = 1.0 (muted) or 0.0 (unmuted)
 // ---------------------------------------------------------------------------
 static constexpr double kPi_udp = 3.14159265358979323846;
 
@@ -215,7 +215,13 @@ static bool audioCommandToParamEdit(
             out_norm = (order - 1) / 2.0;
             return true;
         }
-        // ObjMute (kMute=id 7): DEFERRED to S7 (D3-γ writer activation).
+        case T::ObjMute: {
+            // /adm/obj/N/mute → kMute (id=7).
+            // payload.obj_mute.muted: true → norm 1.0, false → norm 0.0.
+            out_param_id = 7; // kMute
+            out_norm = ac.payload.obj_mute.muted ? 1.0 : 0.0;
+            return true;
+        }
         // All other tags have no kCanAutomate controller parameter mapping.
         default:
             return false;
@@ -264,7 +270,9 @@ void SpatialEnginePluginUdp::recvLoop()
                 uint32_t param_id = 0;
                 double   norm     = 0.0;
                 if (audioCommandToParamEdit(ac, param_id, norm)) {
-                    push_param_edit_(param_id, norm);
+                    if (!push_param_edit_(param_id, norm)) {
+                        reverse_drop_count_.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
                 // ObjMove also carries elevation → push kPanEl (id=1) separately.
                 if (ac.tag == spe::ipc::CommandTag::ObjMove) {
@@ -272,7 +280,9 @@ void SpatialEnginePluginUdp::recvLoop()
                     double el_norm = el / kPi_udp + 0.5;
                     if (el_norm < 0.0) el_norm = 0.0;
                     if (el_norm > 1.0) el_norm = 1.0;
-                    push_param_edit_(1 /*kPanEl*/, el_norm);
+                    if (!push_param_edit_(1 /*kPanEl*/, el_norm)) {
+                        reverse_drop_count_.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             }
         }

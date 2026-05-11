@@ -230,6 +230,62 @@ static void test_gc_stale_boot_id()
 }
 
 // ---------------------------------------------------------------------------
+// Test 7b: GC drops entries where PID matches but starttime differs (PID reuse)
+// ---------------------------------------------------------------------------
+static void test_gc_pid_reuse_starttime()
+{
+    setXdgDir("xdg7b");
+    spe::vst3::osc::PluginInstanceRegistry reg;
+
+    std::string xdg = g_test_dir + "/xdg7b";
+    std::string dir = xdg + "/spatial_engine";
+    ::mkdir(dir.c_str(), 0755);
+    std::string path = dir + "/instances.json";
+
+    // Get the current boot_id so the boot_id check passes.
+    std::string boot_id;
+    {
+        std::ifstream f("/proc/sys/kernel/random/boot_id");
+        std::getline(f, boot_id);
+        while (!boot_id.empty() &&
+               (boot_id.back() == '\n' || boot_id.back() == '\r'))
+            boot_id.pop_back();
+    }
+
+    // Write an entry with the current PID but a starttime of 1 (virtually
+    // guaranteed to differ from the real starttime of this process).
+    pid_t my_pid = ::getpid();
+    std::string json =
+        "{\n"
+        "  \"schema_version\": 1,\n"
+        "  \"spec_commit\": \"test\",\n"
+        "  \"instances\": [\n"
+        "    {\n"
+        "      \"instance_id\": 888,\n"
+        "      \"port\": 9888,\n"
+        "      \"pid\": " + std::to_string(my_pid) + ",\n"
+        "      \"boot_id\": \"" + boot_id + "\",\n"
+        "      \"starttime\": 1,\n"   // wrong starttime — PID reuse simulation
+        "      \"schema_version\": 1\n"
+        "    }\n"
+        "  ]\n"
+        "}\n";
+
+    std::ofstream out(path);
+    out << json;
+    out.close();
+
+    auto entry = reg.registerSelf(9889, "test_plugin");
+    auto list = reg.listActive();
+    // The stale entry (starttime=1) must have been GC'd; only our own entry remains.
+    for (const auto& e : list) {
+        assert(e.instance_id != 888 &&
+               "entry with wrong starttime should have been GC'd (PID reuse)");
+    }
+    std::printf("[PASS] test_gc_pid_reuse_starttime\n");
+}
+
+// ---------------------------------------------------------------------------
 // Test 8: schema_version > kSupportedSchemaVersion → registerSelf returns port=0
 // ---------------------------------------------------------------------------
 static void test_schema_version_too_new()
@@ -301,6 +357,7 @@ int main()
     test_unregister_removes_entry();
     test_gc_dead_pid();
     test_gc_stale_boot_id();
+    test_gc_pid_reuse_starttime();
     test_schema_version_too_new();
     test_list_refuses_future_schema();
 
