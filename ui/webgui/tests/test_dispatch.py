@@ -27,6 +27,10 @@ class _Recorder:
 def recorder(monkeypatch):
     rec = _Recorder()
     monkeypatch.setattr(webgui_server, "osc_send_fn", rec)
+    # ADR 0013: positional dispatch is suppressed under 'ai' mode.
+    # Most legacy dispatch tests assume the WebGUI is the 9100 producer →
+    # force 'low_latency' so the dispatcher fires the way the test expects.
+    monkeypatch.setattr(webgui_server, "_bridge_mode", "low_latency")
     return rec
 
 
@@ -35,6 +39,31 @@ def test_dispatch_obj_pos(recorder):
         "type": "obj_pos", "n": 5, "azim": 30.0, "elev": 10.0, "dist": 0.7,
     })
     assert recorder.calls == [("/adm/obj/5/aed", (30.0, 10.0, 0.7))]
+
+
+# --- ADR 0013 single-producer guard -----------------------------------------
+
+def test_dispatch_obj_pos_suppressed_in_ai_mode(monkeypatch):
+    """ADR 0013: WebGUI must not write 9100 while vid2spatial owns it (AI mode)."""
+    rec = _Recorder()
+    monkeypatch.setattr(webgui_server, "osc_send_fn", rec)
+    monkeypatch.setattr(webgui_server, "_bridge_mode", "ai")
+    webgui_server._dispatch_to_osc({
+        "type": "obj_pos", "n": 5, "azim": 30.0, "elev": 10.0, "dist": 0.7,
+    })
+    webgui_server._dispatch_to_osc({
+        "type": "obj_gain", "n": 5, "gain": -6.0,
+    })
+    # Both positional messages MUST be dropped — vid2spatial is the producer.
+    assert rec.calls == [], (
+        f"AI mode must suppress positional sends but got: {rec.calls}"
+    )
+
+    # Control-plane (scene / transport) still passes through under AI mode.
+    webgui_server._dispatch_to_osc({"type": "transport", "action": "play"})
+    assert rec.calls == [("/transport/play", ())], (
+        f"control-plane traffic must pass through AI mode, got: {rec.calls}"
+    )
 
 
 def test_dispatch_transport_play(recorder):

@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _osc_bridge_mod = None
     try:
         import ui.webgui.osc_bridge as osc_bridge  # noqa: PLC0415
+        _osc_bridge_mod = osc_bridge
         loop = asyncio.get_running_loop()
         osc_bridge.start(broadcast_state, loop)
         logger.info("OSC bridge started via lifespan")
@@ -36,6 +38,12 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         await _app.state.trajectory.stop()
+        # S0 #3 — release 9101 UDP socket / thread (risk 5.1, sentinel G7).
+        if _osc_bridge_mod is not None:
+            try:
+                _osc_bridge_mod.shutdown()
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning("osc_bridge shutdown failed: %s", exc)
 
 
 app = FastAPI(title="spatial_engine WebGUI", version="0.1.0", lifespan=lifespan)
@@ -150,9 +158,46 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         manager.disconnect(ws)
 
 
+#: Set of message types that synthesise positional data and therefore
+#: contend with vid2spatial_osc for the 9100 wire. Per ADR 0013, these are
+#: SUPPRESSED while ``_bridge_mode == 'ai'`` (vid2spatial is the producer).
+_POSITION_MTYPES = frozenset({"obj_pos", "obj_gain"})
+
+
+def _ai_mode_position_conflict(mtype: str) -> bool:
+    """Return True if a positional OSC send should be suppressed under AI mode.
+
+    ADR 0013 (Single Producer, Single Wire — plan §1.1 P3):
+      * ``low_latency`` mode → WebGUI is the 9100 producer; vid2spatial is OFF.
+      * ``ai``           mode → vid2spatial_osc owns 9100; WebGUI positional
+        sends would interleave on the wire and corrupt the engine's
+        per-object state.
+    """
+    return _bridge_mode == "ai" and mtype in _POSITION_MTYPES
+
+
 def _dispatch_to_osc(msg: dict) -> None:
-    """Forward parsed WebSocket message to OSC 9100."""
+    """Forward parsed WebSocket message to OSC 9100.
+
+    Single-producer contract (ADR 0013):
+      * Positional traffic (``obj_pos`` / ``obj_gain``) is suppressed when
+        ``_bridge_mode == 'ai'`` — vid2spatial_osc is the active 9100
+        producer and concurrent sends would race on the wire.
+      * All other message types (scene/transport/algo/dsp/noise) are
+        control-plane only, do not contend with vid2spatial, and pass
+        through unconditionally.
+    """
     mtype = msg.get("type")
+
+    # ADR 0013 — single-producer guard rail.
+    if _ai_mode_position_conflict(mtype):
+        logger.warning(
+            "9100 wire contention: dropping %s (vid2spatial owns 9100 in "
+            "AI mode; switch to low_latency to send positional from WebGUI)",
+            mtype,
+        )
+        return
+
     if mtype == "obj_pos":
         n = int(msg["n"])
         if not (0 <= n < 64):
