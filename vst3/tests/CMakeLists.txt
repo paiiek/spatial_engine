@@ -163,6 +163,29 @@ target_compile_definitions(test_vst3_performedit_threadsafe PRIVATE SPATIAL_ENGI
 target_compile_options(test_vst3_performedit_threadsafe PRIVATE -UNDEBUG)
 add_test(NAME vst3_performedit_threadsafe COMMAND test_vst3_performedit_threadsafe)
 
+# ---- test_vst3_intra_plugin_spsc_drain (S3 A.6) ----------------------------
+# rt_alloc_probe.hpp requires no LTO (R10 Layer 3); -fno-lto is set explicitly.
+add_executable(test_vst3_intra_plugin_spsc_drain
+    test_vst3_intra_plugin_spsc_drain.cpp
+)
+target_include_directories(test_vst3_intra_plugin_spsc_drain PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+target_compile_options(test_vst3_intra_plugin_spsc_drain PRIVATE -UNDEBUG -fno-lto)
+add_test(NAME vst3_intra_plugin_spsc_drain COMMAND test_vst3_intra_plugin_spsc_drain)
+
+# ---- test_vst3_spsc_ring_overrun (S3 overrun policy) -----------------------
+add_executable(test_vst3_spsc_ring_overrun
+    test_vst3_spsc_ring_overrun.cpp
+)
+target_include_directories(test_vst3_spsc_ring_overrun PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+target_compile_options(test_vst3_spsc_ring_overrun PRIVATE -UNDEBUG)
+add_test(NAME vst3_spsc_ring_overrun COMMAND test_vst3_spsc_ring_overrun)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only

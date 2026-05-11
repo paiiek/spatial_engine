@@ -5,6 +5,8 @@
 #pragma once
 
 #include "osc/PluginInstanceRegistry.h"
+#include "AudioCommand.h"
+#include "util/SpscRing.h"
 
 #include <atomic>
 #include <cstdint>
@@ -16,7 +18,12 @@ namespace spe::vst3 {
 class SpatialEnginePluginUdp {
 public:
     // plugin_comm: expected DAW process name (passed to registry for GC hints).
-    explicit SpatialEnginePluginUdp(std::string_view plugin_comm = "spatial_engine_vst3");
+    // cmd_ring: audio-path SPSC ring owned by SpatialEngineProcessor; must
+    //           outlive this object (processor ensures UDP is stopped before
+    //           the ring is destroyed).
+    explicit SpatialEnginePluginUdp(
+        std::string_view plugin_comm = "spatial_engine_vst3",
+        spe::util::SpscRing<AudioCommand, 1024>* cmd_ring = nullptr);
     ~SpatialEnginePluginUdp();
 
     // Bind UDP socket and start recv thread. Returns true on success.
@@ -29,9 +36,11 @@ public:
     // Port that was successfully bound (0 if not started).
     uint16_t boundPort() const noexcept { return bound_port_.load(); }
 
-    // Packet counter — S2 stub: incremented on every received datagram.
-    // S3 will replace this with SPSC ring push.
+    // Packet counter: incremented on every received datagram.
     uint64_t packetCount() const noexcept { return packet_count_.load(); }
+
+    // Drop counter: incremented when cmd_ring_ is full or tag is audio-irrelevant.
+    uint64_t dropCount() const noexcept { return drop_count_.load(); }
 
 private:
     void recvLoop();
@@ -43,10 +52,13 @@ private:
     std::atomic<bool>     running_{false};
     std::atomic<uint16_t> bound_port_{0};
     std::atomic<uint64_t> packet_count_{0};
+    std::atomic<uint64_t> drop_count_{0};
     int                   udp_fd_{-1};
     std::thread           recv_thread_;
     osc::PluginInstanceRegistry registry_;
     uint32_t              instance_id_{0};
+    // Non-owning pointer to the audio-path ring (owned by processor).
+    spe::util::SpscRing<AudioCommand, 1024>* cmd_ring_{nullptr};
 };
 
 } // namespace spe::vst3

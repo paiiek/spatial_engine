@@ -17,8 +17,11 @@
 
 namespace spe::vst3 {
 
-SpatialEnginePluginUdp::SpatialEnginePluginUdp(std::string_view plugin_comm)
+SpatialEnginePluginUdp::SpatialEnginePluginUdp(
+    std::string_view plugin_comm,
+    spe::util::SpscRing<AudioCommand, 1024>* cmd_ring)
     : plugin_comm_(plugin_comm)
+    , cmd_ring_(cmd_ring)
 {}
 
 SpatialEnginePluginUdp::~SpatialEnginePluginUdp()
@@ -135,11 +138,26 @@ void SpatialEnginePluginUdp::recvLoop()
     while (running_.load()) {
         ssize_t n = ::recv(udp_fd_, buf.data(), buf.size(), 0);
         if (n > 0 && running_.load()) {
-            // S2 stub: decode packet (validates it) and count it.
-            // S3 will push the resulting Command into an SPSC ring.
-            auto cmd = decoder.decode(std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)));
-            (void)cmd;
+            // Decode ADM-OSC packet — may allocate (UDP thread; per ADR 0010 §A4-β
+            // the producer side is allowed to allocate; only pop side must be RT-safe).
+            auto cmd = decoder.decode(
+                std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)));
             packet_count_.fetch_add(1, std::memory_order_relaxed);
+
+            if (cmd_ring_) {
+                // Convert to trivially-copyable AudioCommand and push.
+                // fromCommand() returns false for non-POD / audio-irrelevant tags.
+                AudioCommand ac;
+                if (fromCommand(cmd, ac)) {
+                    if (!cmd_ring_->push(ac)) {
+                        // Ring full — increment drop counter (mirrors ring's own drops_).
+                        drop_count_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                } else {
+                    // Tag not relevant to audio path (ObjName, Scene*, Unknown, etc.)
+                    drop_count_.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
         }
     }
 }

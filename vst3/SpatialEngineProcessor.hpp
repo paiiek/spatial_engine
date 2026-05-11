@@ -18,6 +18,8 @@
 namespace spe::core { class SpatialEngine; }
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
+#include "AudioCommand.h"
+#include "util/SpscRing.h"  // canonical C1.b ring (core/src/util/SpscRing.h)
 namespace spe::vst3 { class SpatialEnginePluginUdp; }
 #endif
 
@@ -119,6 +121,10 @@ private:
     Steinberg::Vst::IConnectionPoint* peer_{nullptr};
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
+    // Audio-path SPSC ring: UDP thread (producer) → audio thread (consumer).
+    // Capacity 1024: covers ~10 s of 64-object × 1 Hz traffic.
+    // Owned by the processor; udp_io_ holds a pointer (not ownership).
+    spe::util::SpscRing<AudioCommand, 1024> osc_cmd_ring_;
     std::unique_ptr<SpatialEnginePluginUdp> udp_io_;
 #endif
 

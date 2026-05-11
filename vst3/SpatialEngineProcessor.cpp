@@ -202,7 +202,8 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
         active_ = true;
 #ifdef SPATIAL_ENGINE_VST3_OSC
         if (!udp_io_) {
-            udp_io_ = std::make_unique<SpatialEnginePluginUdp>();
+            udp_io_ = std::make_unique<SpatialEnginePluginUdp>(
+                "spatial_engine_vst3", &osc_cmd_ring_);
             udp_io_->start();
         }
 #endif
@@ -444,6 +445,84 @@ Steinberg::tresult PLUGIN_API
 SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
 {
     using namespace Steinberg::Vst;
+
+#ifdef SPATIAL_ENGINE_VST3_OSC
+    // --- S3: drain audio-path OSC command ring (UDP thread → audio thread) ---
+    // RT-safe: SpscRing::pop() is wait-free, allocation-free, no mutex.
+    // Per-block cap = ring capacity to bound worst-case drain time.
+    // Commands decoded on the UDP thread (allowed to alloc per ADR 0010 §A4-β);
+    // only the pop side (here) must be allocation-free.
+    {
+        AudioCommand ac;
+        // Drain all pending commands; bounded by ring capacity (1024).
+        while (osc_cmd_ring_.pop(ac)) {
+            // S4 will forward these commands to the controller-side ring or
+            // engine; for now dispatch directly to the engine (audio path).
+            // Build a spe::ipc::Command and dispatch — allocation-free because
+            // all audio-relevant payloads are trivially copyable PODs.
+            spe::ipc::Command cmd;
+            cmd.tag            = ac.tag;
+            cmd.schema_version = ac.schema_version;
+            cmd.seq            = ac.seq;
+            cmd.id             = ac.id;
+
+            using CT = spe::ipc::CommandTag;
+            switch (ac.tag) {
+                case CT::ObjMove:
+                    cmd.payload = ac.payload.obj_move;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjGain:
+                    cmd.payload = ac.payload.obj_gain;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjActive:
+                    cmd.payload = ac.payload.obj_active;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjAlgo:
+                    cmd.payload = ac.payload.obj_algo;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjMute:
+                    cmd.payload = ac.payload.obj_mute;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjXYZ:
+                    cmd.payload = ac.payload.obj_xyz;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjActiveAdm:
+                    cmd.payload = ac.payload.obj_active_adm;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjWidth:
+                    cmd.payload = ac.payload.obj_width;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::SysAmbiOrder:
+                    cmd.payload = ac.payload.sys_ambi_order;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::SysLtcChase:
+                    cmd.payload = ac.payload.sys_ltc_chase;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::SysAmbiDecoderType:
+                    cmd.payload = ac.payload.sys_ambi_decoder_type;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                case CT::ObjDsp:
+                    cmd.payload = ac.payload.obj_dsp;
+                    engine_->dispatchCommand(cmd);
+                    break;
+                default:
+                    // Remaining tags are non-audio or already dropped at push site.
+                    break;
+            }
+        }
+    }
+#endif
 
     // --- Parameter changes: block-rate snapshot (last point only) ---
     // Step 2.3: drain inputParameterChanges, atomic store norm value, then dispatch.
