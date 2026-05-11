@@ -1,5 +1,18 @@
 # Open Questions
 
+## spatial-engine-v0.3 - 2026-05-11 (Round-3 update)
+
+- [x] **v03-Q1 (CLOSED Round-3 by frozen contract)**: ADR 0010 §A1-ε line 53 + line 250 rejects all sidecar variants in v0.3 Linux fast path; D1-γ (no sidecar) is the only compliant option. D1-α (separate exe) and D1-β (subcommand) eliminated.
+- [x] **v03-Q2 (DROPPED Round-3 — moot under A1-ε)**: no plugin↔sidecar channel exists; intra-plugin SPSC ring is internal (UDP I/O thread → audio callback).
+- [x] **v03-Q3 (CLOSED Round-3)**: D3-γ hybrid chosen — state v3 reader at S2.5 day 1 (gets ~5 days of v0.2 fixture soak); writer + kMute param at S7 (isolated commit, debugging-blast-radius preserved). Pareto-dominates pure D3-α and pure D3-β.
+- [ ] **v03-Q4 (D4 vendor-quirks real-data capture)**: Hard 60-day deadline + booked Korean lab session (D4-α, recommended) — Logistics: does user have specific lab venue in mind for the day-60 capture session? Cancellation fallback: if lab cancels within 7 days of booked date, ADR 0012 commit at day-60 is a "no-quirk-observed: synthetic fixture extension to day-90" note, and Notion task auto-files for day-90 re-booking.
+- [x] **v03-Q5 (CLOSED Round-3)**: D5-β (defer macOS/Windows CI to v0.4) chosen.
+- [x] **v03-Q6 (DROPPED Round-3 — moot under A1-ε)**: no systemd unit shipped; no sidecar daemon to auto-restart.
+- [ ] **v03-Q7 (ADR 0010 §A5-β contingency activation criteria, v0.4+ deferrable)**: When does macOS/Windows port trigger fallback from A5-α to A5-β? Architect suggestion: "Activation criterion = single Apple/Steinberg/Avid forum thread OR cert-eval rejection citing `bind()` as cause." Defer concrete criterion to v0.4 sprint scoping.
+- [ ] **v03-Q8 (NEW Round-3, Architect Round-2 §6.2)**: `IComponentHandler::performEdit` cross-thread safety — VST3 SDK does not document thread-safety for arbitrary worker threads. S2.6 SDK audit decides between (a) host message-thread queue marshaling, (b) `IRunLoop` (only if available without editor view — unexpected per ADR 0010 §A4-γ), (c) read-only state propagation via `restartComponent(kParamValuesChanged)`. Gates S4 entry. Commit footer in `vst3/SpatialEngineController.cpp` documents reasoning. — Why it matters: cross-thread `performEdit` UB = potential DAW crash on reverse path.
+- [x] **v03-Q9 (NEW Round-3, Architect Round-2 §6.2 — CLOSED via design choice)**: registry stale-PID after reboot — embed `boot_id` (`/proc/sys/kernel/random/boot_id`) in each registry entry; writer-side GC drops entries with stale `boot_id` regardless of `/proc/{pid}/comm` match. Test added to `test_p_instances_registry.cpp` for stale-PID-after-reboot scenario.
+- [x] **v03-Q10 (NEW Round-3, Architect Round-2 §6.2 — CLOSED via design choice)**: XDG_CONFIG_HOME empty-string semantics — `core/src/util/RegistryPath.h` handles `XDG_CONFIG_HOME=""` (set-but-empty) by falling back to `~/.config` per XDG spec; ~5 LOC fix; explicit unit test in `test_p_instances_registry`. Prevents silent-write to `./instances.json` in DAW cwd on locked-down corporate workstations.
+
 ## spatial-engine-phaseC3-adm-osc-compat - 2026-05-09
 
 - [ ] C3-Q1 (Decision A): Architect/Critic ratification — confirm A-β (extend `CommandDecoder` in-place) over A-α (separate handler) — Affects file layout and ADR-0003 single-schema invariant; A-α would split listeners on port 9100.
