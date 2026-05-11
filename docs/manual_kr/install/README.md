@@ -394,7 +394,9 @@ ninja -j$(nproc)
 출력 예시:
 
 ```
-spatial_engine_core v0.2.0 (schema_version=1)
+spatial_engine_core v0.2.0 (full render chain)
+  MAX_OBJECTS=64  MAX_BLOCK=512
+  JUCE: not linked  OSC-UDP: port 9100
 ```
 
 ### 3.5 Python 환경 설정
