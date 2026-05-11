@@ -23,6 +23,10 @@
 #include <cstring>
 #include <cstdio>
 
+#ifdef SPATIAL_ENGINE_VST3_OSC
+#include "SpatialEnginePluginUdp.h"
+#endif
+
 // Pull in class IID definitions (DEF_CLASS_IID macro from vstinitiids.cpp
 // registers IComponent::iid / IAudioProcessor::iid / IEditController::iid).
 // We include vstinitiids.cpp via CMake source list, not here.
@@ -108,6 +112,12 @@ Steinberg::tresult PLUGIN_API SpatialEngineProcessor::terminate()
         engine_->releaseResources();
         active_ = false;
     }
+#ifdef SPATIAL_ENGINE_VST3_OSC
+    if (udp_io_) {
+        udp_io_->stop();
+        udp_io_.reset();
+    }
+#endif
     return Steinberg::kResultOk;
 }
 
@@ -190,9 +200,21 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 {
     if (state && !active_) {
         active_ = true;
+#ifdef SPATIAL_ENGINE_VST3_OSC
+        if (!udp_io_) {
+            udp_io_ = std::make_unique<SpatialEnginePluginUdp>();
+            udp_io_->start();
+        }
+#endif
     } else if (!state && active_) {
         engine_->releaseResources();
         active_ = false;
+#ifdef SPATIAL_ENGINE_VST3_OSC
+        if (udp_io_) {
+            udp_io_->stop();
+            udp_io_.reset();
+        }
+#endif
     }
     return Steinberg::kResultOk;
 }

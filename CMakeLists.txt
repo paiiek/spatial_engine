@@ -35,6 +35,10 @@ option(SPATIAL_ENGINE_RT_ASSERTS "Enable RT_ASSERT_NO_ALLOC and ClickDetectorFFT
 # OFF by default to preserve byte-identical core artifacts (Principle 5).
 option(SPATIAL_ENGINE_VST3 "Build VST3 plugin (Option B hand-roll)" OFF)
 
+# Per-instance UDP OSC recv inside the plugin process (ADR 0010 A1-ε / ADR 0011).
+# Default OFF — OFF byte-baseline must remain identical to pre-S2 artifacts.
+option(SPATIAL_ENGINE_VST3_OSC "Enable per-instance UDP OSC recv in plugin" OFF)
+
 # Option B requires JUCE-free build: JUCE's juce_audio_devices/juce_gui_extra
 # pull X11/freetype/alsa transitive deps via juceaide, defeating sysdep-free
 # (Principle 1, §6 Step 1.1, §16.1 D+2 trigger). Force NO_JUCE before

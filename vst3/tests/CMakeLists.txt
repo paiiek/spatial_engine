@@ -99,6 +99,45 @@ target_compile_definitions(test_vst3_state_persist PRIVATE SPATIAL_ENGINE_VST3_B
 target_compile_options(test_vst3_state_persist PRIVATE -UNDEBUG)
 add_test(NAME vst3_state_persist COMMAND test_vst3_state_persist)
 
+# ---- test_p_instances_registry (A.5) ----------------------------------------
+add_executable(test_p_instances_registry
+    test_p_instances_registry.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(test_p_instances_registry PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+target_compile_options(test_p_instances_registry PRIVATE -UNDEBUG)
+add_test(NAME p_instances_registry COMMAND test_p_instances_registry)
+
+# ---- test_p_instances_registry_corruption (A.14) ----------------------------
+add_executable(test_p_instances_registry_corruption
+    test_p_instances_registry_corruption.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(test_p_instances_registry_corruption PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+target_compile_options(test_p_instances_registry_corruption PRIVATE -UNDEBUG)
+add_test(NAME p_instances_registry_corruption COMMAND test_p_instances_registry_corruption)
+
+# ---- test_vst3_bind_collision (A.13) ----------------------------------------
+add_executable(test_vst3_bind_collision
+    test_vst3_bind_collision.cpp
+    ../SpatialEnginePluginUdp.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(test_vst3_bind_collision PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+target_link_libraries(test_vst3_bind_collision PRIVATE spe_core)
+target_compile_definitions(test_vst3_bind_collision PRIVATE SPATIAL_ENGINE_VST3_OSC=1)
+target_compile_options(test_vst3_bind_collision PRIVATE -UNDEBUG)
+add_test(NAME vst3_bind_collision COMMAND test_vst3_bind_collision)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist

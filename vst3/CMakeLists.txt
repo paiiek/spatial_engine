@@ -12,6 +12,9 @@ if(NOT EXISTS "${VST3_SDK_ROOT}/pluginterfaces/base/funknown.h")
     message(FATAL_ERROR "VST3 SDK not found at ${VST3_SDK_ROOT}. Run scripts/bootstrap_juce.sh first.")
 endif()
 
+# ---- OSC option (default OFF — preserves byte-identical OFF baseline) -------
+option(SPATIAL_ENGINE_VST3_OSC "Enable per-instance UDP OSC recv in plugin" OFF)
+
 # ---- Plugin shared library --------------------------------------------------
 add_library(spatial_engine_vst3 MODULE
     # Our sources
@@ -48,6 +51,15 @@ target_compile_definitions(spatial_engine_vst3 PRIVATE
     SPATIAL_ENGINE_VST3_BUILD=1
 )
 
+if(SPATIAL_ENGINE_VST3_OSC)
+    target_sources(spatial_engine_vst3 PRIVATE
+        osc/PluginInstanceRegistry.cpp
+        SpatialEnginePluginUdp.cpp
+    )
+    target_compile_definitions(spatial_engine_vst3 PRIVATE
+        SPATIAL_ENGINE_VST3_OSC=1
+    )
+endif()
 
 set_target_properties(spatial_engine_vst3 PROPERTIES
     PREFIX ""

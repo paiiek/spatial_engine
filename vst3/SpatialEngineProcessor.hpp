@@ -17,6 +17,10 @@
 
 namespace spe::core { class SpatialEngine; }
 
+#ifdef SPATIAL_ENGINE_VST3_OSC
+namespace spe::vst3 { class SpatialEnginePluginUdp; }
+#endif
+
 namespace spe::vst3 {
 
 // DEV-prefix IID (first word = 0x44455630 = 'D','E','V','0')
@@ -105,6 +109,10 @@ private:
 
     // Component ↔ Controller connection peer (host manages lifetime)
     Steinberg::Vst::IConnectionPoint* peer_{nullptr};
+
+#ifdef SPATIAL_ENGINE_VST3_OSC
+    std::unique_ptr<SpatialEnginePluginUdp> udp_io_;
+#endif
 
     // Dispatch a single normalized param change to the engine (Step 2.3/2.4)
     void dispatchParamChange(Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue norm) noexcept;

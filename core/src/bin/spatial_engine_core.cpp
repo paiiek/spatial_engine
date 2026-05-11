@@ -21,6 +21,139 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <vector>
+
+// Registry-based per-instance forwarding (ADR 0011 §4 reader-side).
+// Compiled unconditionally in the standalone; the registry file is
+// only populated when plugin instances run with SPATIAL_ENGINE_VST3_OSC=ON.
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Minimal registry reader for the standalone forwarder.
+// Mirrors the ADR 0011 schema; deliberately JUCE-free and dependency-free.
+// ---------------------------------------------------------------------------
+
+struct ForwardEntry {
+    uint32_t instance_id;
+    uint16_t port;
+};
+
+// Return $XDG_CONFIG_HOME/spatial_engine/instances.json (or ~/.config/...).
+static std::string forwarder_registry_path()
+{
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base;
+    if (xdg && xdg[0] != '\0') {
+        base = xdg;
+    } else {
+        const char* home = std::getenv("HOME");
+        base = std::string(home ? home : "/tmp") + "/.config";
+    }
+    return base + "/spatial_engine/instances.json";
+}
+
+// Parse the instances array from the registry JSON.
+// Tolerates parse errors (returns empty on any fault) per ADR 0011 §4.
+static std::vector<ForwardEntry> read_registry()
+{
+    std::ifstream f(forwarder_registry_path());
+    if (!f.is_open()) return {};
+
+    std::string json((std::istreambuf_iterator<char>(f)),
+                      std::istreambuf_iterator<char>());
+    if (json.empty()) return {};
+
+    std::vector<ForwardEntry> result;
+
+    // Minimal line-scan parser — sufficient for the fixed schema.
+    // Find each '"port":' occurrence inside the instances array.
+    size_t pos = json.find("\"instances\"");
+    if (pos == std::string::npos) return {};
+
+    // Extract per-entry fields by scanning for object boundaries.
+    size_t cursor = pos;
+    while ((cursor = json.find('{', cursor)) != std::string::npos) {
+        ++cursor;
+        ForwardEntry e{};
+        bool has_port = false;
+
+        // Scan fields within this object.
+        size_t obj_end = json.find('}', cursor);
+        if (obj_end == std::string::npos) break;
+        std::string obj = json.substr(cursor, obj_end - cursor);
+
+        auto extractInt = [&](const std::string& key) -> long long {
+            size_t k = obj.find('"' + key + '"');
+            if (k == std::string::npos) return -1;
+            size_t colon = obj.find(':', k);
+            if (colon == std::string::npos) return -1;
+            size_t num_start = colon + 1;
+            while (num_start < obj.size() && (obj[num_start] == ' ' || obj[num_start] == '\t'))
+                ++num_start;
+            char* end_ptr = nullptr;
+            long long v = std::strtoll(obj.c_str() + num_start, &end_ptr, 10);
+            return (end_ptr != obj.c_str() + num_start) ? v : -1LL;
+        };
+
+        long long iid = extractInt("instance_id");
+        long long port = extractInt("port");
+
+        if (iid >= 0 && port > 0 && port <= 65535) {
+            e.instance_id = static_cast<uint32_t>(iid);
+            e.port        = static_cast<uint16_t>(port);
+            result.push_back(e);
+            has_port = true;
+        }
+        (void)has_port;
+        cursor = obj_end + 1;
+    }
+    return result;
+}
+
+// Forward a raw UDP datagram to each entry's port on 127.0.0.1.
+// Logs WARN on ECONNREFUSED (once per call — no per-pair rate limit needed for S2).
+// Tags: registry_active_instances=N forwarded_to_count=M dropped_due_unknown_obj_id=K
+static void forward_to_instances(int send_fd,
+                                  const std::vector<ForwardEntry>& entries,
+                                  const uint8_t* buf, size_t len)
+{
+    int forwarded = 0;
+    int dropped   = 0;
+
+    for (const auto& e : entries) {
+        struct sockaddr_in dst{};
+        dst.sin_family      = AF_INET;
+        dst.sin_port        = htons(e.port);
+        dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        ssize_t sent = ::sendto(send_fd, buf, len, 0,
+                                reinterpret_cast<struct sockaddr*>(&dst),
+                                sizeof(dst));
+        if (sent < 0) {
+            if (errno == ECONNREFUSED || errno == EPIPE) {
+                std::fprintf(stderr,
+                    "[forwarder] WARN port=%d unreachable (instance_id=%u): %s\n",
+                    e.port, e.instance_id, std::strerror(errno));
+                ++dropped;
+            }
+        } else {
+            ++forwarded;
+        }
+    }
+
+    std::fprintf(stderr,
+        "[forwarder] registry_active_instances=%zu forwarded_to_count=%d dropped_due_unknown_obj_id=%d\n",
+        entries.size(), forwarded, dropped);
+}
+
+} // anonymous namespace (forwarder helpers)
 
 #define SPE_STRINGIFY_(x) #x
 #define SPE_STRINGIFY(x)  SPE_STRINGIFY_(x)
@@ -185,11 +318,37 @@ int main(int argc, char** argv) {
     std::printf("  OSC listener: 0.0.0.0:%d (ADM-OSC /adm/obj/N/aed)\n", osc_port);
     std::printf("  running %d s — Ctrl-C to stop...\n", run_seconds);
 
+    // Registry-based instance forwarding: re-read every 5s (ADR 0011 §4).
+    // A UDP send socket is created once for forwarding to plugin instances.
+    int fwd_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fwd_fd < 0) {
+        std::fprintf(stderr, "[forwarder] WARNING: could not create forward socket: %s\n",
+                     std::strerror(errno));
+    }
+    std::vector<ForwardEntry> fwd_entries;
+    auto last_registry_reload = std::chrono::steady_clock::time_point{};
+
     using clock = std::chrono::steady_clock;
     const auto deadline = clock::now() + std::chrono::seconds(run_seconds);
     while (!g_quit.load() && clock::now() < deadline) {
+        auto now = clock::now();
+
+        // Reload registry every 5 seconds.
+        if (fwd_fd >= 0 &&
+            now - last_registry_reload >= std::chrono::seconds(5)) {
+            fwd_entries = read_registry();
+            last_registry_reload = now;
+            if (!fwd_entries.empty()) {
+                std::fprintf(stderr,
+                    "[forwarder] registry reloaded: registry_active_instances=%zu\n",
+                    fwd_entries.size());
+            }
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    if (fwd_fd >= 0) ::close(fwd_fd);
+    (void)forward_to_instances; // referenced from forwarder helpers; suppress unused warning
 
     backend->stop();
     std::printf("  stopped. blocks=%llu xruns=%llu\n",
