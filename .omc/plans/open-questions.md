@@ -119,3 +119,12 @@ Round-2 Critic R1 review applied 4 CRITICAL + 4 MAJOR + 2 MINOR fixes. M2HOA-Q i
 - [ ] **C4-Q8 (B3-β GHA prebuilt artifact target):** ubuntu-24.04 GLIBC 2.39 (current vst3.yml host) only, OR add ubuntu-22.04 for older glibc systems? Affects user reach but doubles CI cost. Recommend stay 24.04 for v0.2; matrix expands at v0.3. — Affects R5 GHA workflow.
 - [ ] **C4-Q9 (Pre-mortem 3 escape threshold):** "Any R3 step that fails 2 retries triggers escape to v0.1.1" — is "2 retries" the right threshold or should it be 1 (more conservative) or 3 (more permissive)? — Affects how quickly we abandon v0.2 in favour of v0.1.1 if Reaper has unexpected issues.
 - [ ] **C4-Q10 (Manual locale strategy for plugin):** S5 Manual Ch.5 in Korean only (matches existing manual locale) vs add English appendix? Recommend KR-only matching `docs/manual_kr/` scope; English equivalent comes with v0.3 international expansion. — Affects S5 effort.
+
+## spatial-engine-webgui-v1 - 2026-05-12 (Round-2 RALPLAN-DR)
+
+- [x] **WGUI-Q1 (CLOSED Round-2, Architect ACCEPT)**: `/scene/list` reply 양방향 통신 — 본 sprint scope 외, ADR-2 deferred. 현재 `core/src/ipc/SceneController.cpp:26-28` 메모리만 저장, `core/src/ipc/CommandDecoder.cpp:371-373` decode-only. 별도 plan 큐로 이관 (신규 OSC dialect + JUCE 메시지-스레드 응답 라우팅 + osc_bridge 9101 수신 확장 필요). G5는 송신 정합만 검증.
+- [x] **WGUI-Q2 (CLOSED S0, ADR-0014 commit 6d90ffb)**: `ui/tests/` 76 vs 63 archaeology 완료. 결과: **zero deletions ever** — `git log --all --diff-filter=D --summary -- ui/tests/` 결과 0건, plan의 "76"은 R0/R1 estimation artefact. G6 acceptance N=63 frozen. Pre-mortem §5-E (deleted test 회귀) discharged.
+- [x] **WGUI-Q3 (CLOSED Round-2, Architect ACCEPT-WITH-MOD + Critic N2)**: 60fps methodology — desktop 60 / mobile 50 / **min-of-5-windows-p10** / N=100 sample (5 windows × 5s @ 250ms sampling) / 64-obj concurrent drag synth (dev-only `?seed=64obj` query). R1의 N=20은 통계적 무의미 평가, R2는 N≥100 또는 min-of-windows 표준 채택.
+- [x] **WGUI-Q4 (CLOSED Round-2)**: 매뉴얼 챕터 번호 — Ch.6 (`docs/manual_kr/CH6_WEBGUI.md`), Ch.5는 VST3 + ADM-OSC 직결 모드 (기존 commit `a492ef9`).
+- [x] **WGUI-Q5 (CLOSED Round-2)**: 실기 smoke 게이트 강도 — emulation (iPhone 13 + Pixel 5 playwright)으로 본 sprint G2/G4 게이트 충족 가능. 실제 단말 G8은 conditional / out-of-scope (Phase 0 MOU 필요).
+- [x] **WGUI-Q6 (CLOSED S4, commit 2de8e93)**: G4 ±2° 좌표 정밀도 — S4 playwright desktop emulation 실측 결과 **azim diff = 0.0946°** (보수 상한 2° 대비 21배 여유). 2° 상한 유지 (relax 불필요). derivation: 32-bit float wire + canvas 1px ≈ 0.5° @ 720px → 측정값이 이론치 안에 들어옴.

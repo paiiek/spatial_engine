@@ -172,10 +172,15 @@ def test_rtt_e2e_wire_sha256_and_p99(rtt_client):
             _ = json.loads(reply)
             rtt_ms_samples.append((t1 - t0) * 1000.0)
 
-            # The echo thread appended the datagram before the WS reply
-            # could be broadcast (broadcast is downstream of the echo →
-            # listener → handler chain), so by the time ws.receive_text()
-            # returns we are guaranteed echo.received_bytes[i] exists.
+            # Echo appends BEFORE its sendto → listener → handler → broadcast
+            # chain, so by the time ws.receive_text() returns the append
+            # happened-before in wall time. CPython's GIL makes list.append
+            # atomic, but we add a bounded retry to be robust against PyPy or
+            # future free-threaded builds where ordering may not be visible
+            # without explicit synchronisation (code-reviewer C-1).
+            deadline = time.perf_counter() + 0.5
+            while len(echo.received_bytes) <= i and time.perf_counter() < deadline:
+                time.sleep(0.001)
             assert len(echo.received_bytes) >= i + 1, (
                 f"sample {i}: echo missing datagram "
                 f"(have {len(echo.received_bytes)}, need ≥ {i + 1})"
