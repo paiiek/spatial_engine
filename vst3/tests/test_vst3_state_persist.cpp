@@ -28,6 +28,7 @@ using namespace Steinberg::Vst;
 
 static constexpr int   kStateBytesV1 = 32;
 static constexpr int   kStateBytesV2 = 36;
+static constexpr int   kStateBytesV3 = 40;  // C4-S7: writer now emits v3
 static constexpr int32 kMagicOk      = 0x31455053; // 'SPE1' LE
 
 // Build a v1 32-byte state buffer
@@ -62,16 +63,17 @@ static MemoryStream* makeStream(const uint8_t* buf, int len)
     return ms;
 }
 
-// Extract raw 7 floats from a v2 getState dump
+// Extract raw 7 floats from getState output.
+// C4-S7: writer now emits v3 (40 bytes); floats 0-6 are at same offsets as v2.
 static void extractNormsV2(spe::vst3::SpatialEngineProcessor& proc, float out[7])
 {
     MemoryStream* ms = new MemoryStream();
     proc.getState(ms);
     int64 res = 0;
     ms->seek(0, IBStream::kIBSeekSet, &res);
-    uint8_t buf[kStateBytesV2]{};
+    uint8_t buf[kStateBytesV3]{};
     int32 nr = 0;
-    ms->read(buf, kStateBytesV2, &nr);
+    ms->read(buf, kStateBytesV3, &nr);
     ms->release();
     for (int i = 0; i < 7; ++i) std::memcpy(&out[i], buf + 8 + i*4, 4);
 }
@@ -212,7 +214,8 @@ int main()
         int64 pos = 0;
         ms->seek(0, IBStream::kIBSeekEnd, &pos);
         ms->release();
-        CHECK(r == kResultOk && pos == 36, "12_getState_36_bytes");
+        // C4-S7: writer now emits v3 (40 bytes)
+        CHECK(r == kResultOk && pos == 40, "12_getState_40_bytes");
     }
 
     // -------------------------------------------------------------------
@@ -298,7 +301,7 @@ int main()
             int64 pos = 0;
             ms->seek(0, IBStream::kIBSeekEnd, &pos);
             ms->release();
-            if (pos != 36) ++crashes;
+            if (pos != 40) ++crashes;  // C4-S7: getState now emits v3 (40 bytes)
         }
         done.store(true);
         setter.join();
@@ -318,22 +321,22 @@ int main()
             MemoryStream* ms = makeStream(v1buf, kStateBytesV1);
             proc1.setState(ms); ms->release();
         }
-        // getState -> v2 buf
-        uint8_t v2out[kStateBytesV2]{};
+        // getState -> v3 buf (C4-S7: writer emits v3 = 40 bytes)
+        uint8_t v3out[kStateBytesV3]{};
         {
             MemoryStream* ms = new MemoryStream();
             proc1.getState(ms);
             int64 res = 0;
             ms->seek(0, IBStream::kIBSeekSet, &res);
             int32 nr = 0;
-            ms->read(v2out, kStateBytesV2, &nr);
+            ms->read(v3out, kStateBytesV3, &nr);
             ms->release();
         }
-        // Fresh proc reads v2
+        // Fresh proc reads v3 stream
         spe::vst3::SpatialEngineProcessor proc2;
         setupProc(proc2);
         {
-            MemoryStream* ms = makeStream(v2out, kStateBytesV2);
+            MemoryStream* ms = makeStream(v3out, kStateBytesV3);
             proc2.setState(ms); ms->release();
         }
         float got[7];
@@ -342,7 +345,7 @@ int main()
         for (int i = 0; i < 6; ++i)
             if (std::fabs(got[i] - kTestVals[i]) >= 1e-5f) ok=false;
         if (std::fabs(got[6] - 0.f) >= 1e-5f) ok=false; // bypass=0
-        CHECK(ok, "16_v1_to_v2_upgrade");
+        CHECK(ok, "16_v1_to_v3_upgrade");
     }
 
     // -------------------------------------------------------------------

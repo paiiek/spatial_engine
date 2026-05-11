@@ -213,6 +213,23 @@ void SpatialEngineController::buildParamInfos()
         p.flags                  = ParameterInfo::kCanAutomate | ParameterInfo::kIsBypass;
         norm_values_[6]          = 0.0;
     }
+
+    // --- 7: kMute, stepCount=1 (toggle), kCanAutomate only (NOT kIsBypass) ---
+    // C4-S7: audio output zero override. Distinct from kBypass (dry pass-through).
+    // kIsMute (1<<17) is not used here — kCanAutomate with stepCount=1 is sufficient.
+    {
+        ParameterInfo& p = param_infos_[7];
+        std::memset(&p, 0, sizeof(p));
+        p.id = 7;
+        asciiToStr128(p.title,      "Mute");
+        asciiToStr128(p.shortTitle, "Mute");
+        asciiToStr128(p.units,      "");
+        p.stepCount              = 1;       // toggle
+        p.defaultNormalizedValue = 0.0;
+        p.unitId                 = 0;
+        p.flags                  = ParameterInfo::kCanAutomate;
+        norm_values_[7]          = 0.0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,10 +313,13 @@ namespace {
 static constexpr Steinberg::int32  kCtlStateMagic    = 0x31455053; // 'SPE1' LE
 static constexpr Steinberg::uint16 kCtlStateVersionV1 = 1;
 static constexpr Steinberg::uint16 kCtlStateVersionV2 = 2;
+static constexpr Steinberg::uint16 kCtlStateVersionV3 = 3;
 static constexpr Steinberg::uint16 kCtlStateNParamsV1 = 6;
 static constexpr Steinberg::uint16 kCtlStateNParamsV2 = 7;
+static constexpr Steinberg::uint16 kCtlStateNParamsV3 = 8;
 static constexpr Steinberg::int32  kCtlStateBytesV1   = 32;
 static constexpr Steinberg::int32  kCtlStateBytesV2   = 36;
+static constexpr Steinberg::int32  kCtlStateBytesV3   = 40;
 } // namespace
 
 Steinberg::tresult PLUGIN_API
@@ -308,7 +328,7 @@ SpatialEngineController::setComponentState(Steinberg::IBStream* state)
     if (!state) return Steinberg::kInvalidArgument;
 
     // Phase 1: header read (8 bytes)
-    uint8_t buf[kCtlStateBytesV2];
+    uint8_t buf[kCtlStateBytesV3];
     Steinberg::int32 numRead = 0;
     Steinberg::tresult r = state->read(buf, 8, &numRead);
     if (r != Steinberg::kResultOk || numRead < 8) {
@@ -345,6 +365,7 @@ SpatialEngineController::setComponentState(Steinberg::IBStream* state)
             norm_values_[i] = static_cast<double>(v);
         }
         norm_values_[6] = 0.0; // v1 fallback: bypass off
+        norm_values_[7] = 0.0; // v1 fallback: kMute off
     } else if (version == kCtlStateVersionV2 && nparams == kCtlStateNParamsV2) {
         // v2: read 28 bytes (7 floats)
         numRead = 0;
@@ -354,6 +375,22 @@ SpatialEngineController::setComponentState(Steinberg::IBStream* state)
             return Steinberg::kResultOk;
         }
         for (int i = 0; i < 7; ++i) {
+            float v = 0.f;
+            std::memcpy(&v, buf + 8 + i * 4, 4);
+            if (v < 0.f) v = 0.f;
+            if (v > 1.f) v = 1.f;
+            norm_values_[i] = static_cast<double>(v);
+        }
+        norm_values_[7] = 0.0; // v2 fallback: kMute off
+    } else if (version == kCtlStateVersionV3 && nparams == kCtlStateNParamsV3) {
+        // v3 (C4-S7): read 32 bytes (8 floats, includes kMute at index 7)
+        numRead = 0;
+        r = state->read(buf + 8, 32, &numRead);
+        if (r != Steinberg::kResultOk || numRead < 32) {
+            std::fprintf(stderr, "VST3 controller setComponentState: v3 payload short read, defaults retained\n");
+            return Steinberg::kResultOk;
+        }
+        for (int i = 0; i < 8; ++i) {
             float v = 0.f;
             std::memcpy(&v, buf + 8 + i * 4, 4);
             if (v < 0.f) v = 0.f;
@@ -450,6 +487,10 @@ SpatialEngineController::getParamStringByValue(Steinberg::Vst::ParamID id,
             snprintf(buf, sizeof(buf), "%s", valueNormalized >= 0.5 ? "On" : "Off");
             break;
         }
+        case 7: { // kMute: toggle
+            snprintf(buf, sizeof(buf), "%s", valueNormalized >= 0.5 ? "On" : "Off");
+            break;
+        }
         default:
             return Steinberg::kInvalidArgument;
     }
@@ -482,6 +523,11 @@ SpatialEngineController::getParamValueByString(Steinberg::Vst::ParamID id,
             if (str128EqAscii(string, "Off"))    { valueNormalized = 0.0;  return Steinberg::kResultOk; }
             return Steinberg::kInvalidArgument;
         }
+        case 7: { // kMute
+            if (str128EqAscii(string, "On"))     { valueNormalized = 1.0;  return Steinberg::kResultOk; }
+            if (str128EqAscii(string, "Off"))    { valueNormalized = 0.0;  return Steinberg::kResultOk; }
+            return Steinberg::kInvalidArgument;
+        }
         default:
             // For continuous params, we don't parse strings in MVP (Phase D6 deferral).
             valueNormalized = 0.0;
@@ -503,6 +549,7 @@ SpatialEngineController::normalizedParamToPlain(Steinberg::Vst::ParamID id,
         case 5: return static_cast<double>(
                     static_cast<int>(valueNormalized * 3.0 + 0.5)); // 0,1,2,3 -> preset index
         case 6: return valueNormalized >= 0.5 ? 1.0 : 0.0; // bypass toggle
+        case 7: return valueNormalized >= 0.5 ? 1.0 : 0.0; // kMute toggle
         default: return valueNormalized;
     }
 }
@@ -534,6 +581,7 @@ SpatialEngineController::plainParamToNormalized(Steinberg::Vst::ParamID id,
             return idx <= 0 ? 0.0 : (idx >= 3 ? 1.0 : idx / 3.0);
         }
         case 6: return plainValue >= 0.5 ? 1.0 : 0.0; // bypass toggle
+        case 7: return plainValue >= 0.5 ? 1.0 : 0.0; // kMute toggle
         default: return plainValue;
     }
 }

@@ -98,17 +98,20 @@ static void setupProc(spe::vst3::SpatialEngineProcessor& proc)
     proc.setActive(true);
 }
 
-// Extract 7 active norms via getState (which writes v2)
+// Extract 7 active norms via getState (C4-S7: writer emits v3 = 40 bytes).
+// Reads v3 stream and extracts the first 7 floats (indices 0-6).
+// Index 7 (kMute) is ignored here — callers that need it use extractNormsV3.
 static void extractNormsV2(spe::vst3::SpatialEngineProcessor& proc, float out[7])
 {
     MemoryStream* ms = new MemoryStream();
     proc.getState(ms);
     int64 res = 0;
     ms->seek(0, IBStream::kIBSeekSet, &res);
-    uint8_t buf[kStateBytesV2]{};
+    uint8_t buf[kStateBytesV3]{};
     int32 nr = 0;
-    ms->read(buf, kStateBytesV2, &nr);
+    ms->read(buf, kStateBytesV3, &nr);
     ms->release();
+    // Works for both v2 (36 bytes) and v3 (40 bytes): floats 0-6 are at same offsets.
     for (int i = 0; i < 7; ++i) std::memcpy(&out[i], buf + 8 + i*4, 4);
 }
 
@@ -198,28 +201,22 @@ int main()
         }
         CHK(params_ok, "A15a_row2_v2_six_base_params_loaded");
 
-        // Capture fixture: use getState output (byte-stable v2 writer)
-        // Values: Pan Az=0.7, Master Gain=0.6, kBypass=1.0 (loaded above)
+        // Capture fixture: use the original v2 buf (byte-stable v2 stream).
+        // C4-S7 note: getState now emits v3 (40 bytes); the fixture must remain
+        // a v2 file (36 bytes) to serve as the backward-compat test vector.
+        // We write the input buf (which we just loaded from) as the fixture.
         {
-            MemoryStream* gs = new MemoryStream();
-            proc.getState(gs);
-            int64 res = 0;
-            gs->seek(0, IBStream::kIBSeekSet, &res);
-            uint8_t fxbuf[kStateBytesV2]{};
-            int32 nr = 0;
-            gs->read(fxbuf, kStateBytesV2, &nr);
-            gs->release();
-
             // Write fixture alongside test source
             const char* fixture_path =
                 CMAKE_CURRENT_SOURCE_DIR "/fixtures/v02_preset_panaz_bypass.vstpreset";
-            bool wrote = writeFixtureFile(fixture_path, fxbuf, kStateBytesV2);
+            bool wrote = writeFixtureFile(fixture_path, buf, kStateBytesV2);
             CHK(wrote, "A15a_row2_v2_fixture_written");
 
-            // Reload fixture and verify byte-stability
+            // Reload fixture and verify byte-stability: load v2 fixture, check
+            // that 7 active params match what we originally loaded.
             spe::vst3::SpatialEngineProcessor proc2;
             setupProc(proc2);
-            MemoryStream* ms2 = makeStream(fxbuf, kStateBytesV2);
+            MemoryStream* ms2 = makeStream(buf, kStateBytesV2);
             tresult r2 = proc2.setState(ms2);
             ms2->release();
             CHK(r2 == kResultOk, "A15a_row2_v2_fixture_reload_ok");

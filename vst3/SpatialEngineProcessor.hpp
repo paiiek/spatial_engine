@@ -37,7 +37,7 @@ static constexpr Steinberg::TUID kSpatialEngineProcessorUID = {
     (Steinberg::int8)0x23,(Steinberg::int8)0x34,(Steinberg::int8)0x45,(Steinberg::int8)0x56
 };
 
-// Param IDs for 7 parameters (Step 2 wiring; kBypass added in C2B postmortem S1/S3)
+// Param IDs for 8 parameters (C4-S7: kMute activated; kBypass added in C2B postmortem S1/S3)
 enum ParamId : Steinberg::Vst::ParamID {
     kPanAz        = 0,
     kPanEl        = 1,
@@ -46,10 +46,10 @@ enum ParamId : Steinberg::Vst::ParamID {
     kAmbiOrder    = 4,
     kRoomPreset   = 5,
     kBypass       = 6,
-    // kMute = 7  — RESERVED for S7 (D3-γ writer activation). DO NOT USE until S7.
-    //              Active enum ends at kBypass=6. S7 will add kMute here and
-    //              resize norm_values_ from [7] to [8].
+    kMute         = 7,  // C4-S7: audio output zero override (distinct from kBypass dry pass-through)
 };
+
+static constexpr int kNumParams = 8;
 
 class SpatialEngineProcessor
     : public Steinberg::Vst::IComponent
@@ -110,15 +110,11 @@ private:
     Steinberg::int32 max_block_{512};
     bool active_{false};
 
-    // Atomic norm value snapshot for 7 params (Step 2.4 — RT-safe audio thread reads)
+    // Atomic norm value snapshot for 8 params (C4-S7: resized from [7] to [8]).
     // norm_values_[6] = bypass (0.0=off, 1.0=on). Read directly in process().
+    // norm_values_[7] = kMute (0.0=off, 1.0=on). Zeroes output when >= 0.5.
     // bypass_active_ removed in C2B postmortem S3 — norm_values_[6] is the single source of truth.
-    std::atomic<float> norm_values_[7]{};
-
-    // S2.5 (D3-γ reader-only): stash for 8th float read from v3 state streams.
-    // kMute activation (S7) will replace this with norm_values_[7] after array resize.
-    // Default 0.0 = mute-off. Not used by audio path until S7.
-    std::atomic<float> mute_stash_{0.f};
+    std::atomic<float> norm_values_[8]{};
 
     // Component ↔ Controller connection peer (host manages lifetime)
     Steinberg::Vst::IConnectionPoint* peer_{nullptr};

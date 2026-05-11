@@ -235,18 +235,18 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 }
 
 // ---------------------------------------------------------------------------
-// State persistence — C4-S2.5: v3 reader added (D3-γ early-reader).
-// Binary format v2 (36 bytes, little-endian):
+// State persistence — C4-S7: v3 writer activated; v3 reader promoted from D3-γ.
+// Binary format v3 (40 bytes, little-endian):
 //   bytes  0-3:  magic 'S','P','E','1' (0x31455053)
-//   bytes  4-5:  version uint16 = 2
-//   bytes  6-7:  param_count uint16 = 7
-//   bytes  8-35: 7 × float32 normalized values (params 0..6, [6]=bypass)
+//   bytes  4-5:  version uint16 = 3
+//   bytes  6-7:  param_count uint16 = 8
+//   bytes  8-39: 8 × float32 normalized values (params 0..7, [6]=bypass, [7]=kMute)
 //
+// v2 format (36 bytes): version=2, param_count=7, 7 floats ([6]=bypass).
 // v1 format (32 bytes): version=1, param_count=6, 6 floats.
-// v3 format (40 bytes): version=3, param_count=8, 8 floats ([7]=kMute stash).
-//   kMute is stashed in mute_stash_; audio path does not use it until S7.
 // v4+: forward-compat refusal — returns kResultFalse (ADR 0011 §rule-6).
-// Reader handles v1/v2/v3. Writer always emits v2 (writer bump waits for S7).
+// Reader handles v1/v2/v3. Writer emits v3 from this commit onward (S7).
+// Backward compat: v2 reader sets kMute=0 (mute-off default).
 // ---------------------------------------------------------------------------
 namespace {
 static constexpr Steinberg::int32  kStateMagic      = 0x31455053; // 'SPE1' LE
@@ -304,9 +304,9 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
             dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
                                 static_cast<Steinberg::Vst::ParamValue>(v));
         }
-        // v1 fallback: bypass=0, kMute stash=0
+        // v1 fallback: bypass=0, kMute=0 (mute-off)
         norm_values_[6].store(0.f, std::memory_order_relaxed);
-        mute_stash_.store(0.f, std::memory_order_relaxed);
+        norm_values_[7].store(0.f, std::memory_order_relaxed);
     } else if (version == kStateVersionV2 && nparams == kStateNParamsV2) {
         // v2: read 28 bytes (7 floats)
         numRead = 0;
@@ -325,18 +325,18 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
             }
             // kBypass (i==6): audio path reads norm_values_[6] directly in process()
         }
-        // v2: kMute not present in stream — default to 0
-        mute_stash_.store(0.f, std::memory_order_relaxed);
+        // v2: kMute not present in stream — default to 0 (mute-off)
+        norm_values_[7].store(0.f, std::memory_order_relaxed);
     } else if (version == kStateVersionV3 && nparams == kStateNParamsV3) {
-        // v3 (D3-γ reader-only): read 32 bytes (8 floats)
-        // 8th float is kMute — stashed in mute_stash_ until S7 activates kMute.
+        // v3 (C4-S7 activated): read 32 bytes (8 floats)
+        // 8th float is kMute — routed into norm_values_[kMute] (active from S7).
         numRead = 0;
         r = state->read(buf + 8, 32, &numRead);
         if (r != Steinberg::kResultOk || numRead < 32) {
             std::fprintf(stderr, "VST3 setState: v3 payload short read, defaults retained\n");
             return Steinberg::kResultOk;
         }
-        for (int i = 0; i < 7; ++i) {
+        for (int i = 0; i < 8; ++i) {
             float v = 0.f;
             std::memcpy(&v, buf + 8 + i * 4, 4);
             norm_values_[i].store(v, std::memory_order_relaxed);
@@ -344,13 +344,10 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
                 dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
                                     static_cast<Steinberg::Vst::ParamValue>(v));
             }
+            // kBypass (i==6) and kMute (i==7): audio path reads norm_values_ directly
         }
-        // 8th float: kMute stash (S7 will activate)
-        float mute_val = 0.f;
-        std::memcpy(&mute_val, buf + 8 + 7 * 4, 4);
-        mute_stash_.store(mute_val, std::memory_order_relaxed);
-        std::fprintf(stderr, "VST3 setState: v3 loaded (kMute=%.3f stashed, inactive until S7)\n",
-                     (double)mute_val);
+        std::fprintf(stderr, "VST3 setState: v3 loaded (kMute=%.3f active)\n",
+                     (double)norm_values_[kMute].load(std::memory_order_relaxed));
     } else if (version > kStateVersionV3) {
         // Forward-compat refusal per ADR 0011 §rule-6
         std::fprintf(stderr, "VST3 setState: unsupported future version v=%u, refusing load\n",
@@ -369,30 +366,42 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
 {
     if (!state) return Steinberg::kInvalidArgument;
 
-    // Always write v2 (36 bytes)
-    uint8_t buf[kStateBytesV2];
+    // C4-S7: emit v3 (40 bytes) — includes kMute at index 7.
+    // Binary layout v3 (40 bytes, little-endian):
+    //   bytes  0-3:  magic 'SPE1' = 0x31455053
+    //   bytes  4-5:  version uint16 = 3
+    //   bytes  6-7:  param_count uint16 = 8
+    //   bytes  8-11: float32 norm_values_[0] = kPanAz
+    //   bytes 12-15: float32 norm_values_[1] = kPanEl
+    //   bytes 16-19: float32 norm_values_[2] = kSourceWidth
+    //   bytes 20-23: float32 norm_values_[3] = kMasterGain
+    //   bytes 24-27: float32 norm_values_[4] = kAmbiOrder
+    //   bytes 28-31: float32 norm_values_[5] = kRoomPreset
+    //   bytes 32-35: float32 norm_values_[6] = kBypass
+    //   bytes 36-39: float32 norm_values_[7] = kMute
+    uint8_t buf[kStateBytesV3];
 
     // Magic
     Steinberg::int32 magic = kStateMagic;
     std::memcpy(buf + 0, &magic, 4);
 
-    // Version = 2
-    Steinberg::uint16 version = kStateVersionV2;
+    // Version = 3
+    Steinberg::uint16 version = kStateVersionV3;
     std::memcpy(buf + 4, &version, 2);
 
-    // Param count = 7
-    Steinberg::uint16 nparams = kStateNParamsV2;
+    // Param count = 8
+    Steinberg::uint16 nparams = kStateNParamsV3;
     std::memcpy(buf + 6, &nparams, 2);
 
-    // 7 float normalized values (including bypass at index 6)
-    for (int i = 0; i < 7; ++i) {
+    // 8 float normalized values (params 0..7, [7]=kMute)
+    for (int i = 0; i < 8; ++i) {
         float v = norm_values_[i].load(std::memory_order_relaxed);
         std::memcpy(buf + 8 + i * 4, &v, 4);
     }
 
     Steinberg::int32 written = 0;
-    Steinberg::tresult r = state->write(buf, kStateBytesV2, &written);
-    return (r == Steinberg::kResultOk && written == kStateBytesV2)
+    Steinberg::tresult r = state->write(buf, kStateBytesV3, &written);
+    return (r == Steinberg::kResultOk && written == kStateBytesV3)
                ? Steinberg::kResultOk
                : Steinberg::kResultFalse;
 }
@@ -556,8 +565,8 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
             ParamValue       normValue    = 0.0;
             if (queue->getPoint(numPts - 1, sampleOffset, normValue) != Steinberg::kResultOk) continue;
 
-            // Step 2.4: atomic store before dispatch
-            if (paramId < 7u) {
+            // Step 2.4: atomic store before dispatch (8 params after C4-S7)
+            if (paramId < 8u) {
                 norm_values_[paramId].store(static_cast<float>(normValue),
                                             std::memory_order_relaxed);
             }
@@ -566,12 +575,23 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
         }
     }
 
-    // --- Audio: bypass (dry pass-through) or normal engine path ---
-    // C2B postmortem S3: bypass reads norm_values_[6] (kBypass param).
-    // Dry pass-through: ch-by-ch identity copy up to min(in,out) channels;
-    // remaining output channels zeroed. Decision C option-α.
+    // --- Audio: kMute → zero output; kBypass → dry pass-through; else engine ---
+    // kMute (id=7, C4-S7): overrides everything — output buffers zeroed regardless
+    //   of bypass state. Distinct from kBypass (dry pass-through, input→output).
+    // kBypass (id=6, C2B postmortem S3): dry pass-through — input identity-copied.
     if (data.numSamples > 0) {
-        if (norm_values_[kBypass].load(std::memory_order_acquire) >= 0.5f) {
+        if (norm_values_[kMute].load(std::memory_order_acquire) >= 0.5f) {
+            // kMute=on: zero all output buffers, no audio output.
+            if (data.outputs && data.numOutputs > 0) {
+                AudioBusBuffers& outBus = data.outputs[0];
+                for (Steinberg::int32 ch = 0; ch < outBus.numChannels; ++ch) {
+                    if (outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
+                        std::memset(outBus.channelBuffers32[ch], 0,
+                                    static_cast<std::size_t>(data.numSamples) * sizeof(float));
+                    }
+                }
+            }
+        } else if (norm_values_[kBypass].load(std::memory_order_acquire) >= 0.5f) {
             // Bypass: dry pass-through — RT-safe, alloc=0, no mutex.
             if (data.inputs  && data.numInputs  > 0 &&
                 data.outputs && data.numOutputs > 0) {
@@ -700,6 +720,10 @@ void SpatialEngineProcessor::dispatchParamChange(Steinberg::Vst::ParamID id,
         case kBypass:
             // No engine-side action — bypass is read directly in process()
             // via norm_values_[kBypass]. Param is addressable for round-trip.
+            break;
+        case kMute:
+            // No engine-side action — kMute is read directly in process()
+            // via norm_values_[kMute]. Output zeroing happens in the audio path.
             break;
         default:
             break;

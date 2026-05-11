@@ -44,8 +44,8 @@ int main()
     tresult r = ctrl.initialize(nullptr);
     ASSERT_EQ(r, kResultOk, "initialize");
 
-    // Assertion 2: getParameterCount == 7 (C2B postmortem S1: kBypass added)
-    ASSERT_EQ(ctrl.getParameterCount(), 7, "paramCount");
+    // Assertion 2: getParameterCount == 8 (C4-S7: kMute added)
+    ASSERT_EQ(ctrl.getParameterCount(), 8, "paramCount");
 
     // Assertions 3-8: ParameterInfo for each param
     // param 0: pan_az
@@ -98,8 +98,8 @@ int main()
         ASSERT_NEAR(ctrl.getParamNormalized(3), info.defaultNormalizedValue, 1e-5, "gain.roundtrip");
     }
 
-    // Assertion 11: getParameterCount() == 7 (C2B postmortem S1)
-    ASSERT_EQ(ctrl.getParameterCount(), 7, "paramCount_7");
+    // Assertion 11: getParameterCount() == 8 (C4-S7: kMute added)
+    ASSERT_EQ(ctrl.getParameterCount(), 8, "paramCount_7");
 
     // Assertion 12: param 6 has kIsBypass flag set
     {
@@ -112,6 +112,24 @@ int main()
         int canAutomate = (info.flags & ParameterInfo::kCanAutomate) != 0 ? 1 : 0;
         ASSERT_EQ(canAutomate, 1, "bypass.kCanAutomate");
         ASSERT_NEAR(info.defaultNormalizedValue, 0.0, 1e-5, "bypass.default_0");
+    }
+
+    // Assertion 13: param 7 (kMute) — kCanAutomate, stepCount=1, default=0, NOT kIsBypass
+    {
+        ParameterInfo info{};
+        ctrl.getParameterInfo(7, info);
+        ASSERT_EQ(info.id, 7, "mute.id");
+        ASSERT_EQ(info.stepCount, 1, "mute.stepCount");
+        int canAutomate = (info.flags & ParameterInfo::kCanAutomate) != 0 ? 1 : 0;
+        ASSERT_EQ(canAutomate, 1, "mute.kCanAutomate");
+        int isBypass = (info.flags & ParameterInfo::kIsBypass) != 0 ? 1 : 0;
+        ASSERT_EQ(isBypass, 0, "mute.not_kIsBypass");
+        ASSERT_NEAR(info.defaultNormalizedValue, 0.0, 1e-5, "mute.default_0");
+        // round-trip
+        ctrl.setParamNormalized(7, 1.0);
+        ASSERT_NEAR(ctrl.getParamNormalized(7), 1.0, 1e-5, "mute.roundtrip_1");
+        ctrl.setParamNormalized(7, 0.0);
+        ASSERT_NEAR(ctrl.getParamNormalized(7), 0.0, 1e-5, "mute.roundtrip_0");
     }
 
     printf("param_layout: %d pass, %d fail\n", g_pass, g_fail);
