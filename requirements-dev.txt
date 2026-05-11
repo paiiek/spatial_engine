@@ -1,0 +1,24 @@
+# Development dependencies for spatial_engine WebGUI test harnesses.
+#
+# Install with:
+#   pip install -r requirements-dev.txt
+#   python -m playwright install chromium
+#
+# These are not required to run the production engine. They power the
+# pytest + playwright harness used by gates G2/G4 in
+# .omc/plans/spatial-engine-webgui-v1.md.
+
+# Existing runtime deps (already installed in most dev environments):
+fastapi
+uvicorn
+pydantic
+python-osc
+psutil
+requests
+pytest
+pytest-asyncio
+
+# S3 (WGUI-S3): playwright python binding — 60fps desktop harness.
+# Python binding chosen over Node CLI to keep harness in same language
+# as the rest of the WebGUI test stack (pytest + asyncio).
+playwright>=1.45
