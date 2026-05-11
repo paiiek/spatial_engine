@@ -1,8 +1,8 @@
 # ADR 0011 — VST3 plugin multi-instance discovery (file-based registry)
 
-**Status**: Draft (v0.2.0 ships this design contract; v0.3.0 implements)
-**Date**: 2026-05-10
-**Spec commit pin**: `v0.3.0-c4-draft` — frozen post-RALPLAN Round-2 APPROVE
+**Status**: Accepted (v0.3.0 sprint S1 ratification; v0.2.0 shipped the design contract)
+**Date**: 2026-05-10 (drafted) / 2026-05-11 (ratified)
+**Spec commit pin**: `v0.3.0-c4-final` — RALPLAN-DR Round-3 APPROVE (see `.omc/plans/spatial-engine-v0.3.md` + `.omc/plans/critic-r3-v0.3-review.md`)
 **Related**: ADR 0003 (single OSC schema), ADR 0010 (binding model — A1-ε per-instance UDP)
 
 ---
