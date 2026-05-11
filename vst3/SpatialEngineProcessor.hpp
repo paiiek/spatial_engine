@@ -20,7 +20,10 @@ namespace spe::core { class SpatialEngine; }
 #ifdef SPATIAL_ENGINE_VST3_OSC
 #include "AudioCommand.h"
 #include "util/SpscRing.h"  // canonical C1.b ring (core/src/util/SpscRing.h)
-namespace spe::vst3 { class SpatialEnginePluginUdp; }
+namespace spe::vst3 {
+class SpatialEnginePluginUdp;
+class SpatialEngineController;  // S4: forward-decl for reverse-path pointer
+}
 #endif
 
 namespace spe::vst3 {
@@ -119,6 +122,13 @@ private:
 
     // Component ↔ Controller connection peer (host manages lifetime)
     Steinberg::Vst::IConnectionPoint* peer_{nullptr};
+
+#ifdef SPATIAL_ENGINE_VST3_OSC
+    // S4: direct pointer to the controller for reverse-path pushParamEdit wiring.
+    // Resolved in connect() via queryInterface for SpatialEngineController.
+    // Non-owning; host manages the controller lifetime.
+    SpatialEngineController* ctrl_for_reverse_path_{nullptr};
+#endif
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
     // Audio-path SPSC ring: UDP thread (producer) → audio thread (consumer).

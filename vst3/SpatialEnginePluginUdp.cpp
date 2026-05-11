@@ -8,6 +8,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <netinet/in.h>
@@ -19,9 +20,11 @@ namespace spe::vst3 {
 
 SpatialEnginePluginUdp::SpatialEnginePluginUdp(
     std::string_view plugin_comm,
-    spe::util::SpscRing<AudioCommand, 1024>* cmd_ring)
+    spe::util::SpscRing<AudioCommand, 1024>* cmd_ring,
+    PushParamEditFn push_param_edit)
     : plugin_comm_(plugin_comm)
     , cmd_ring_(cmd_ring)
+    , push_param_edit_(std::move(push_param_edit))
 {}
 
 SpatialEnginePluginUdp::~SpatialEnginePluginUdp()
@@ -130,6 +133,95 @@ void SpatialEnginePluginUdp::stop()
     bound_port_.store(0);
 }
 
+// ---------------------------------------------------------------------------
+// S4: ADM-OSC command → controller ParamID/normalizedValue mapping (Option A).
+// Maps the 7 currently-active params (kMute=S7 deferred).
+// Returns false if this command type has no controller-side parameter mapping.
+//
+// Normalization mirrors SpatialEngineController param table:
+//   kPanAz (0):      az_rad in [-pi, pi]  → norm = az_rad/(2*pi) + 0.5
+//   kPanEl (1):      el_rad in [-pi/2, pi/2] → norm = el_rad/pi + 0.5
+//   kSourceWidth (2): width_rad in [0, pi] → norm = width_rad/pi
+//   kMasterGain (3): gain (linear ×1 scale), mapped as: norm = gainPlainToNorm(gain_db)
+//                    The payload carries gain as a linear multiplier; we must map via dB.
+//                    Approximate: gain_db = 20*log10(max(gain, 1e-10))  then skew.
+//   kAmbiOrder (4):  discrete int 1..3 → norm = (order-1)/2.0
+//   kRoomPreset (5): discrete int 0..3 → norm = idx/3.0
+//   kBypass (6):     boolean → norm = 0.0 or 1.0
+// kMute (7): DEFERRED to S7.  ObjMute packets are not forwarded to controller ring.
+// ---------------------------------------------------------------------------
+static constexpr double kPi_udp = 3.14159265358979323846;
+
+// Gain skew helpers (copy of SpatialEngineController logic; must stay in sync).
+static double udp_gainPlainToNorm(double plain) noexcept
+{
+    constexpr double kGainMin    = -60.0;
+    constexpr double kGainMax    =   6.0;
+    constexpr double kGainCentre =   0.0;
+    static const double kGainSkew = [](){
+        double ratio = (kGainCentre - kGainMin) / (kGainMax - kGainMin);
+        return std::log(0.5) / std::log(ratio);
+    }();
+    if (plain <= kGainMin) return 0.0;
+    if (plain >= kGainMax) return 1.0;
+    return std::pow((plain - kGainMin) / (kGainMax - kGainMin), kGainSkew);
+}
+
+static bool audioCommandToParamEdit(
+    const AudioCommand& ac,
+    uint32_t& out_param_id,
+    double&   out_norm) noexcept
+{
+    using T = spe::ipc::CommandTag;
+    switch (ac.tag) {
+        case T::ObjMove: {
+            // /adm/obj/N/azim or /adm/obj/N/aed → kPanAz + kPanEl.
+            // We push az and el as two separate edits; caller handles loop.
+            // For now push az only; el pushed separately via the second call with
+            // out_param_id == kPanEl sentinel (handled in recvLoop below).
+            out_param_id = 0; // kPanAz
+            double az = ac.payload.obj_move.az_rad;
+            out_norm = az / (2.0 * kPi_udp) + 0.5;
+            if (out_norm < 0.0) out_norm = 0.0;
+            if (out_norm > 1.0) out_norm = 1.0;
+            return true;
+        }
+        case T::ObjGain: {
+            // /adm/obj/N/gain → kMasterGain (id=3).
+            // payload.obj_gain.gain is a linear scale factor.
+            out_param_id = 3; // kMasterGain
+            double gain_linear = ac.payload.obj_gain.gain;
+            double gain_db = (gain_linear > 0.f)
+                ? 20.0 * std::log10(static_cast<double>(gain_linear))
+                : -60.0;
+            out_norm = udp_gainPlainToNorm(gain_db);
+            return true;
+        }
+        case T::ObjWidth: {
+            // /adm/obj/N/width → kSourceWidth (id=2).
+            out_param_id = 2; // kSourceWidth
+            double w = ac.payload.obj_width.width_rad;
+            out_norm = w / kPi_udp;
+            if (out_norm < 0.0) out_norm = 0.0;
+            if (out_norm > 1.0) out_norm = 1.0;
+            return true;
+        }
+        case T::SysAmbiOrder: {
+            // /sys/ambi_order → kAmbiOrder (id=4). Order in {1,2,3}.
+            out_param_id = 4; // kAmbiOrder
+            int order = ac.payload.sys_ambi_order.order;
+            if (order < 1) order = 1;
+            if (order > 3) order = 3;
+            out_norm = (order - 1) / 2.0;
+            return true;
+        }
+        // ObjMute (kMute=id 7): DEFERRED to S7 (D3-γ writer activation).
+        // All other tags have no kCanAutomate controller parameter mapping.
+        default:
+            return false;
+    }
+}
+
 void SpatialEnginePluginUdp::recvLoop()
 {
     spe::ipc::CommandDecoder decoder;
@@ -144,11 +236,14 @@ void SpatialEnginePluginUdp::recvLoop()
                 std::span<const uint8_t>(buf.data(), static_cast<size_t>(n)));
             packet_count_.fetch_add(1, std::memory_order_relaxed);
 
+            // Convert to trivially-copyable AudioCommand (shared by audio + reverse paths).
+            // fromCommand() returns false for non-POD / audio-irrelevant tags.
+            AudioCommand ac;
+            bool audio_relevant = fromCommand(cmd, ac);
+
+            // --- Audio path (S3): push to audio-callback ring ---
             if (cmd_ring_) {
-                // Convert to trivially-copyable AudioCommand and push.
-                // fromCommand() returns false for non-POD / audio-irrelevant tags.
-                AudioCommand ac;
-                if (fromCommand(cmd, ac)) {
+                if (audio_relevant) {
                     if (!cmd_ring_->push(ac)) {
                         // Ring full — increment drop counter (mirrors ring's own drops_).
                         drop_count_.fetch_add(1, std::memory_order_relaxed);
@@ -156,6 +251,28 @@ void SpatialEnginePluginUdp::recvLoop()
                 } else {
                     // Tag not relevant to audio path (ObjName, Scene*, Unknown, etc.)
                     drop_count_.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+
+            // --- Reverse path (S4): push to controller marshaling ring ---
+            // Strategy (a): UDP thread pushes (paramId, normalizedValue) to
+            // the controller's SPSC ring; the message thread drains via
+            // notify() → drainParamEdits() → performEdit().
+            // This path fires whenever push_param_edit_ is wired (independent of
+            // cmd_ring_; both paths operate on the same decoded AudioCommand).
+            if (audio_relevant && push_param_edit_) {
+                uint32_t param_id = 0;
+                double   norm     = 0.0;
+                if (audioCommandToParamEdit(ac, param_id, norm)) {
+                    push_param_edit_(param_id, norm);
+                }
+                // ObjMove also carries elevation → push kPanEl (id=1) separately.
+                if (ac.tag == spe::ipc::CommandTag::ObjMove) {
+                    double el = ac.payload.obj_move.el_rad;
+                    double el_norm = el / kPi_udp + 0.5;
+                    if (el_norm < 0.0) el_norm = 0.0;
+                    if (el_norm > 1.0) el_norm = 1.0;
+                    push_param_edit_(1 /*kPanEl*/, el_norm);
                 }
             }
         }

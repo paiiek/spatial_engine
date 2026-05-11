@@ -186,6 +186,40 @@ target_include_directories(test_vst3_spsc_ring_overrun PRIVATE
 target_compile_options(test_vst3_spsc_ring_overrun PRIVATE -UNDEBUG)
 add_test(NAME vst3_spsc_ring_overrun COMMAND test_vst3_spsc_ring_overrun)
 
+# ---- test_vst3_no_feedback_loop (S4 A.7 forward-loop guard) ----------------
+add_executable(test_vst3_no_feedback_loop
+    test_vst3_no_feedback_loop.cpp
+    ../SpatialEnginePluginUdp.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(test_vst3_no_feedback_loop PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${CMAKE_SOURCE_DIR}/core/src"
+)
+target_link_libraries(test_vst3_no_feedback_loop PRIVATE spe_core)
+target_compile_definitions(test_vst3_no_feedback_loop PRIVATE SPATIAL_ENGINE_VST3_OSC=1)
+target_compile_options(test_vst3_no_feedback_loop PRIVATE -UNDEBUG)
+add_test(NAME vst3_no_feedback_loop COMMAND test_vst3_no_feedback_loop)
+
+# ---- test_vst3_reverse_path (S4 A.7 reverse-path latency — short 5s) ------
+# Full 60s soak deferred to S6 (SPATIAL_ENGINE_SOAK=ON env var).
+# Marked LONG_TEST label; default ctest runs it with 30s timeout.
+add_executable(test_vst3_reverse_path
+    test_vst3_reverse_path.cpp
+    ${PLUGIN_SRCS}
+    ../SpatialEnginePluginUdp.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(test_vst3_reverse_path PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_reverse_path PRIVATE spe_core)
+target_compile_definitions(test_vst3_reverse_path PRIVATE
+    SPATIAL_ENGINE_VST3_BUILD=1
+    SPATIAL_ENGINE_VST3_OSC=1
+)
+target_compile_options(test_vst3_reverse_path PRIVATE -UNDEBUG)
+add_test(NAME vst3_reverse_path COMMAND test_vst3_reverse_path)
+set_tests_properties(vst3_reverse_path PROPERTIES TIMEOUT 30 LABELS "LONG_TEST")
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only

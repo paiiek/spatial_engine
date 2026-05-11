@@ -202,8 +202,22 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
         active_ = true;
 #ifdef SPATIAL_ENGINE_VST3_OSC
         if (!udp_io_) {
+            // S4: build reverse-path lambda if controller is already connected.
+            // If connect() has not been called yet (host calls setActive before
+            // connect in some DAWs), ctrl_for_reverse_path_ will be null and
+            // the reverse path will be disabled for this session. In practice
+            // hosts call connect before setActive(true) per SDK lifecycle spec.
+            PushParamEditFn push_fn;
+            if (ctrl_for_reverse_path_) {
+                SpatialEngineController* ctrl = ctrl_for_reverse_path_;
+                push_fn = [ctrl](uint32_t id, double norm) noexcept -> bool {
+                    return ctrl->pushParamEdit(
+                        static_cast<Steinberg::Vst::ParamID>(id),
+                        static_cast<Steinberg::Vst::ParamValue>(norm));
+                };
+            }
             udp_io_ = std::make_unique<SpatialEnginePluginUdp>(
-                "spatial_engine_vst3", &osc_cmd_ring_);
+                "spatial_engine_vst3", &osc_cmd_ring_, std::move(push_fn));
             udp_io_->start();
         }
 #endif
@@ -700,13 +714,35 @@ Steinberg::tresult PLUGIN_API
 SpatialEngineProcessor::connect(Steinberg::Vst::IConnectionPoint* other)
 {
     peer_ = other; // no addRef — host manages lifetime per SDK convention
+
+#ifdef SPATIAL_ENGINE_VST3_OSC
+    // S4: try to resolve the controller for reverse-path wiring.
+    // queryInterface on the peer; if it's a SpatialEngineController it will
+    // return kResultOk. No addRef held — peer lifetime is host-managed.
+    ctrl_for_reverse_path_ = nullptr;
+    if (other) {
+        void* ctrl_ptr = nullptr;
+        if (other->queryInterface(kSpatialEngineControllerUID, &ctrl_ptr)
+                == Steinberg::kResultOk && ctrl_ptr) {
+            ctrl_for_reverse_path_ = static_cast<SpatialEngineController*>(ctrl_ptr);
+            // Release the ref we just grabbed — we hold a raw non-owning pointer.
+            ctrl_for_reverse_path_->release();
+        }
+    }
+#endif
+
     return Steinberg::kResultOk;
 }
 
 Steinberg::tresult PLUGIN_API
 SpatialEngineProcessor::disconnect(Steinberg::Vst::IConnectionPoint* other)
 {
-    if (peer_ == other) peer_ = nullptr;
+    if (peer_ == other) {
+        peer_ = nullptr;
+#ifdef SPATIAL_ENGINE_VST3_OSC
+        ctrl_for_reverse_path_ = nullptr;
+#endif
+    }
     return Steinberg::kResultOk;
 }
 

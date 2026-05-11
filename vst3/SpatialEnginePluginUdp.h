@@ -10,10 +10,18 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <thread>
 
 namespace spe::vst3 {
+
+// S4: reverse-path callback type.
+// Called by the UDP recv thread to push a (paramId, normalizedValue) pair
+// into the controller's marshaling ring (strategy a).
+// Must be lock-free / alloc-free on the hot path from the UDP thread perspective;
+// the implementation (SpscRing::push) satisfies this.
+using PushParamEditFn = std::function<bool(uint32_t paramId, double normalizedValue)>;
 
 class SpatialEnginePluginUdp {
 public:
@@ -21,9 +29,13 @@ public:
     // cmd_ring: audio-path SPSC ring owned by SpatialEngineProcessor; must
     //           outlive this object (processor ensures UDP is stopped before
     //           the ring is destroyed).
+    // push_param_edit: S4 reverse-path — called per decoded ADM-OSC param to
+    //           push a (paramId, normalizedValue) into the controller ring.
+    //           May be nullptr (disables reverse path).
     explicit SpatialEnginePluginUdp(
         std::string_view plugin_comm = "spatial_engine_vst3",
-        spe::util::SpscRing<AudioCommand, 1024>* cmd_ring = nullptr);
+        spe::util::SpscRing<AudioCommand, 1024>* cmd_ring = nullptr,
+        PushParamEditFn push_param_edit = nullptr);
     ~SpatialEnginePluginUdp();
 
     // Bind UDP socket and start recv thread. Returns true on success.
@@ -59,6 +71,8 @@ private:
     uint32_t              instance_id_{0};
     // Non-owning pointer to the audio-path ring (owned by processor).
     spe::util::SpscRing<AudioCommand, 1024>* cmd_ring_{nullptr};
+    // S4: reverse-path push callback (controller's marshaling ring).
+    PushParamEditFn       push_param_edit_;
 };
 
 } // namespace spe::vst3
