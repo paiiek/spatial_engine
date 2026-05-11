@@ -385,6 +385,38 @@ async def v2s_status() -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# S5 / G7 — dev-only introspection endpoints (env-gated)
+# ---------------------------------------------------------------------------
+# Activated only when ``SPE_DEBUG_ENDPOINTS=1`` in the environment so that
+# production deployments do not expose internal asyncio state. Used by the
+# 48h soak harness (tests/soak_harness/run_soak_webgui.py) to track
+# ``asyncio.all_tasks()`` slope across the soak window (G7 sentinel
+# ``extract_asyncio_slope.py``).
+
+import os as _dbg_os  # noqa: E402
+
+if _dbg_os.environ.get("SPE_DEBUG_ENDPOINTS") == "1":
+
+    @app.get("/api/_debug/asyncio_tasks")
+    async def _debug_asyncio_tasks() -> JSONResponse:
+        """Return current count of asyncio tasks alive in the uvicorn loop.
+
+        Gated by env ``SPE_DEBUG_ENDPOINTS=1``. Soak harness samples this at
+        1 Hz; linear regression on the returned counts feeds the
+        ``asyncio_slope_tasks_per_h`` G7 sentinel (must be ≤ 1 task/h).
+        """
+        try:
+            tasks = asyncio.all_tasks()
+            return JSONResponse({
+                "ok": True,
+                "n_tasks": len(tasks),
+                "ws_connections": len(manager.active),
+            })
+        except Exception as exc:  # pragma: no cover — defensive
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # Broadcast helper (called by osc_bridge when OSC 9101 state arrives)
 # ---------------------------------------------------------------------------
 
