@@ -157,12 +157,21 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     sample_rate_    = sample_rate;
     max_block_size_ = max_block_size;
 
-    // Load default layout if not set
+    // Load default layout if not set. Probe common run-from CWDs so the
+    // canonical core/build/ run does not emit a spurious parse warning.
     if (!has_layout_) {
-        auto result = spe::geometry::load_layout("../configs/lab_8ch.yaml");
-        if (spe::geometry::is_ok(result)) {
-            layout_     = std::get<spe::geometry::SpeakerLayout>(result);
-            has_layout_ = true;
+        const char* candidates[] = {
+            "configs/lab_8ch.yaml",
+            "../configs/lab_8ch.yaml",
+            "../../configs/lab_8ch.yaml",
+        };
+        for (const char* path : candidates) {
+            auto result = spe::geometry::load_layout(path);
+            if (spe::geometry::is_ok(result)) {
+                layout_     = std::get<spe::geometry::SpeakerLayout>(result);
+                has_layout_ = true;
+                break;
+            }
         }
     }
 

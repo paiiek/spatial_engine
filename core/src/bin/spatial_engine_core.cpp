@@ -18,8 +18,15 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <thread>
+
+#define SPE_STRINGIFY_(x) #x
+#define SPE_STRINGIFY(x)  SPE_STRINGIFY_(x)
+#define SPE_VERSION_STR   SPE_STRINGIFY(SPE_VERSION_MAJOR) "." \
+                          SPE_STRINGIFY(SPE_VERSION_MINOR) "." \
+                          SPE_STRINGIFY(SPE_VERSION_PATCH)
 
 namespace {
 
@@ -27,7 +34,7 @@ std::atomic<bool> g_quit{false};
 void handle_sigint(int) { g_quit.store(true); }
 
 void print_banner(const std::string& backend_name, int osc_port) {
-    std::printf("spatial_engine_core v0.2.0 (full render chain)\n");
+    std::printf("spatial_engine_core v" SPE_VERSION_STR " (full render chain)\n");
     std::printf("  MAX_OBJECTS=%d  MAX_BLOCK=%d\n", spe::MAX_OBJECTS, spe::MAX_BLOCK);
 #ifdef SPE_HAVE_JUCE
     std::printf("  JUCE: linked\n");
@@ -35,6 +42,22 @@ void print_banner(const std::string& backend_name, int osc_port) {
     std::printf("  JUCE: not linked  OSC-UDP: port %d\n", osc_port);
 #endif
     std::printf("  backend=%s\n", backend_name.c_str());
+}
+
+// Resolve default layout path by probing common CWDs. Returns the first
+// readable candidate, or empty if none found (caller falls back to fixture).
+std::string resolve_default_layout(const char* basename) {
+    const char* candidates[] = {
+        "configs/",       // CWD == project root
+        "../configs/",    // CWD == build/
+        "../../configs/", // CWD == core/build/  (canonical per project CLAUDE.md)
+    };
+    for (const char* prefix : candidates) {
+        std::string p = std::string(prefix) + basename;
+        std::ifstream f(p);
+        if (f.good()) return p;
+    }
+    return {};
 }
 
 // Thin wrapper: captures engine output to WAV while forwarding to engine.
@@ -75,7 +98,7 @@ int main(int argc, char** argv) {
     double      sr           = 48000.0;
     int         osc_port     = 9100;
     std::string wav_path;
-    std::string layout_path  = "../configs/lab_8ch.yaml";
+    std::string layout_path  = resolve_default_layout("lab_8ch.yaml");
     std::string osc_dialect  = "legacy"; // "legacy" or "adm"
 
     for (int i = 1; i < argc; ++i) {

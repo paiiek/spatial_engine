@@ -587,12 +587,21 @@ uv run python -m pytest
 just run
 ```
 
-이 명령은 Core 스텁과 UI 스텁을 동시에 시작하며, 다음 출력이 표시되어야 한다.
+이 명령은 Core와 UI를 동시에 시작한다. Core 측 콘솔에 다음과 유사한 배너가 표시되어야 한다.
 
 ```
-[core] schema_version=1 osc_cmd_port=9100 osc_state_port=9101
-[ui]   connected to core at 127.0.0.1:9100
+spatial_engine_core v0.2.0 (full render chain)
+  MAX_OBJECTS=64  MAX_BLOCK=512
+  JUCE: not linked  OSC-UDP: port 9100
+  backend=null
+  osc-dialect: legacy
+  backend: NullBackend(rate=48000,ch=8,block=64)
+  OSC listener: 0.0.0.0:9100 (ADM-OSC /adm/obj/N/aed)
+  running 10 s — Ctrl-C to stop...
 ```
+
+UI 측은 PySide6 윈도우가 열리고 상태 인디케이터가 녹색(connected)으로
+표시되면 정상이다.
 
 ### 9.2 자가 진단 테스트 항목
 
