@@ -1,6 +1,6 @@
 # Spatial Engine 운용 매뉴얼
 
-**버전:** v0.2.0  
+**버전:** v0.3.0  
 **대상 독자:** 음향 엔지니어, 시스템 운용자, 라이브 믹서  
 **최종 수정:** 2026-05-10
 
@@ -12,17 +12,18 @@
 2. [WebGUI 사용법](#chapter-2-webgui-사용법)
 3. [VST3 플러그인 사용법](#chapter-3-vst3-플러그인-사용법)
 4. [OSC 프로토콜 레퍼런스](#chapter-4-osc-프로토콜-레퍼런스)
-5. [시나리오 작성](#chapter-5-시나리오-작성)
-6. [알고리즘별 가이드](#chapter-6-알고리즘별-가이드)
-7. [멀티존 및 per-zone 리미터 운용](#chapter-7-멀티존-및-per-zone-리미터-운용)
-8. [LTC Chase 동기](#chapter-8-ltc-chase-동기)
-9. [다중 오브젝트 그룹 자동화](#chapter-9-다중-오브젝트-그룹-자동화)
-10. [라이브 공연 권장 워크플로](#chapter-10-라이브-공연-권장-워크플로)
-11. [룸 및 스피커 캘리브레이션](#chapter-11-룸-및-스피커-캘리브레이션)
-12. [트러블슈팅](#chapter-12-트러블슈팅)
-13. [모니터링 및 로그 분석](#chapter-13-모니터링-및-로그-분석)
-14. [백업 및 복구](#chapter-14-백업-및-복구)
-15. [부록](#chapter-15-부록)
+5. [VST3 플러그인 + ADM-OSC 콘솔 (직결 모드)](#chapter-5-vst3-플러그인--adm-osc-콘솔-직결-모드)
+6. [시나리오 작성](#chapter-6-시나리오-작성)
+7. [알고리즘별 가이드](#chapter-7-알고리즘별-가이드)
+8. [멀티존 및 per-zone 리미터 운용](#chapter-8-멀티존-및-per-zone-리미터-운용)
+9. [LTC Chase 동기](#chapter-9-ltc-chase-동기)
+10. [다중 오브젝트 그룹 자동화](#chapter-10-다중-오브젝트-그룹-자동화)
+11. [라이브 공연 권장 워크플로](#chapter-11-라이브-공연-권장-워크플로)
+12. [룸 및 스피커 캘리브레이션](#chapter-12-룸-및-스피커-캘리브레이션)
+13. [트러블슈팅](#chapter-13-트러블슈팅)
+14. [모니터링 및 로그 분석](#chapter-14-모니터링-및-로그-분석)
+15. [백업 및 복구](#chapter-15-백업-및-복구)
+16. [부록](#chapter-16-부록)
 
 ---
 
@@ -395,34 +396,310 @@ vid2spatial OSC 계약 전체: `docs/adr/vid2spatial_osc_contract.md`
 
 ---
 
-## Chapter 5. 시나리오 작성
+## Chapter 5. VST3 플러그인 + ADM-OSC 콘솔 (직결 모드) {#chapter-5-vst3-플러그인--adm-osc-콘솔-직결-모드}
 
-### 5.1 시나리오 구성 요소
+> **v0.3.0 신기능.** 이 챕터는 `SPATIAL_ENGINE_VST3_OSC=ON` 빌드를 사용하는 경우에만 해당된다.
+> v0.1.0 / v0.2.0 사용자는 기본 OFF 빌드를 그대로 사용할 수 있으며 (바이트 호환),
+> 이 챕터를 건너뛰어도 무방하다.
+
+### 5.1 개요 — 3-process 토폴로지
+
+v0.3.0에서 도입된 직결 모드(Direct-Connect Mode)는 **사이드카 없이** 세 개의 독립 프로세스가 직접 통신한다.
+ADR 0010 §A1-ε에 따라 사이드카(sidecar) 프로세스는 채택하지 않았다.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Process 1  spatial_engine_core  (호스트, 항상 실행)             │
+│  · Standalone 오디오 렌더러 + OSC 포워더                         │
+│  · UDP 바인드: 127.0.0.1:9100  (외부 ADM-OSC 수신 포트)          │
+│  · 레지스트리 읽기: ~/.config/spatial_engine/instances.json      │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │  /adm/obj/N/*  →  sendto(127.0.0.1:9100+N)
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Process 2  DAW + VST3 플러그인 인스턴스                         │
+│  · Reaper 7.x / Bitwig 5.x / Ardour 8.x 안에서 동작             │
+│  · setActive(true) 시점에 127.0.0.1:9100+N UDP 바인드            │
+│  · 레지스트리 쓰기: PID + boot_id + 포트 등록                    │
+│  · UDP 스레드 → 오디오 콜백 큐 (S2.6 strategy (a) 마샬링)        │
+└─────────────────────────────────────────────────────────────────┘
+                  ▲
+                  │  /adm/obj/N/aed  /adm/obj/N/gain  등
+                  │  (ADM-OSC 표준 패킷)
+┌─────────────────┴───────────────────────────────────────────────┐
+│  Process 3  외부 ADM-OSC 콘솔  (별도 장비 또는 소프트웨어)       │
+│  · DiGiCo Quantum / Avid S6L / Yamaha Rivage                    │
+│  · L-ISA Controller / Spat Revolution / d&b Soundscape          │
+│  · 전송 대상: 127.0.0.1:9100  (standalone core)                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**핵심 흐름:**
+1. 외부 ADM-OSC 콘솔이 `/adm/obj/N/...` 패킷을 `spatial_engine_core:9100` 으로 전송
+2. Core가 레지스트리를 조회하여 오브젝트 N을 담당하는 플러그인 인스턴스의 포트(9100+N)를 확인
+3. Core가 해당 포트로 패킷을 전달(forward)
+4. 플러그인의 UDP 스레드가 수신하고 오디오 콜백으로 마샬링
+
+### 5.2 빌드 옵션
+
+직결 모드는 별도 빌드 플래그가 필요하다.
+
+```cmake
+cmake .. \
+  -DSPATIAL_ENGINE_VST3=ON \
+  -DSPATIAL_ENGINE_VST3_OSC=ON \
+  -DSPATIAL_ENGINE_NO_JUCE=OFF
+make -j$(nproc)
+```
+
+| 플래그 | 기본값 | 설명 |
+|--------|--------|------|
+| `SPATIAL_ENGINE_VST3` | OFF | VST3 플러그인 빌드 활성화 |
+| `SPATIAL_ENGINE_VST3_OSC` | OFF | ADM-OSC 직결 수신 기능 포함 |
+
+`SPATIAL_ENGINE_VST3_OSC=OFF` (기본) 빌드는 v0.1.0 / v0.2.0 과 바이트 호환된다.
+OSC 직결 수신 기능을 사용하려면 반드시 두 플래그 모두 ON 으로 빌드해야 한다.
+
+빌드 산출물 위치:
+- 플러그인 번들: `build/vst3/SpatialEngine.vst3`
+- 설치: `~/.vst3/SpatialEngine.vst3` (또는 `/usr/lib/vst3/`)
+
+### 5.3 인스턴스 레지스트리
+
+플러그인이 DAW에서 활성화되는 시점에 레지스트리 파일을 갱신한다.
+
+**파일 경로:** `~/.config/spatial_engine/instances.json`
+
+**권한:** `0600` (소유자 읽기/쓰기만 허용)
+
+#### 스키마
+
+```json
+{
+  "schema_version": 1,
+  "instances": [
+    {
+      "object_id": 0,
+      "pid": 12345,
+      "boot_id": "abc123def456",
+      "port": 9100,
+      "daw": "Reaper",
+      "registered_at": "2026-05-11T10:00:00Z"
+    },
+    {
+      "object_id": 1,
+      "pid": 12345,
+      "boot_id": "abc123def456",
+      "port": 9101,
+      "daw": "Reaper",
+      "registered_at": "2026-05-11T10:00:01Z"
+    }
+  ]
+}
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `object_id` | 정수 | 담당 오디오 오브젝트 ID (0~63) |
+| `pid` | 정수 | DAW 프로세스 PID |
+| `boot_id` | 문자열 | `/proc/sys/kernel/random/boot_id` (Linux) |
+| `port` | 정수 | 플러그인이 바인드한 UDP 포트 |
+| `daw` | 문자열 | DAW 식별자 (로깅 전용) |
+| `registered_at` | ISO 8601 | 등록 시각 (UTC) |
+
+**쓰기:** 플러그인 인스턴스가 `setActive(true)` 시 항목 추가/갱신
+**읽기:** `spatial_engine_core` 포워더가 패킷 라우팅 시 읽기
+**GC:** Core 시작 시 및 포워딩 실패 시 stale 항목 자동 삭제
+- PID가 더 이상 존재하지 않는 경우 삭제
+- `boot_id` 가 현재 부팅과 다른 경우 삭제 (재부팅 후 stale 정리)
+
+### 5.4 포트 할당
+
+플러그인은 `setActive(true)` 시점에 UDP 포트를 직접 바인드한다.
+
+**할당 전략 (ADR 0010 §A1-ε):**
+1. 오브젝트 ID N에 대해 `127.0.0.1:9100+N` 시도
+2. 실패(EADDRINUSE)이면 `9100` ~ `9115` 범위 순차 탐색(walk)
+3. 범위 내 모두 실패이면 OS 할당 임시 포트(ephemeral, 49152+)로 폴백
+4. 최종 바인드 포트를 레지스트리에 기록
+
+```
+object_id=0  →  시도: 9100  성공 시 → 포트 9100 사용
+object_id=1  →  시도: 9101  성공 시 → 포트 9101 사용
+object_id=0  →  9100 충돌 → 9101 시도 → ... → 9115 → ephemeral
+```
+
+> **참고:** 같은 머신에서 여러 DAW 인스턴스를 동시에 실행하는 경우,
+> 혹은 `9100` 포트를 다른 프로세스가 점유한 경우 walk/ephemeral 경로가 활성화된다.
+
+### 5.5 콘솔 → 플러그인 라우팅
+
+`spatial_engine_core` 는 수신된 `/adm/obj/N/*` 패킷을 레지스트리 기반으로 라우팅한다.
+
+**포워딩 로직 요약:**
+1. 수신 패킷의 오브젝트 ID N 추출
+2. 레지스트리에서 `object_id == N` 인 항목 조회
+3. 항목의 `port` 로 `sendto(127.0.0.1:{port}, packet)` 실행
+4. 레지스트리 항목 없음 → `warn` 로그 후 드롭
+
+**고정 형식 로그 예시 (`tag=value` 형식):**
+
+```
+event=adm_fwd src=9100 obj=0 dst_port=9100 bytes=32 result=ok
+event=adm_fwd src=9100 obj=1 dst_port=9101 bytes=28 result=ok
+event=adm_fwd src=9100 obj=5 dst_port=0    bytes=28 result=no_registry_entry
+event=adm_fwd src=9100 obj=2 dst_port=9102 bytes=32 result=sendto_fail errno=111
+```
+
+`result=sendto_fail` 시 Core는 해당 레지스트리 항목을 stale로 간주하고 GC 대상으로 표시한다.
+
+### 5.6 DAW 통합
+
+#### Reaper 7.x
+
+1. Reaper 설정 → "VST" 탭 → VST 플러그인 경로에 `~/.vst3` 또는 설치 경로 추가
+2. "Rescan" 실행 → "SpatialEngine" 검색 확인
+3. FX 체인에 "SpatialEngine (Spatial Engine)" 삽입
+4. 플러그인 창의 "Object ID" 필드에서 오브젝트 ID 설정
+5. 플러그인 활성화(bypass 해제) 시 UDP 바인드 수행 및 레지스트리 등록
+
+> setActive(true) 타이밍: Reaper에서는 트랙 FX bypass 해제 또는 프로젝트 로드 시 호출된다.
+
+자동화 파라미터 연결:
+1. 트랙의 "Envelopes" 탭 → "Add envelope" → "VST: SpatialEngine — Az" 등 선택
+2. 타임라인에 포인트 작성 → 재생 시 ADM-OSC 역경로로 DAW automation lane 기록 가능
+
+#### Bitwig Studio 5.x
+
+1. "Settings → Locations" → "VST3 plug-in locations" 에 경로 추가
+2. "Rescan plug-ins" 실행
+3. 디바이스 패널에서 "SpatialEngine" 드래그하여 트랙에 삽입
+4. 디바이스 파라미터 "Object ID" 설정
+5. 트랙 활성화 시 UDP 바인드 수행
+
+자동화:
+- 파라미터 우클릭 → "Add Automation Lane"
+
+#### Ardour 8.x
+
+1. "Edit → Preferences → Plugins → VST3" 경로 확인
+2. "Window → Plugin Manager" 에서 "SpatialEngine" 검색 후 삽입
+3. 플러그인 에디터의 "Object ID" 설정
+4. 트랙 armed/active 상태에서 UDP 바인드
+
+> **종료(terminate) 동작:** 플러그인이 `setActive(false)` 호출 시 UDP 소켓을 닫고
+> 레지스트리에서 해당 항목을 삭제한다. DAW 종료 또는 FX 제거 시 자동으로 처리된다.
+
+### 5.7 자동화 — kMute (역방향 경로)
+
+ADR 설계 계약 A2.1-β에 따라 kMute 파라미터는 다음 경로로 처리된다.
+
+**수신 경로 (콘솔 → DAW):**
+```
+콘솔  →  /adm/obj/N/mute 1  →  Core 포워더  →  플러그인 UDP 스레드
+       →  메시지 큐 (message-thread 마샬링, S2.6 strategy (a))
+       →  오디오 콜백에서 파라미터 큐 소비
+       →  performEdit(kMute, 1.0)
+       →  DAW automation lane 기록
+```
+
+**마샬링 전략 (S2.6 strategy (a)):**
+- UDP 스레드에서 락-프리 큐에 메시지 enqueue
+- 오디오 콜백이 블록 경계에서 큐 소비
+- RT-safe: 오디오 스레드에서 힙 할당 없음
+
+> **현재 상태 (v0.3.0):** kMute 수신 디코딩 및 큐잉 구현 완료.
+> DAW automation lane 실제 기록(performEdit) 활성화는 S7 완료 후.
+> v0.3.0에서는 kMute 값을 읽고 내부 상태에 반영하지만 DAW lane 기록은 비활성.
+
+### 5.8 트러블슈팅
+
+#### 포트 충돌이 발생하면?
+
+포트 충돌 시 플러그인은 자동으로 walk → ephemeral 순서로 폴백한다.
+폴백 발생 여부를 확인하는 방법:
+
+```bash
+# Core 로그에서 ephemeral 폴백 확인
+grep "port_fallback=ephemeral" logs/spatial_engine_core.log
+
+# 또는 플러그인 측 로그
+grep "bind_fallback" ~/.config/spatial_engine/plugin.log
+```
+
+ephemeral 포트를 사용하는 경우 Core가 레지스트리를 통해 실제 포트를 파악하므로
+**수동으로 포트를 맞출 필요가 없다.**
+
+```bash
+# 현재 레지스트리 상태 확인
+cat ~/.config/spatial_engine/instances.json
+```
+
+#### 레지스트리 파일이 손상된 경우
+
+레지스트리 파일이 JSON 파싱 실패 시 Core는 자동으로 빈 레지스트리로 초기화한다.
+
+```bash
+# 수동 초기화
+rm ~/.config/spatial_engine/instances.json
+# Core 재시작 시 자동 재생성
+```
+
+#### schema_version 미스매치
+
+```
+[WARN] event=registry_schema_mismatch expected=1 got=2
+```
+
+이 에러는 더 새로운 버전의 플러그인이 기록한 레지스트리를 구버전 Core가 읽을 때 발생한다.
+Core와 플러그인 버전을 맞추거나 레지스트리 파일을 삭제 후 재등록한다.
+
+#### 플러그인이 레지스트리에 등록되지 않는 경우
+
+- Core가 실행 중인지 확인: 레지스트리 파일은 플러그인이 직접 쓰므로 Core 무관
+- 레지스트리 파일 권한 확인: `ls -la ~/.config/spatial_engine/instances.json` → `0600`
+- DAW 프로세스가 `~/.config/spatial_engine/` 디렉토리에 쓰기 권한이 있는지 확인
+
+### 5.9 알려진 한계
+
+| 항목 | 상태 | 예정 |
+|------|------|------|
+| kMute DAW automation lane 기록 | 미활성 (reader만) | S7 완료 후 (v0.3.0 sprint) |
+| macOS 지원 | 미지원 | v0.4 이상 |
+| Windows 지원 | 미지원 | v0.4 이상 |
+| 최대 동시 플러그인 인스턴스 | 8개 (ADR 0010 §A1-ε) | v0.4에서 확장 검토 |
+| 외부 네트워크 콘솔 (원격 IP) | 미지원 (loopback 전용) | v0.4 이상 |
+
+---
+
+## Chapter 6. 시나리오 작성
+
+### 6.1 시나리오 구성 요소
 
 - 오브젝트 초기 위치 및 알고리즘 설정
 - 트라젝토리 (trajectory) 애니메이션 키프레임
 - 스냅샷 (snapshot) 및 크로스페이드 전환
 - 스피커 레이아웃 참조
 
-### 5.2 YAML 시나리오 파일 구조
+### 6.2 YAML 시나리오 파일 구조
 
 - 파일 위치 및 명명 규칙 (`scenarios/` 디렉토리)
 - `scenario`, `objects`, `trajectory`, `snapshots` 섹션 설명
 - 레이아웃 파일 참조 방법 (`configs/lab_*.yaml`)
 
-### 5.3 오브젝트 배치
+### 6.3 오브젝트 배치
 
 - 정적 배치 (시나리오 로드 시 고정)
 - 동적 배치 (타임코드 기반 키프레임)
 - 그리드 스냅 및 심메트리 도구
 
-### 5.4 트라젝토리 애니메이션
+### 6.4 트라젝토리 애니메이션
 
 - 키프레임 방식: 시간, 위치, 보간 방법 (linear, bezier)
 - OSC 타임태그 활용
-- LTC 타임코드 동기화 (Chapter 8 참조)
+- LTC 타임코드 동기화 (Chapter 9 참조)
 
-### 5.5 스냅샷 크로스페이드
+### 6.5 스냅샷 크로스페이드
 
 - 스냅샷 A → B 전환 시 오브젝트 위치의 선형 보간
 - 크로스페이드 시간 설정 (기본: 2초)
@@ -430,34 +707,34 @@ vid2spatial OSC 계약 전체: `docs/adr/vid2spatial_osc_contract.md`
 
 ---
 
-## Chapter 6. 알고리즘별 가이드
+## Chapter 7. 알고리즘별 가이드
 
-### 6.1 VBAP 운용 지침
+### 7.1 VBAP 운용 지침
 
 - 스피커 배열 검증 방법 (삼각형 분해 커버리지 확인)
 - "hole-in-the-middle" 현상 발생 시 보완 방법
 - 고도각 사용 시 스피커 배열 3D화 요구사항
 - 권장 az/el 이동 속도 (청취자 추적 한계)
 
-### 6.2 DBAP 운용 지침
+### 7.2 DBAP 운용 지침
 
 - 거리 감쇠 지수(rolloff exponent) 설정
 - 비정형 공간에서 스피커 위치 YAML 입력 방법
 - 확산 음장 표현 기법
 
-### 6.3 WFS 운용 지침
+### 7.3 WFS 운용 지침
 
 - 어레이 간격(inter-speaker spacing) 설정 및 검증
 - 앨리어싱 주파수 계산 (f_alias = c / (2 × d_speaker))
 - 프리필터(prefilter) 적용 여부 설정
 
-### 6.4 알고리즘 런타임 전환
+### 7.4 알고리즘 런타임 전환
 
 - 재생 중 전환 가능 여부 (가능, 256-샘플 크로스페이드)
 - DAW 자동화로 알고리즘 전환하는 방법
 - 전환 불가 조합 (`layout_incompatible`) 사전 확인 방법
 
-### 6.5 바이노럴 모니터 (헤드폰 모니터링)
+### 7.5 바이노럴 모니터 (헤드폰 모니터링)
 
 - 바이노럴 사이드체인 활성화 방법
 - KEMAR SOFA 기반 HRTF 특성 (384샘플 IR, 48 kHz)
@@ -466,21 +743,21 @@ vid2spatial OSC 계약 전체: `docs/adr/vid2spatial_osc_contract.md`
 
 ---
 
-## Chapter 7. 멀티존 및 per-zone 리미터 운용
+## Chapter 8. 멀티존 및 per-zone 리미터 운용
 
-### 7.1 멀티존 개요
+### 8.1 멀티존 개요
 
 - 존(Zone) 정의 (스피커 그룹 분할)
 - 존별 독립 렌더링 설정
 - YAML 레이아웃 파일에서 존 정의 방법
 
-### 7.2 Per-zone 리미터 설정
+### 8.2 Per-zone 리미터 설정
 
 - 존별 최대 출력 레벨 설정 (dBFS)
 - 리미터 임계값 및 어택/릴리스 설정
 - 멀티존 환경에서 상호 간섭 방지 방법
 
-### 7.3 운용 예시
+### 8.3 운용 예시
 
 - 메인홀 + 로비 동시 운용
 - 각 존 독립 시나리오 로드 방법
@@ -488,57 +765,57 @@ vid2spatial OSC 계약 전체: `docs/adr/vid2spatial_osc_contract.md`
 
 ---
 
-## Chapter 8. LTC Chase 동기
+## Chapter 9. LTC Chase 동기
 
-### 8.1 LTC (Linear Timecode) 개요
+### 9.1 LTC (Linear Timecode) 개요
 
 - LTC의 역할 (영상 + 음향 동기)
 - SMPTE 타임코드 형식 (30 fps, 25 fps 등)
 - Spatial Engine에서의 LTC 활용 방법
 
-### 8.2 LTC 입력 설정
+### 9.2 LTC 입력 설정
 
 - LTC 오디오 입력 채널 설정 방법
 - 프레임 레이트 설정
 - 록(lock) 상태 확인 방법
 
-### 8.3 타임라인 동기화
+### 9.3 타임라인 동기화
 
 - LTC 기반 트라젝토리 재생 방법
 - 드리프트 보정 설정
 - 타임코드 손실 시 동작 (자유 실행 또는 일시 정지)
 
-### 8.4 영상 연동 워크플로
+### 9.4 영상 연동 워크플로
 
 - 영상 플레이어 → LTC → Spatial Engine → 오디오 렌더링 연결 예시
 - 오프셋(offset) 설정으로 영상-음향 지연 보정
 
 ---
 
-## Chapter 9. 다중 오브젝트 그룹 자동화
+## Chapter 10. 다중 오브젝트 그룹 자동화
 
-### 9.1 오브젝트 그룹 정의
+### 10.1 오브젝트 그룹 정의
 
 - 그룹 생성 및 명명 방법
 - 그룹 내 오브젝트 일괄 위치 조정
 - 그룹 게인 오프셋
 
-### 9.2 그룹 트라젝토리
+### 10.2 그룹 트라젝토리
 
 - 그룹 전체 이동 (평행 이동 모드)
 - 그룹 내 상대 위치 유지
 - 중심점 기준 회전 자동화
 
-### 9.3 OSC로 그룹 제어
+### 10.3 OSC로 그룹 제어
 
 - 외부 컨트롤러에서 그룹 전체 이동 명령 전송 방법
 - 매크로 OSC 명령 묶음 작성 예시
 
 ---
 
-## Chapter 10. 라이브 공연 권장 워크플로
+## Chapter 11. 라이브 공연 권장 워크플로
 
-### 10.1 공연 전 사전 점검 (Soundcheck)
+### 11.1 공연 전 사전 점검 (Soundcheck)
 
 공연 시작 전 다음 항목을 순서대로 점검한다.
 
@@ -569,20 +846,20 @@ jackd -R -P80 -d alsa -d hw:Dante -r 48000 -p 64 -n 2 -o 8 -i 8
 | 바이노럴 오버런 | `/sys/metrics` index 8 | 0 |
 | 스피커 레이아웃 | `layout_incompatible` 경고 없음 | 경고 없음 |
 
-### 10.2 공연 중 안전망
+### 11.2 공연 중 안전망
 
 - 시나리오 스냅샷 사전 준비 (최소 2개 백업 스냅샷)
 - 긴급 오브젝트 위치 초기화 단축키 설정
 - OSC 재연결 자동화 설정
 - 헤드폰 모니터를 통한 바이노럴 실시간 확인
 
-### 10.3 공연 후 점검
+### 11.3 공연 후 점검
 
 - `audio_xrun_count` 기록 및 원인 분석
 - 로그 파일 보관: `logs/spatial_engine_core.log`
 - 시나리오 저장 확인
 
-### 10.4 긴급 상황 대응
+### 11.4 긴급 상황 대응
 
 | 상황 | 대응 조치 |
 |------|-----------|
@@ -593,9 +870,9 @@ jackd -R -P80 -d alsa -d hw:Dante -r 48000 -p 64 -n 2 -o 8 -i 8
 
 ---
 
-## Chapter 11. 룸 및 스피커 캘리브레이션
+## Chapter 12. 룸 및 스피커 캘리브레이션
 
-### 11.1 스피커 레이아웃 YAML 작성
+### 12.1 스피커 레이아웃 YAML 작성
 
 스피커 배열은 `configs/` 디렉토리의 YAML 파일로 정의한다.
 
@@ -625,7 +902,7 @@ layout:
 ./build/core/spatial_engine_core --layout configs/lab_8ch_ring.yaml
 ```
 
-### 11.2 레이아웃 호환성 검증
+### 12.2 레이아웃 호환성 검증
 
 Core 기동 시 `LayoutCompatibilityChecker`가 레이아웃과 알고리즘 조합을 자동으로 검사한다.
 
@@ -635,23 +912,23 @@ Core 기동 시 `LayoutCompatibilityChecker`가 레이아웃과 알고리즘 조
 | WFS | 선형/평면 어레이, 알려진 스피커 간격 |
 | DBAP | 제약 없음 (스피커 4개 미만 시 경고) |
 
-### 11.3 수동 캘리브레이션 절차
+### 12.3 수동 캘리브레이션 절차
 
 1. 측정용 마이크를 청취 지점에 배치한다.
 2. 각 스피커 채널에 핑크 노이즈를 순서대로 재생한다.
 3. 측정 소프트웨어(REW, Room EQ Wizard 등)로 SPL과 딜레이를 측정한다.
 4. 측정 결과를 YAML 레이아웃 파일의 `dist_m` 및 `delay_ms` 필드에 반영한다.
 
-### 11.4 자동 캘리브레이션 (예정)
+### 12.4 자동 캘리브레이션 (예정)
 
 - v1+ 예정 기능
 - 측정 마이크 입력 자동 처리 및 YAML 자동 생성
 
 ---
 
-## Chapter 12. 트러블슈팅
+## Chapter 13. 트러블슈팅
 
-### 12.1 오디오 없음 (No Audio)
+### 13.1 오디오 없음 (No Audio)
 
 | 증상 | 원인 | 조치 |
 |------|------|------|
@@ -660,7 +937,7 @@ Core 기동 시 `LayoutCompatibilityChecker`가 레이아웃과 알고리즘 조
 | 핸드셰이크 실패 | 스키마 버전 불일치 | Core와 UI 버전 맞추기 |
 | 레이아웃 검사 실패 | `layout_incompatible` 경고 | YAML 파일 및 알고리즘 확인 |
 
-### 12.2 음 위치 이상
+### 13.2 음 위치 이상
 
 | 증상 | 원인 | 조치 |
 |------|------|------|
@@ -669,7 +946,7 @@ Core 기동 시 `LayoutCompatibilityChecker`가 레이아웃과 알고리즘 조
 | 특정 스피커만 소리 | VBAP 삼각형 커버리지 밖 | 스피커 배열 및 오브젝트 위치 확인 |
 | 알고리즘 전환 후 클릭 | 크로스페이드 미적용 | Core 버전 확인 (ADR 0006 구현 여부) |
 
-### 12.3 레이턴시 스파이크
+### 13.3 레이턴시 스파이크
 
 | 증상 | 원인 | 조치 |
 |------|------|------|
@@ -678,7 +955,7 @@ Core 기동 시 `LayoutCompatibilityChecker`가 레이아웃과 알고리즘 조
 | 일관된 높은 레이턴시 | 블록 크기 너무 큼 | 64프레임으로 재설정 |
 | JACK 버퍼 오버런 | PipeWire-JACK 버전 낮음 | 0.3.65 이상으로 업그레이드 |
 
-### 12.4 OSC 연결 오류
+### 13.4 OSC 연결 오류
 
 | 증상 | 원인 | 조치 |
 |------|------|------|
@@ -688,9 +965,9 @@ Core 기동 시 `LayoutCompatibilityChecker`가 레이아웃과 알고리즘 조
 
 ---
 
-## Chapter 13. 모니터링 및 로그 분석
+## Chapter 14. 모니터링 및 로그 분석
 
-### 13.1 실시간 메트릭 모니터링
+### 14.1 실시간 메트릭 모니터링
 
 Core는 100 ms 주기로 `/sys/metrics` OSC 메시지를 전송한다. WebGUI의 "Metrics" 패널에서 실시간으로 확인할 수 있다.
 
@@ -710,7 +987,7 @@ Core는 100 ms 주기로 `/sys/metrics` OSC 메시지를 전송한다. WebGUI의
 - **경고:** 7000 이상 (70% 이상) — 여유 마진 부족
 - **위험:** 9000 이상 (90% 이상) — xrun 임박
 
-### 13.2 로그 파일
+### 14.2 로그 파일
 
 | 파일 | 위치 | 내용 |
 |------|------|------|
@@ -723,7 +1000,7 @@ Core는 100 ms 주기로 `/sys/metrics` OSC 메시지를 전송한다. WebGUI의
 ./build/core/spatial_engine_core --log-level debug
 ```
 
-### 13.3 p99 레이턴시 분석
+### 14.3 p99 레이턴시 분석
 
 레이턴시 측정은 P12 레이턴시 하네스를 사용한다.
 
@@ -736,7 +1013,7 @@ just latency-test
 - 엔드-투-엔드 p99 레이턴시 5 ms 이하 (PREEMPT_RT 커널 기준)
 - 바이노럴 경로 추가 레이턴시 10 ms 이하
 
-### 13.4 denormal guard 히트 모니터링
+### 14.4 denormal guard 히트 모니터링
 
 `fdn_denormal_guard_hits` (인덱스 7)가 증가하는 경우, FDN 리버브의 비정상 denormal float 처리를 의미한다. 정상적인 운용에서는 0이어야 한다.
 
@@ -744,9 +1021,9 @@ just latency-test
 
 ---
 
-## Chapter 14. 백업 및 복구
+## Chapter 15. 백업 및 복구
 
-### 14.1 시나리오 백업
+### 15.1 시나리오 백업
 
 시나리오 파일은 YAML 형식으로 `scenarios/` 디렉토리에 저장된다. 공연 전 반드시 백업한다.
 
@@ -755,7 +1032,7 @@ just latency-test
 tar -czf scenarios_backup_$(date +%Y%m%d_%H%M).tar.gz scenarios/
 ```
 
-### 14.2 프리셋 백업
+### 15.2 프리셋 백업
 
 - 스피커 레이아웃 YAML: `configs/` 디렉토리
 - 사용자 설정: `~/.config/spatial_engine/` (구현 시)
@@ -764,7 +1041,7 @@ tar -czf scenarios_backup_$(date +%Y%m%d_%H%M).tar.gz scenarios/
 tar -czf configs_backup_$(date +%Y%m%d_%H%M).tar.gz configs/
 ```
 
-### 14.3 시나리오 복구
+### 15.3 시나리오 복구
 
 ```bash
 # 백업 압축 해제
@@ -773,7 +1050,7 @@ tar -xzf scenarios_backup_YYYYMMDD_HHMM.tar.gz
 # WebGUI에서 파일 > 시나리오 열기로 로드
 ```
 
-### 14.4 시스템 설정 복구
+### 15.4 시스템 설정 복구
 
 Core 바이너리와 Python 환경 재구성:
 
@@ -787,9 +1064,9 @@ just build
 
 ---
 
-## Chapter 15. 부록
+## Chapter 16. 부록
 
-### 15.1 OSC 명령 전체 목록
+### 16.1 OSC 명령 전체 목록
 
 #### 명령 메시지 (UI → Core, port 9100)
 
@@ -812,7 +1089,7 @@ just build
 | `/sys/warning` | `,iis` | 이벤트 기반 | 경고 메시지 |
 | `/sys/protocol_version` | `,i` | 핸드셰이크 응답 | 버전 에코 |
 
-### 15.2 WebGUI 단축키
+### 16.2 WebGUI 단축키
 
 | 단축키 | 기능 |
 |--------|------|
@@ -826,7 +1103,7 @@ just build
 | F5 | OSC 모니터 창 토글 |
 | F11 | 전체화면 토글 |
 
-### 15.3 알고리즘 선택 빠른 참고표
+### 16.3 알고리즘 선택 빠른 참고표
 
 | 환경 | 권장 알고리즘 | 이유 |
 |------|---------------|------|
@@ -837,7 +1114,7 @@ just build
 | 앰비언트 / 효과음 | DBAP | 확산 음장 표현 |
 | 솔로 악기 / 대사 | VBAP | 집중 음상 |
 
-### 15.4 관련 문서
+### 16.4 관련 문서
 
 | 문서 | 경로 | 내용 |
 |------|------|------|
