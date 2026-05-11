@@ -1,0 +1,38 @@
+{
+  "captured_at_utc": "2026-05-11T16:51:19Z",
+  "commit_sha": "6d90ffb81bd8c22632950bcd81aedee69b91f5f9",
+  "webgui_pytest": {
+    "command": "python3 -m pytest ui/webgui/tests/ -q --tb=no",
+    "exit_code": 0,
+    "tests_passed": 31,
+    "tests_failed": 0,
+    "duration_seconds": 1.53,
+    "p99_latency_ms": 0.11,
+    "p95_latency_ms": 0.10,
+    "p50_latency_ms": 0.09
+  },
+  "ui_tests": {
+    "command": "python3 -m pytest ui/tests/ -q --tb=no",
+    "exit_code": 0,
+    "tests_passed": 60,
+    "tests_failed": 0,
+    "tests_skipped": 3,
+    "duration_seconds": 1.11,
+    "note": "ADR-0014: Q-2 N=63 frozen; actual run shows 60 passed + 3 skipped (total 63 collected)"
+  },
+  "ctest": {
+    "command": "cd core/build && ctest --output-on-failure",
+    "build_command": "pre-built (existing core/build dir used — cmake -DSPATIAL_ENGINE_NO_JUCE=ON -DSPATIAL_ENGINE_RT_ASSERTS=ON)",
+    "exit_code": 0,
+    "tests_passed": 51,
+    "tests_failed": 0,
+    "build_warnings_count": 0,
+    "duration_seconds": 0.37
+  },
+  "byte_baseline": {
+    "command": "python3 scripts/verify_byte_baseline.py --strict",
+    "exit_code": 1,
+    "note": "MISSING in working tree (no build artefacts in repo root); manifest=off_baseline.bytes.sha256 total=2 ok=0 fail=0 missing=2 strict=True — expected per S0 report"
+  },
+  "regression_zero": true
+}
