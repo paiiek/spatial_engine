@@ -41,6 +41,9 @@ enum ParamId : Steinberg::Vst::ParamID {
     kAmbiOrder    = 4,
     kRoomPreset   = 5,
     kBypass       = 6,
+    // kMute = 7  — RESERVED for S7 (D3-γ writer activation). DO NOT USE until S7.
+    //              Active enum ends at kBypass=6. S7 will add kMute here and
+    //              resize norm_values_ from [7] to [8].
 };
 
 class SpatialEngineProcessor
@@ -106,6 +109,11 @@ private:
     // norm_values_[6] = bypass (0.0=off, 1.0=on). Read directly in process().
     // bypass_active_ removed in C2B postmortem S3 — norm_values_[6] is the single source of truth.
     std::atomic<float> norm_values_[7]{};
+
+    // S2.5 (D3-γ reader-only): stash for 8th float read from v3 state streams.
+    // kMute activation (S7) will replace this with norm_values_[7] after array resize.
+    // Default 0.0 = mute-off. Not used by audio path until S7.
+    std::atomic<float> mute_stash_{0.f};
 
     // Component ↔ Controller connection peer (host manages lifetime)
     Steinberg::Vst::IConnectionPoint* peer_{nullptr};

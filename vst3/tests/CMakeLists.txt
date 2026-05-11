@@ -138,7 +138,21 @@ target_compile_definitions(test_vst3_bind_collision PRIVATE SPATIAL_ENGINE_VST3_
 target_compile_options(test_vst3_bind_collision PRIVATE -UNDEBUG)
 add_test(NAME vst3_bind_collision COMMAND test_vst3_bind_collision)
 
+# ---- test_vst3_state_v3_reader_only (A.15a — D3-γ early-reader) -------------
+add_executable(test_vst3_state_v3_reader_only
+    test_vst3_state_v3_reader_only.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_state_v3_reader_only PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_state_v3_reader_only PRIVATE spe_core)
+target_compile_definitions(test_vst3_state_v3_reader_only PRIVATE
+    SPATIAL_ENGINE_VST3_BUILD=1
+    CMAKE_CURRENT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_compile_options(test_vst3_state_v3_reader_only PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_v3_reader_only COMMAND test_vst3_state_v3_reader_only)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
-                     vst3_bypass vst3_state_persist
+                     vst3_bypass vst3_state_persist vst3_state_v3_reader_only
                      PROPERTIES DEPENDS vst3_host_fixture)

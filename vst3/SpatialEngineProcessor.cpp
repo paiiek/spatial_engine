@@ -220,24 +220,30 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 }
 
 // ---------------------------------------------------------------------------
-// State persistence — C2B postmortem S2: v2 format (36 bytes), v1 fallback.
+// State persistence — C4-S2.5: v3 reader added (D3-γ early-reader).
 // Binary format v2 (36 bytes, little-endian):
 //   bytes  0-3:  magic 'S','P','E','1' (0x31455053)
 //   bytes  4-5:  version uint16 = 2
 //   bytes  6-7:  param_count uint16 = 7
 //   bytes  8-35: 7 × float32 normalized values (params 0..6, [6]=bypass)
 //
-// v1 format (32 bytes): same header with version=1, param_count=6, 6 floats.
-// Reader handles both. Writer always emits v2.
+// v1 format (32 bytes): version=1, param_count=6, 6 floats.
+// v3 format (40 bytes): version=3, param_count=8, 8 floats ([7]=kMute stash).
+//   kMute is stashed in mute_stash_; audio path does not use it until S7.
+// v4+: forward-compat refusal — returns kResultFalse (ADR 0011 §rule-6).
+// Reader handles v1/v2/v3. Writer always emits v2 (writer bump waits for S7).
 // ---------------------------------------------------------------------------
 namespace {
 static constexpr Steinberg::int32  kStateMagic      = 0x31455053; // 'SPE1' LE
 static constexpr Steinberg::int32  kStateBytesV1    = 32;
 static constexpr Steinberg::int32  kStateBytesV2    = 36;
+static constexpr Steinberg::int32  kStateBytesV3    = 40;
 static constexpr Steinberg::uint16 kStateVersionV1  = 1;
 static constexpr Steinberg::uint16 kStateVersionV2  = 2;
+static constexpr Steinberg::uint16 kStateVersionV3  = 3;
 static constexpr Steinberg::uint16 kStateNParamsV1  = 6;
 static constexpr Steinberg::uint16 kStateNParamsV2  = 7;
+static constexpr Steinberg::uint16 kStateNParamsV3  = 8;
 } // namespace
 
 Steinberg::tresult PLUGIN_API
@@ -247,7 +253,7 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
 
     // Control thread (Driver #2) — stderr logging permitted.
     // Phase 1: read header (8 bytes)
-    uint8_t buf[kStateBytesV2];
+    uint8_t buf[kStateBytesV3];  // sized for largest known version
     Steinberg::int32 numRead = 0;
     Steinberg::tresult r = state->read(buf, 8, &numRead);
     if (r != Steinberg::kResultOk || numRead < 8) {
@@ -283,8 +289,9 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
             dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
                                 static_cast<Steinberg::Vst::ParamValue>(v));
         }
-        // v1 fallback: bypass defaults to off
+        // v1 fallback: bypass=0, kMute stash=0
         norm_values_[6].store(0.f, std::memory_order_relaxed);
+        mute_stash_.store(0.f, std::memory_order_relaxed);
     } else if (version == kStateVersionV2 && nparams == kStateNParamsV2) {
         // v2: read 28 bytes (7 floats)
         numRead = 0;
@@ -303,6 +310,37 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
             }
             // kBypass (i==6): audio path reads norm_values_[6] directly in process()
         }
+        // v2: kMute not present in stream — default to 0
+        mute_stash_.store(0.f, std::memory_order_relaxed);
+    } else if (version == kStateVersionV3 && nparams == kStateNParamsV3) {
+        // v3 (D3-γ reader-only): read 32 bytes (8 floats)
+        // 8th float is kMute — stashed in mute_stash_ until S7 activates kMute.
+        numRead = 0;
+        r = state->read(buf + 8, 32, &numRead);
+        if (r != Steinberg::kResultOk || numRead < 32) {
+            std::fprintf(stderr, "VST3 setState: v3 payload short read, defaults retained\n");
+            return Steinberg::kResultOk;
+        }
+        for (int i = 0; i < 7; ++i) {
+            float v = 0.f;
+            std::memcpy(&v, buf + 8 + i * 4, 4);
+            norm_values_[i].store(v, std::memory_order_relaxed);
+            if (i < 6) {
+                dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
+                                    static_cast<Steinberg::Vst::ParamValue>(v));
+            }
+        }
+        // 8th float: kMute stash (S7 will activate)
+        float mute_val = 0.f;
+        std::memcpy(&mute_val, buf + 8 + 7 * 4, 4);
+        mute_stash_.store(mute_val, std::memory_order_relaxed);
+        std::fprintf(stderr, "VST3 setState: v3 loaded (kMute=%.3f stashed, inactive until S7)\n",
+                     (double)mute_val);
+    } else if (version > kStateVersionV3) {
+        // Forward-compat refusal per ADR 0011 §rule-6
+        std::fprintf(stderr, "VST3 setState: unsupported future version v=%u, refusing load\n",
+                     (unsigned)version);
+        return Steinberg::kResultFalse;
     } else {
         std::fprintf(stderr, "VST3 setState: version/nparams mismatch (v=%u n=%u), defaults retained\n",
                      (unsigned)version, (unsigned)nparams);
