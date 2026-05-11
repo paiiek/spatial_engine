@@ -152,7 +152,19 @@ target_compile_definitions(test_vst3_state_v3_reader_only PRIVATE
 target_compile_options(test_vst3_state_v3_reader_only PRIVATE -UNDEBUG)
 add_test(NAME vst3_state_v3_reader_only COMMAND test_vst3_state_v3_reader_only)
 
+# ---- test_vst3_performedit_threadsafe (S2.6 — 1000-iter strategy-a harness) --
+add_executable(test_vst3_performedit_threadsafe
+    test_vst3_performedit_threadsafe.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_performedit_threadsafe PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_performedit_threadsafe PRIVATE spe_core)
+target_compile_definitions(test_vst3_performedit_threadsafe PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_performedit_threadsafe PRIVATE -UNDEBUG)
+add_test(NAME vst3_performedit_threadsafe COMMAND test_vst3_performedit_threadsafe)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
+                     vst3_performedit_threadsafe
                      PROPERTIES DEPENDS vst3_host_fixture)

@@ -7,9 +7,11 @@
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstmessage.h"  // IConnectionPoint
+#include "SpscRing.h"
 
 #include <atomic>
 #include <cstring>
+#include <utility>
 
 namespace spe::vst3 {
 
@@ -68,6 +70,17 @@ public:
     Steinberg::tresult PLUGIN_API disconnect(Steinberg::Vst::IConnectionPoint* other) SMTG_OVERRIDE;
     Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage* message) SMTG_OVERRIDE;
 
+    // S2.6: performEdit marshaling API (strategy a — message-thread queue).
+    // Called by the UDP I/O thread (S4 will wire this).
+    // Returns false if the ring is full (caller may drop or retry).
+    bool pushParamEdit(Steinberg::Vst::ParamID id,
+                       Steinberg::Vst::ParamValue value) noexcept;
+
+    // Drain the ring and call performEdit on comp_handler_ for each entry.
+    // MUST be called from the UI/message thread only.
+    // Returns number of calls dispatched.
+    int drainParamEdits() noexcept;
+
 private:
     std::atomic<Steinberg::uint32> ref_count_{1};
     Steinberg::Vst::IComponentHandler* comp_handler_{nullptr};
@@ -79,6 +92,14 @@ private:
     // Static ParameterInfo table — built in initialize()
     Steinberg::Vst::ParameterInfo param_infos_[kParamCount]{};
     bool initialized_{false};
+
+    // S2.6: SPSC ring for performEdit marshaling (UDP thread → message thread).
+    // ParamEdit = {paramId, normalizedValue}.
+    struct ParamEdit {
+        Steinberg::Vst::ParamID    id{0};
+        Steinberg::Vst::ParamValue value{0.0};
+    };
+    SpscRing<ParamEdit, 1024> param_edit_ring_;
 
     void buildParamInfos();
 

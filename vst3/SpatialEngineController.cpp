@@ -592,8 +592,37 @@ SpatialEngineController::disconnect(Steinberg::Vst::IConnectionPoint* other)
 Steinberg::tresult PLUGIN_API
 SpatialEngineController::notify(Steinberg::Vst::IMessage* /*message*/)
 {
-    // IConnectionPoint::notify channel not used (AM-R3-10 decision).
+    // IConnectionPoint::notify channel: drain the performEdit ring so that
+    // any UDP-thread pushes are flushed to the DAW on the message thread.
+    // This is safe: the VST3 SDK guarantees notify() is called from the
+    // message/UI thread context.
+    drainParamEdits();
+    // The IConnectionPoint message channel itself is not used (AM-R3-10 decision).
     return Steinberg::kNotImplemented;
+}
+
+// ---------------------------------------------------------------------------
+// S2.6: performEdit marshaling (strategy a — message-thread queue)
+// ---------------------------------------------------------------------------
+
+bool SpatialEngineController::pushParamEdit(
+    Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue value) noexcept
+{
+    return param_edit_ring_.push(ParamEdit{id, value});
+}
+
+int SpatialEngineController::drainParamEdits() noexcept
+{
+    if (!comp_handler_) return 0;
+    int dispatched = 0;
+    ParamEdit entry;
+    while (param_edit_ring_.pop(entry)) {
+        comp_handler_->beginEdit(entry.id);
+        comp_handler_->performEdit(entry.id, entry.value);
+        comp_handler_->endEdit(entry.id);
+        ++dispatched;
+    }
+    return dispatched;
 }
 
 } // namespace spe::vst3
