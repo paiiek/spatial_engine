@@ -220,6 +220,50 @@ target_compile_options(test_vst3_reverse_path PRIVATE -UNDEBUG)
 add_test(NAME vst3_reverse_path COMMAND test_vst3_reverse_path)
 set_tests_properties(vst3_reverse_path PROPERTIES TIMEOUT 30 LABELS "LONG_TEST")
 
+# ---- test_vst3_e2e_console_to_plugin (S6 A.9 — reverse-path E2E soak) ------
+# Default run: 5s mini-soak (completes inside 30s ctest timeout).
+# Full 60s soak: SPATIAL_ENGINE_SOAK=ON ctest -R e2e_console_to_plugin -V
+add_executable(test_vst3_e2e_console_to_plugin
+    test_vst3_e2e_console_to_plugin.cpp
+    ${PLUGIN_SRCS}
+    ../SpatialEnginePluginUdp.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(test_vst3_e2e_console_to_plugin PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_e2e_console_to_plugin PRIVATE spe_core)
+target_compile_definitions(test_vst3_e2e_console_to_plugin PRIVATE
+    SPATIAL_ENGINE_VST3_BUILD=1
+    SPATIAL_ENGINE_VST3_OSC=1
+)
+target_compile_options(test_vst3_e2e_console_to_plugin PRIVATE -UNDEBUG)
+add_test(NAME vst3_e2e_console_to_plugin COMMAND test_vst3_e2e_console_to_plugin)
+set_tests_properties(vst3_e2e_console_to_plugin PROPERTIES
+    TIMEOUT 30
+    LABELS "perf"
+)
+
+# ---- soak_vst3_console_flood (S6 A.10 — forward-path 8-instance soak) -----
+# Default run: 5s mini-soak. Full 60s: SPATIAL_ENGINE_SOAK=ON ctest -R vst3_console_flood -V
+# rt_alloc_probe.hpp requires -fno-lto (R10 Layer 3).
+add_executable(soak_vst3_console_flood
+    soak_vst3_console_flood.cpp
+    ${PLUGIN_SRCS}
+    ../SpatialEnginePluginUdp.cpp
+    ../osc/PluginInstanceRegistry.cpp
+)
+target_include_directories(soak_vst3_console_flood PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(soak_vst3_console_flood PRIVATE spe_core)
+target_compile_definitions(soak_vst3_console_flood PRIVATE
+    SPATIAL_ENGINE_VST3_BUILD=1
+    SPATIAL_ENGINE_VST3_OSC=1
+)
+target_compile_options(soak_vst3_console_flood PRIVATE -UNDEBUG -fno-lto)
+add_test(NAME vst3_console_flood COMMAND soak_vst3_console_flood)
+set_tests_properties(vst3_console_flood PROPERTIES
+    TIMEOUT 30
+    LABELS "perf"
+)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
