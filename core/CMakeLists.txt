@@ -55,7 +55,7 @@ target_include_directories(spe_util PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(spe_util PUBLIC Threads::Threads)
 target_compile_definitions(spe_util PUBLIC
     SPE_VERSION_MAJOR=0
-    SPE_VERSION_MINOR=1
+    SPE_VERSION_MINOR=2
     SPE_VERSION_PATCH=0
 )
 if(SPATIAL_ENGINE_RT_ASSERTS)

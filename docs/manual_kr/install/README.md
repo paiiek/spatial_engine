@@ -1,8 +1,8 @@
 # Spatial Engine 설치 매뉴얼
 
-**버전:** v0.1.0  
+**버전:** v0.2.0  
 **대상 독자:** 시스템 관리자, 음향 엔지니어, 통합 담당자  
-**최종 수정:** 2026-05-09
+**최종 수정:** 2026-05-10
 
 ---
 
@@ -394,7 +394,7 @@ ninja -j$(nproc)
 출력 예시:
 
 ```
-spatial_engine_core v0.1.0 (schema_version=1)
+spatial_engine_core v0.2.0 (schema_version=1)
 ```
 
 ### 3.5 Python 환경 설정

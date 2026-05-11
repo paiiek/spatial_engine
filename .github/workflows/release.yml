@@ -1,0 +1,118 @@
+name: Release (tag-triggered)
+# v0.2.0 R5 — dedicated release workflow.
+# Triggered by `git push origin v<semver>`; builds the prebuilt VST3 .so on
+# ubuntu-24.04 (GLIBC 2.39, matches Plan §3 Pre-mortem 5 + B3-β) and uploads
+# a source-plus-binary tarball to the GitHub release draft.
+#
+# Authority split (Plan §3 R6 item 13): the user creates and pushes the tag
+# manually; autopilot does NOT run `git tag`. This workflow only runs after
+# the tag is pushed. The main-branch CI (.github/workflows/vst3.yml) is
+# untouched — this file is additive.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          ver="${tag#v}"
+          echo "tag=${tag}"     >> "$GITHUB_OUTPUT"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "Building release for tag ${tag} (version ${ver})"
+
+      - name: Cache JUCE (vst3sdk vendored tree only)
+        uses: actions/cache@v4
+        with:
+          path: core/JUCE
+          key: juce-7.0.12-bundled-vst3sdk-${{ hashFiles('scripts/bootstrap_juce.sh') }}
+
+      - name: Bootstrap JUCE (vst3sdk vendored tree only)
+        run: bash scripts/bootstrap_juce.sh
+
+      - name: Verify vst3sdk SHA pin
+        run: |
+          actual=$( cd core/JUCE && git ls-tree -r HEAD modules/juce_audio_processors/format_types/VST3_SDK | sha256sum)
+          expected=$(grep -E '^[0-9a-f]{64}' .ci/vst3sdk_sha.txt | tail -n1)
+          echo "actual:   $actual"
+          echo "expected: $expected"
+          test "$(echo "$actual" | awk '{print $1}')" = "$(echo "$expected" | awk '{print $1}')" \
+            || (echo "vst3sdk SHA pin mismatch — aborting release build"; exit 1)
+
+      - name: Build VST3 (SPATIAL_ENGINE_VST3=ON, JUCE-free auto-forced)
+        run: |
+          cmake -B build_release -DSPATIAL_ENGINE_VST3=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build_release --target spatial_engine_vst3 spatial_engine_core -j$(nproc)
+
+      - name: Sysdep-free gate (Driver #1 — runtime + linktime)
+        run: |
+          ldd build_release/vst3/spatial_engine_vst3.so > /tmp/ldd.out
+          n=$(grep -cE 'libX11|libfreetype|libasound|libwebkit' /tmp/ldd.out || true)
+          test "$n" = "0" \
+            || (cat /tmp/ldd.out; echo "sysdep transitive present in release artifact (got $n)"; exit 1)
+
+      - name: Verify version macro matches tag
+        run: |
+          got=$(./build_release/core/spatial_engine_core --version | head -n1 | awk '{print $NF}')
+          expected="${{ steps.ver.outputs.version }}"
+          echo "binary reports: $got"
+          echo "tag requests:  $expected"
+          test "$got" = "$expected" \
+            || (echo "version macro / tag mismatch — CMakeLists.txt VERSION not bumped"; exit 1)
+
+      - name: Assemble release tarball
+        id: pack
+        run: |
+          ver="${{ steps.ver.outputs.version }}"
+          stage="spatial_engine_v${ver}_linux_glibc239"
+          mkdir -p "dist/${stage}/bin" "dist/${stage}/vst3"
+          cp build_release/core/spatial_engine_core "dist/${stage}/bin/"
+          cp build_release/vst3/spatial_engine_vst3.so "dist/${stage}/vst3/"
+          cp -r docs/manual_kr "dist/${stage}/"
+          cp -r docs/release "dist/${stage}/"
+          cp -r docs/adr "dist/${stage}/"
+          cp CHANGELOG.md README.md LICENSE "dist/${stage}/" 2>/dev/null || true
+
+          git archive --format=tar.gz --prefix="${stage}-src/" -o "dist/${stage}-src.tar.gz" "${GITHUB_REF_NAME}"
+          tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+          sha256sum "dist/${stage}.tar.gz" "dist/${stage}-src.tar.gz" > "dist/${stage}.sha256"
+
+          echo "tarball=dist/${stage}.tar.gz"        >> "$GITHUB_OUTPUT"
+          echo "srcball=dist/${stage}-src.tar.gz"    >> "$GITHUB_OUTPUT"
+          echo "checks=dist/${stage}.sha256"         >> "$GITHUB_OUTPUT"
+
+      - name: Pick release notes for body
+        id: notes
+        run: |
+          en="docs/release/v${{ steps.ver.outputs.version }}/RELEASE_NOTES_EN.md"
+          if [ -f "$en" ]; then
+            echo "path=$en" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=CHANGELOG.md" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Spatial Engine ${{ steps.ver.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.srcball }}
+            ${{ steps.pack.outputs.checks }}
