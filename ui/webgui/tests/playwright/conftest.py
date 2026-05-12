@@ -43,8 +43,15 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _free_port() -> int:
-    """Reserve a random free TCP port on loopback."""
+    """Reserve a random free TCP port on loopback.
+
+    Sets ``SO_REUSEADDR`` so the brief TIME_WAIT window between this
+    probe-bind and the subsequent uvicorn bind does not race against the
+    ephemeral-port allocator (TOCTOU narrowing — does not eliminate the
+    race, but combined with the health-poll retry below it is sufficient).
+    """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
     s.close()
@@ -59,7 +66,6 @@ def uvicorn_server() -> Iterator[str]:
     """
     import requests  # local import — only needed when fixture is used.
 
-    port = _free_port()
     env = os.environ.copy()
     # Force unbuffered output so failures surface in CI logs promptly.
     env["PYTHONUNBUFFERED"] = "1"
@@ -76,24 +82,50 @@ def uvicorn_server() -> Iterator[str]:
     env["PYTHONPATH"] = os.pathsep.join(
         [p for p in extra_paths if p] + ([existing_pp] if existing_pp else [])
     )
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "ui.webgui.server:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--log-level",
-            "warning",
-        ],
-        cwd=str(REPO_ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+
+    # Retry the port-allocation + uvicorn-spawn up to 3 times to cover the
+    # _free_port TOCTOU window (another process can grab the port between
+    # `s.close()` and the uvicorn subprocess `bind()`).
+    proc = None
+    port = -1
+    last_output = b""
+    for attempt in range(3):
+        port = _free_port()
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "ui.webgui.server:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--log-level",
+                "warning",
+            ],
+            cwd=str(REPO_ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        # Quick sanity probe — give uvicorn 0.3s to fail fast on bind error.
+        time.sleep(0.3)
+        if proc.poll() is None:
+            break
+        last_output, _ = proc.communicate(timeout=1)
+        if b"Address already in use" not in last_output:
+            raise RuntimeError(
+                f"uvicorn exited early on attempt {attempt + 1} "
+                f"(rc={proc.returncode}). Output:\n"
+                f"{last_output.decode(errors='replace')}"
+            )
+    else:
+        raise RuntimeError(
+            "uvicorn could not bind a free port after 3 attempts. "
+            f"Last output:\n{last_output.decode(errors='replace')}"
+        )
+    assert proc is not None
     base_url = f"http://127.0.0.1:{port}"
 
     # Health-poll: 30 × 0.2s = 6s max.

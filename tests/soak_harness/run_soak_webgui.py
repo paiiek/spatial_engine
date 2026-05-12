@@ -188,7 +188,7 @@ class OscSink:
         self.port = port
         self.sock: Optional[socket.socket] = None
         self.recv_count = 0
-        self._stop = False
+        self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -202,7 +202,7 @@ class OscSink:
 
     def _loop(self) -> None:
         assert self.sock is not None
-        while not self._stop:
+        while not self._stop.is_set():
             try:
                 self.sock.recvfrom(8192)
                 self.recv_count += 1
@@ -212,7 +212,7 @@ class OscSink:
                 break
 
     def close(self) -> None:
-        self._stop = True
+        self._stop.set()
         if self.sock is not None:
             try:
                 self.sock.close()

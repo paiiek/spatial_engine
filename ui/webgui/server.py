@@ -387,33 +387,39 @@ async def v2s_status() -> JSONResponse:
 # ---------------------------------------------------------------------------
 # S5 / G7 — dev-only introspection endpoints (env-gated)
 # ---------------------------------------------------------------------------
-# Activated only when ``SPE_DEBUG_ENDPOINTS=1`` in the environment so that
-# production deployments do not expose internal asyncio state. Used by the
-# 48h soak harness (tests/soak_harness/run_soak_webgui.py) to track
-# ``asyncio.all_tasks()`` slope across the soak window (G7 sentinel
-# ``extract_asyncio_slope.py``).
+# Route is always registered, but request handling is gated at runtime on
+# ``SPE_DEBUG_ENDPOINTS=1``. This avoids the import-time-only check pitfall
+# where setting the env var post-import would have no effect (and conversely
+# where a forgotten dev-time env var would freeze the route into production
+# at import time). 404 is returned when the gate is off so the surface looks
+# identical to a deployment that never compiled the route in.
+# Used by the 48h soak harness (tests/soak_harness/run_soak_webgui.py) to
+# track ``asyncio.all_tasks()`` slope (G7 sentinel ``extract_asyncio_slope.py``).
 
 import os as _dbg_os  # noqa: E402
 
-if _dbg_os.environ.get("SPE_DEBUG_ENDPOINTS") == "1":
 
-    @app.get("/api/_debug/asyncio_tasks")
-    async def _debug_asyncio_tasks() -> JSONResponse:
-        """Return current count of asyncio tasks alive in the uvicorn loop.
+@app.get("/api/_debug/asyncio_tasks")
+async def _debug_asyncio_tasks() -> JSONResponse:
+    """Return current count of asyncio tasks alive in the uvicorn loop.
 
-        Gated by env ``SPE_DEBUG_ENDPOINTS=1``. Soak harness samples this at
-        1 Hz; linear regression on the returned counts feeds the
-        ``asyncio_slope_tasks_per_h`` G7 sentinel (must be ≤ 1 task/h).
-        """
-        try:
-            tasks = asyncio.all_tasks()
-            return JSONResponse({
-                "ok": True,
-                "n_tasks": len(tasks),
-                "ws_connections": len(manager.active),
-            })
-        except Exception as exc:  # pragma: no cover — defensive
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    Runtime-gated by env ``SPE_DEBUG_ENDPOINTS=1``. When the gate is off the
+    handler responds with 404 so production probes cannot distinguish it from
+    an unregistered route. Soak harness samples this at 1 Hz; linear
+    regression on the returned counts feeds the
+    ``asyncio_slope_tasks_per_h`` G7 sentinel (must be ≤ 1 task/h).
+    """
+    if _dbg_os.environ.get("SPE_DEBUG_ENDPOINTS") != "1":
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    try:
+        tasks = asyncio.all_tasks()
+        return JSONResponse({
+            "ok": True,
+            "n_tasks": len(tasks),
+            "ws_connections": len(manager.active),
+        })
+    except Exception as exc:  # pragma: no cover — defensive
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 # ---------------------------------------------------------------------------
