@@ -15,6 +15,17 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# macOS / Apple Silicon: pin the target arch to the host so the build never
+# silently falls back to x86_64 under Rosetta. arm64 on Apple Silicon hosts,
+# x86_64 on Intel Macs. Override with -DCMAKE_OSX_ARCHITECTURES=... if needed
+# (e.g. "arm64;x86_64" for a universal binary). Apple-only — does not touch
+# the Linux byte-baseline (scripts/verify_byte_baseline.py).
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}"
+        CACHE STRING "macOS target architecture" FORCE)
+    message(STATUS "spatial_engine: macOS arch pinned to ${CMAKE_OSX_ARCHITECTURES}")
+endif()
+
 # Baseline diagnostic flags
 # (RTTI stays ON: JUCE 7.x relies on dynamic_cast in several modules.)
 add_compile_options(

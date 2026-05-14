@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# spatial_engine — non-interactive Ubuntu 22.04 bootstrap.
+# spatial_engine — non-interactive bootstrap (Ubuntu 22.04 / macOS).
 # Goal (acceptance #10): clone-to-build in ≤60 min on a clean machine.
 #
 # Idempotent. Safe to re-run. Verbose by default; SE_QUIET=1 silences progress.
+# Linux uses apt; macOS (Apple Silicon / Intel) uses Homebrew.
 
 set -euo pipefail
 
@@ -42,7 +43,27 @@ APT_PKGS=(
     yamllint
 )
 
-if command -v apt-get >/dev/null; then
+# macOS (Apple Silicon / Intel) — Homebrew. The X11/GTK/ALSA packages are
+# Linux-only and not needed for the NO_JUCE build; macOS just needs the
+# toolchain + audio I/O libs. clang-format/yamllint cover the lint hooks.
+BREW_PKGS=(
+    cmake
+    ninja
+    pkg-config
+    libsndfile
+    libsamplerate
+    clang-format
+    yamllint
+)
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    if command -v brew >/dev/null; then
+        say "macOS detected — installing Homebrew packages (${#BREW_PKGS[@]} pkgs)."
+        brew install "${BREW_PKGS[@]}"
+    else
+        say "WARNING: Homebrew not found. Install from https://brew.sh then re-run."
+    fi
+elif command -v apt-get >/dev/null; then
     say "Installing apt packages (${#APT_PKGS[@]} pkgs); sudo may prompt once."
     sudo apt-get update -qq
     sudo apt-get install -y --no-install-recommends "${APT_PKGS[@]}"
