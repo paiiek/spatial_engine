@@ -19,6 +19,7 @@ scripts/_build/
 /build_off*/
 /build_vst3*/
 /build_full_check*/
+/build_pure_off*/
 
 # OMC session/runtime state (plans/ and specs/ are tracked; state/ is not)
 # Use **/ prefix so nested .omc/ dirs (e.g. ui/.omc/) are also excluded.
