@@ -8,7 +8,7 @@ import math
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import Optional, Set
+from typing import Set
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -88,7 +88,10 @@ osc_send_fn = None  # callable(address: str, *args) — set by osc_bridge
 # Bridge mode state — shared with bridge process via signal/file or in-process
 # ---------------------------------------------------------------------------
 
-_bridge_mode: str = "ai"  # "ai" | "low_latency"
+# ADR 0015: default is "low_latency" so the WebGUI is the 9100 producer
+# out-of-the-box and canvas drags / trajectories actually reach the engine.
+# "ai" mode is an explicit opt-in for when vid2spatial owns the wire.
+_bridge_mode: str = "low_latency"  # "ai" | "low_latency"
 bridge_switch_fn = None   # callable(mode: str) — injected by bridge when co-located
 
 _BRIDGE_MODE_FILE = "/tmp/.spe_bridge_mode"
@@ -97,7 +100,7 @@ _BRIDGE_MODE_FILE = "/tmp/.spe_bridge_mode"
 def _write_bridge_mode_file(mode: str) -> None:
     """Write mode to shared file so a separate bridge process can pick it up."""
     try:
-        import tempfile, os
+        import os
         tmp = _BRIDGE_MODE_FILE + ".tmp"
         with open(tmp, "w") as f:
             f.write(mode)
@@ -112,7 +115,14 @@ def _write_bridge_mode_file(mode: str) -> None:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    # ``osc_ready`` surfaces whether the OSC bridge wired up at startup. If
+    # it is False, every drag/trajectory send is silently dropped — this is
+    # the first thing to check when "the sound doesn't move".
+    return {
+        "status": "ok",
+        "osc_ready": osc_send_fn is not None,
+        "bridge_mode": _bridge_mode,
+    }
 
 
 @app.post("/api/mode")
@@ -148,12 +158,24 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             # Client → OSC 9100 (cmd): forward object position commands
             try:
                 msg = json.loads(data)
-                if osc_send_fn is not None:
-                    _dispatch_to_osc(msg)
-                else:
-                    logger.debug("osc_send_fn not ready, dropping: %s", data)
-            except (json.JSONDecodeError, KeyError) as exc:
-                logger.warning("Invalid WS message: %s — %s", data, exc)
+            except json.JSONDecodeError as exc:
+                logger.warning("Invalid WS JSON: %s — %s", data, exc)
+                continue
+            if osc_send_fn is None:
+                logger.debug("osc_send_fn not ready, dropping: %s", data)
+                continue
+            # _dispatch_to_osc must never crash the receive loop: a single
+            # malformed field (bad int / missing key) would otherwise kill
+            # the socket. Catch the value-shape errors it can raise.
+            try:
+                notice = _dispatch_to_osc(msg)
+            except (KeyError, ValueError, TypeError) as exc:
+                logger.warning("Malformed WS message: %s — %s", data, exc)
+                continue
+            # ADR 0013 / 0015: positional sends dropped in AI mode return a
+            # notice so the browser can surface it instead of silently lying.
+            if notice is not None:
+                await manager.broadcast(json.dumps(notice))
     except WebSocketDisconnect:
         manager.disconnect(ws)
 
@@ -176,7 +198,7 @@ def _ai_mode_position_conflict(mtype: str) -> bool:
     return _bridge_mode == "ai" and mtype in _POSITION_MTYPES
 
 
-def _dispatch_to_osc(msg: dict) -> None:
+def _dispatch_to_osc(msg: dict) -> dict | None:
     """Forward parsed WebSocket message to OSC 9100.
 
     Single-producer contract (ADR 0013):
@@ -186,6 +208,10 @@ def _dispatch_to_osc(msg: dict) -> None:
       * All other message types (scene/transport/algo/dsp/noise) are
         control-plane only, do not contend with vid2spatial, and pass
         through unconditionally.
+
+    Returns an optional WS-notice dict that the caller should broadcast back
+    to clients (currently only ``drag_suppressed`` for an AI-mode drop, so
+    the browser can show feedback instead of silently moving the dot).
     """
     mtype = msg.get("type")
 
@@ -196,7 +222,12 @@ def _dispatch_to_osc(msg: dict) -> None:
             "AI mode; switch to low_latency to send positional from WebGUI)",
             mtype,
         )
-        return
+        return {
+            "type": "drag_suppressed",
+            "mode": _bridge_mode,
+            "mtype": mtype,
+            "n": msg.get("n"),
+        }
 
     if mtype == "obj_pos":
         n = int(msg["n"])
@@ -294,6 +325,14 @@ class TrajectoryStopRequest(BaseModel):
 
 @app.post("/api/trajectory/start")
 async def trajectory_start(req: TrajectoryRequest) -> JSONResponse:
+    # obj_id must be in the engine's [0, 64) range — the WS obj_pos path
+    # already validates this; the HTTP trajectory path must match or it
+    # emits /adm/obj/{bad}/aed that the engine silently drops.
+    if not (0 <= req.obj_id < 64):
+        raise HTTPException(
+            status_code=400,
+            detail=f"obj_id {req.obj_id} out of range [0, 64)",
+        )
     try:
         shape = TrajectoryShape(req.shape)
     except ValueError:

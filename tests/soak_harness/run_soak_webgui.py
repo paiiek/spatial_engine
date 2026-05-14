@@ -429,7 +429,8 @@ async def _fault_injector(
             )
             proc_ref["proc"] = new_proc
             port_ref["port"] = new_port
-            # Restore low_latency mode (default is ``ai`` per ADR 0013).
+            # Pin low_latency mode explicitly (ADR 0013/0015) so the soak is
+            # the sole 9100 producer regardless of the shipped default.
             if REQUESTS_AVAILABLE:
                 try:
                     requests.post(
@@ -511,10 +512,11 @@ async def _run(args: argparse.Namespace) -> dict:
         port_ref = {"port": port}
         stop_flag = {"stop": False}
 
-        # Switch into ``low_latency`` mode so the soak actually exercises the
-        # 9100 wire. In ``ai`` mode (default) WebGUI suppresses obj_pos per
-        # ADR 0013 — useful in production where vid2spatial owns 9100, but
-        # in the soak we are simulating WebGUI-as-sole-producer.
+        # Pin ``low_latency`` mode so the soak actually exercises the 9100
+        # wire. In ``ai`` mode WebGUI suppresses obj_pos per ADR 0013 —
+        # useful when vid2spatial owns 9100, but here we simulate
+        # WebGUI-as-sole-producer. Explicit POST keeps the soak independent
+        # of the shipped default (ADR 0015 ships low_latency).
         if REQUESTS_AVAILABLE:
             try:
                 requests.post(

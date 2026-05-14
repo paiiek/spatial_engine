@@ -122,9 +122,9 @@ def rtt_client(monkeypatch):
     """
     monkeypatch.setattr(osc_bridge, "OSC_CMD_PORT", ECHO_LISTEN_PORT)
     monkeypatch.setattr(osc_bridge, "OSC_STATE_PORT", ECHO_TARGET_PORT)
-    # ADR 0013 — default mode is "ai" which suppresses obj_pos on :9100
-    # (vid2spatial owns the wire). For RTT we are the sole producer, so
-    # switch to low_latency before lifespan reads the flag.
+    # ADR 0013/0015 — "ai" mode suppresses obj_pos on :9100 (vid2spatial
+    # owns the wire). For RTT we are the sole producer; pin low_latency
+    # explicitly so the test is independent of the shipped default.
     monkeypatch.setattr(webgui_server, "_bridge_mode", "low_latency")
 
     # Echo must be alive BEFORE lifespan binds :19101 only if we cared about

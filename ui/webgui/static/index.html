@@ -209,9 +209,9 @@
   <h1>spatial_engine WebGUI</h1>
   <span id="status-label">connecting…</span>
   <div id="mode-panel">
-    <button id="btn-ai-mode" class="active">AI 추적</button>
-    <button id="btn-lt-mode">저레이턴시</button>
-    <span id="mode-status">모드: ai</span>
+    <button id="btn-ai-mode">AI 추적</button>
+    <button id="btn-lt-mode" class="active">저레이턴시</button>
+    <span id="mode-status">모드: low_latency</span>
     <div id="v2s-panel" style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;border-left:1px solid #333;padding-left:12px;">
       <span style="font-size:11px;color:#aaa;">vid2spatial</span>
       <button id="btn-v2s-start">시작</button>
@@ -293,15 +293,6 @@
   const dot = document.getElementById("status-dot");
   const label = document.getElementById("status-label");
 
-  // Patch WsClient to update UI
-  const _origOnMessage = WsClient.onMessage.bind(WsClient);
-  // We hook into ws readyState via polling (light-weight for MVP)
-  setInterval(() => {
-    // Access internal ws by re-exposing via WsClient
-    const connected = document.visibilityState !== "hidden";
-    // Try a lightweight ping: if we received a message recently, show connected
-  }, 1000);
-
   // Build legend
   const legendEl = document.getElementById("legend");
   const GROUP_LABELS = ["G1","G2","G3","G4","G5","G6","G7","G8"];
@@ -312,7 +303,8 @@
   GROUP_LABELS.forEach((lbl, i) => {
     const item = document.createElement("div");
     item.className = "legend-item";
-    item.innerHTML = `<span class="legend-dot" style="background:${GROUP_COLORS_HTML[i]}"></span>${lbl} (${i*8+1}-${i*8+8})`;
+    // Object IDs are 0-based (0..63) — group i covers i*8 .. i*8+7.
+    item.innerHTML = `<span class="legend-dot" style="background:${GROUP_COLORS_HTML[i]}"></span>${lbl} (${i*8}-${i*8+7})`;
     legendEl.appendChild(item);
   });
 
@@ -326,8 +318,24 @@
       _applyMode(data.mode);
     } else if (data && data.type === "v2s_status") {
       _v2sSetRunning(data.running);
+    } else if (data && data.type === "drag_suppressed") {
+      // ADR 0013/0015: server dropped a positional send because AI mode
+      // owns the 9100 wire. Surface it — otherwise the canvas dot moved
+      // but the audio object did not.
+      _flashModeStatus("AI 모드: 드래그 차단됨 — 저레이턴시로 전환하세요");
     }
   });
+
+  let _modeFlashTimer = null;
+  function _flashModeStatus(text) {
+    modeStatus.textContent = text;
+    modeStatus.style.color = "#e74c3c";
+    if (_modeFlashTimer) clearTimeout(_modeFlashTimer);
+    _modeFlashTimer = setTimeout(() => {
+      modeStatus.style.color = "#666";
+      modeStatus.textContent = "모드: " + (btnAi.classList.contains("active") ? "ai" : "low_latency");
+    }, 2500);
+  }
 
   // --- Mode toggle ---
   const btnAi = document.getElementById("btn-ai-mode");

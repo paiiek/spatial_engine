@@ -185,7 +185,7 @@ Schema is enforced by `tests/soak_harness/test_soak_webgui_schema.py` (14 tests,
 
 ## Operational notes
 
-* Harness sets `_bridge_mode=low_latency` after each uvicorn (re)start so the WebGUI is the 9100 producer in the soak. Production default `ai` mode suppresses obj_pos per ADR 0013.
+* Harness sets `_bridge_mode=low_latency` after each uvicorn (re)start so the WebGUI is the 9100 producer in the soak. The explicit POST keeps the soak independent of the shipped default (ADR 0015 ships `low_latency`; `ai` mode suppresses obj_pos per ADR 0013).
 * OSC sink binds UDP 9100 BEFORE uvicorn starts so `osc_bridge.SimpleUDPClient` never sees ICMP-unreachable.
 * SIGKILL fault-injection picks a new free port on restart; WS client reconnect loop adapts via `port_ref`.
 * On fault injection the fd-count series will discontinuously jump (new PID baseline). For final acceptance, prefer a soak window without a kill in the last 60 s.

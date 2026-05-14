@@ -29,7 +29,12 @@ def test_health_returns_200(client):
 
 def test_health_body(client):
     resp = client.get("/health")
-    assert resp.json() == {"status": "ok"}
+    body = resp.json()
+    assert body["status"] == "ok"
+    # /health also reports OSC-bridge readiness + active bridge mode so
+    # operators can diagnose "the sound doesn't move" without server logs.
+    assert "osc_ready" in body
+    assert body["bridge_mode"] in ("ai", "low_latency")
 
 
 # ---------------------------------------------------------------------------

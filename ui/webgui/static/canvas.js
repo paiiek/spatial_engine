@@ -6,7 +6,8 @@
 const MAX_OBJECTS = 64;
 
 // Object state: azim (-180..180 deg), elev (-90..90 deg), dist (0..1), gain (1.0), active
-const objects = Array.from({ length: MAX_OBJECTS + 1 }, (_, i) => ({
+// Indices are 0-based (0..63) to match the engine / server (/adm/obj/N, N in [0,64)).
+const objects = Array.from({ length: MAX_OBJECTS }, (_, i) => ({
   id: i,
   azim: 0,
   elev: 0,
@@ -22,7 +23,7 @@ const GROUP_COLORS = [
 ];
 
 function groupColor(id) {
-  return GROUP_COLORS[Math.floor((id - 1) / 8) % GROUP_COLORS.length];
+  return GROUP_COLORS[Math.floor(id / 8) % GROUP_COLORS.length];
 }
 
 // ─── Canvas setup ────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ function drawTopDown() {
   topCtx.fill();
 
   // Objects
-  for (let i = 1; i <= MAX_OBJECTS; i++) {
+  for (let i = 0; i < MAX_OBJECTS; i++) {
     const obj = objects[i];
     if (!obj.active) continue;
     const { x, y } = admToTopDown(obj.azim, obj.dist, cx, cy, radius);
@@ -143,7 +144,7 @@ function drawElevation() {
   elevCtx.stroke();
 
   // Objects
-  for (let i = 1; i <= MAX_OBJECTS; i++) {
+  for (let i = 0; i < MAX_OBJECTS; i++) {
     const obj = objects[i];
     if (!obj.active) continue;
     const { ex, ey } = admToElevation(obj.azim, obj.elev, w, h);
@@ -190,7 +191,7 @@ WsClient.onMessage((data) => {
   const azimMatch = addr.match(/^\/adm\/obj\/(\d+)\/azim$/);
   if (azimMatch) {
     const n = parseInt(azimMatch[1], 10);
-    if (n >= 1 && n <= MAX_OBJECTS) {
+    if (n >= 0 && n < MAX_OBJECTS) {
       objects[n].azim = args[0] ?? 0;
       objects[n].active = true;
     }
@@ -201,7 +202,7 @@ WsClient.onMessage((data) => {
   const elevMatch = addr.match(/^\/adm\/obj\/(\d+)\/elev$/);
   if (elevMatch) {
     const n = parseInt(elevMatch[1], 10);
-    if (n >= 1 && n <= MAX_OBJECTS) {
+    if (n >= 0 && n < MAX_OBJECTS) {
       objects[n].elev = args[0] ?? 0;
       objects[n].active = true;
     }
@@ -212,7 +213,7 @@ WsClient.onMessage((data) => {
   const distMatch = addr.match(/^\/adm\/obj\/(\d+)\/dist$/);
   if (distMatch) {
     const n = parseInt(distMatch[1], 10);
-    if (n >= 1 && n <= MAX_OBJECTS) {
+    if (n >= 0 && n < MAX_OBJECTS) {
       objects[n].dist = args[0] ?? 1.0;
       objects[n].active = true;
     }
@@ -223,7 +224,7 @@ WsClient.onMessage((data) => {
   const aedMatch = addr.match(/^\/adm\/obj\/(\d+)\/aed$/);
   if (aedMatch) {
     const n = parseInt(aedMatch[1], 10);
-    if (n >= 1 && n <= MAX_OBJECTS) {
+    if (n >= 0 && n < MAX_OBJECTS) {
       objects[n].azim = args[0] ?? 0;
       objects[n].elev = args[1] ?? 0;
       objects[n].dist = args[2] ?? 1.0;
@@ -253,7 +254,7 @@ function hitTest(px, py) {
   const cy = h / 2;
   const radius = Math.min(w, h) / 2 - 20;
 
-  for (let i = 1; i <= MAX_OBJECTS; i++) {
+  for (let i = 0; i < MAX_OBJECTS; i++) {
     const obj = objects[i];
     if (!obj.active) continue;
     const { x, y } = admToTopDown(obj.azim, obj.dist, cx, cy, radius);
