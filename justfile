@@ -57,9 +57,9 @@ compat:
     cd tests/compat_harness && uv run python harness.py
 
 # Inspect KEMAR SOFA metadata (P0 deliverable; feeds docs/lab_setup.md)
-sofa-inspect:
-    /home/seung/miniforge3/bin/python3 tools/sofa_inspector.py \
-        /home/seung/mmhoa/text2hoa/renderer/hrtf/kemar.sofa
+# Override the SOFA path with: just sofa-inspect sofa=/path/to/kemar.sofa
+sofa-inspect sofa="/home/seung/mmhoa/text2hoa/renderer/hrtf/kemar.sofa":
+    python3 tools/sofa_inspector.py {{sofa}}
 
 # Pre-commit hooks across all files
 lint:

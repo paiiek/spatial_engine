@@ -78,33 +78,39 @@ OSC/UDP를 통해 모든 컴포넌트가 연결됩니다.
 git clone git@github.com:paiiek/spatial_engine.git
 cd spatial_engine
 
-# C++ 코어 빌드
+# C++ 코어 빌드 (macOS Apple Silicon 포함 — arm64 자동 타겟)
 mkdir -p core/build && cd core/build
-/home/seung/miniforge3/bin/cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON
-make -j$(nproc)
+cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON
+make -j$(nproc)   # macOS: make -j$(sysctl -n hw.ncpu)
 cd ../..
 
-# 빌드 확인 (34개 테스트)
-/home/seung/miniforge3/bin/ctest --test-dir core/build --output-on-failure
+# 빌드 확인
+ctest --test-dir core/build --output-on-failure
 ```
 
 ### 2. Python 의존성 설치
 
 ```bash
-pip install fastapi uvicorn websockets python-osc pyyaml
-# 또는
 pip install -r requirements.txt
 ```
+
+> 런타임 의존성은 `requirements.txt`(WebGUI + bridge), 테스트 도구는
+> `requirements-dev.txt`. Python 3.11 이상 필요.
 
 ### 3. WebGUI 실행
 
 ```bash
-# 서버 시작
-python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000
+# 서버 시작 (프로젝트 루트에서 실행 — PYTHONPATH 에 ui/ 포함 필수)
+PYTHONPATH=.:ui python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000
 
 # 브라우저로 접속
 # http://<서버-IP>:8000
+#   <서버-IP> = uvicorn 을 실행한 머신의 IP (로컬은 localhost)
 ```
+
+> `PYTHONPATH=.:ui` 가 없으면 `ModuleNotFoundError: No module named 'spatial_engine_ui'` 가 발생한다.
+> `server.py` 가 `spatial_engine_ui`(=`ui/` 하위)와 `ui.webgui`(=루트 하위)를 동시에 import 하기 때문.
+> Windows 는 `set PYTHONPATH=.;ui` 후 실행.
 
 ### 4. C++ 엔진 실행
 
@@ -118,6 +124,15 @@ core/build/spatial_engine_core \
 
 이것으로 WebGUI + 엔진이 연결되어 오브젝트를 드래그하면 8ch VBAP 렌더가 동작합니다.
 
+> **오디오 출력 주의**: 기본 백엔드는 `null` 로, 렌더는 수행하지만 소리를
+> 어디로도 내보내지 않습니다. 실제 소리를 들으려면:
+> - **파일 캡처** (모든 OS): `--wav /tmp/out.wav` 로 8ch WAV 기록
+> - **실시간 출력** (Linux + Dante HW): `--backend dante`
+> - **macOS 실시간 출력**: 현재 미지원 (CoreAudio 백엔드 미구현) — `--wav` 사용
+>
+> 즉 macOS 에서는 코어가 빌드·실행·렌더는 되지만, 움직이는 소리를 들으려면
+> `--wav` 로 캡처해 재생해야 합니다.
+
 ---
 
 ## WebGUI 사용법
@@ -128,7 +143,7 @@ core/build/spatial_engine_core \
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ [AI 추적] [저레이턴시]  모드: ai │ vid2spatial [시작] [정지] 실행 중 (:9000) │
+│ [AI 추적] [저레이턴시]  모드: low_latency │ vid2spatial [시작] [정지] 정지됨  │
 │ 씬: [________] [저장] [로드]  Transport: [▶ Play] [■ Stop]   60 fps          │
 ├────────────────────────────────────────────────────────────────────────────┤
 │                                                                            │
@@ -343,9 +358,9 @@ python3 tools/demo_e2e.py --traj path/to/traj.json
 ### 요구사항
 
 - CMake ≥ 3.20
-- GCC 12+ 또는 Clang 14+ (C++20)
-- Python 3.10+
-- `pip install fastapi uvicorn websockets python-osc pyyaml`
+- GCC 12+ / Clang 14+ / Apple Clang (Xstring CLT) — C++20
+- Python 3.11+
+- `pip install -r requirements.txt`
 
 ### C++ 빌드
 
@@ -353,7 +368,8 @@ python3 tools/demo_e2e.py --traj path/to/traj.json
 mkdir -p core/build && cd core/build
 
 # NO_JUCE 빌드 (권장 — POSIX UDP OSC 수신 포함)
-/home/seung/miniforge3/bin/cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON
+# macOS 에서는 호스트 아키텍처(arm64/x86_64)로 자동 타겟됩니다.
+cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON
 
 make -j$(nproc)
 ```
@@ -389,8 +405,8 @@ Phase C 에서 Steinberg vst3sdk 외부 클론과 함께 통합 예정.
 
 ```bash
 cd core/build
-/home/seung/miniforge3/bin/ctest --output-on-failure
-# → 100% tests passed, 0 tests failed out of 34
+ctest --output-on-failure
+# → 100% tests passed
 ```
 
 ### Python 테스트 (149개)

@@ -1,0 +1,20 @@
+# Runtime dependencies for the spatial_engine WebGUI + vid2spatial bridge.
+#
+#   pip install -r requirements.txt
+#
+# This is everything needed to run:
+#   PYTHONPATH=.:ui python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000
+#
+# Requires Python >= 3.11 (see ui/pyproject.toml).
+#
+# NOT included here (install separately if you need them):
+#   * pyside6, numpy   — only the PySide6 desktop UI (spatial_engine_ui.app)
+#   * pytest, playwright, psutil, requests — test/soak harnesses, see
+#     requirements-dev.txt
+#   * the C++ engine (core/) — built via CMake, no Python deps
+
+fastapi>=0.110
+uvicorn[standard]>=0.27   # [standard] bundles the websockets impl FastAPI's WS needs
+pydantic>=2.0
+python-osc>=1.8,<2.0
+pyyaml>=6.0               # vid2spatial bridge config (bridge/vid2spatial_osc.py)

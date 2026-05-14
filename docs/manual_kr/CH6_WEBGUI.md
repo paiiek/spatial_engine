@@ -78,8 +78,14 @@ spatial_engine_core v0.2.0 (full render chain)
 **Terminal 2 — WebGUI 서버 시작:**
 
 ```bash
-python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000
+# 프로젝트 루트에서 실행 — PYTHONPATH 에 ui/ 를 반드시 포함
+PYTHONPATH=.:ui python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000
 ```
+
+> `PYTHONPATH=.:ui` 를 빠뜨리면 `ModuleNotFoundError: No module named 'spatial_engine_ui'` 로 기동에 실패한다.
+> `server.py` 는 `spatial_engine_ui`(`ui/` 하위 패키지)와 `ui.webgui`(루트 하위)를 함께 import 하므로 루트와 `ui/` 둘 다 경로에 있어야 한다.
+> pytest 는 `pytest.ini` 의 `pythonpath` 설정으로 자동 처리되지만, uvicorn 직접 실행은 그렇지 않다.
+> Windows: `set PYTHONPATH=.;ui` 후 실행.
 
 정상 기동 시 출력 예시:
 
@@ -364,7 +370,7 @@ kill <pid>
 |------|------|-------------|-----------|
 | 1 | Core 빌드 정합 검증 | `python3 scripts/verify_byte_baseline.py --strict` | exit 0 |
 | 2 | Core 기동 | `./build/core/spatial_engine_core` | 포트 9100 바인드 메시지 출력 |
-| 3 | WebGUI 서버 기동 | `python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000` | `osc_bridge ready` 메시지 출력 |
+| 3 | WebGUI 서버 기동 | `PYTHONPATH=.:ui python3 -m uvicorn ui.webgui.server:app --host 0.0.0.0 --port 8000` | `osc_bridge ready` 메시지 출력 |
 | 4 | Health 확인 | `curl http://<host>:8000/health` | `{"status":"ok"}` |
 | 5 | 브라우저 접속 확인 | `http://<host>:8000` | 캔버스 표시, 오브젝트 목록 출력 |
 | 6 | iPad / 태블릿 접속 | Safari → 동일 URL | 캔버스 정상 표시 |
