@@ -429,3 +429,38 @@ target_compile_definitions(test_binaural_b1_64_objects_rt_safe PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME binaural_b1_64_objects_rt_safe
     COMMAND test_binaural_b1_64_objects_rt_safe)
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5 P4 — B2 AmbiVS path (24-pt t-design VS) tests (A4/A6).
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(test_b2_ownership_lifecycle
+    test_b2_ownership_lifecycle.cpp)
+target_link_libraries(test_b2_ownership_lifecycle PRIVATE spe_core)
+target_compile_definitions(test_b2_ownership_lifecycle PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_ownership_lifecycle
+    COMMAND test_b2_ownership_lifecycle)
+
+add_executable(test_b2_layout_change_does_not_reinit_vs
+    test_b2_layout_change_does_not_reinit_vs.cpp)
+target_link_libraries(test_b2_layout_change_does_not_reinit_vs PRIVATE spe_core)
+target_compile_definitions(test_b2_layout_change_does_not_reinit_vs PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_layout_change_does_not_reinit_vs
+    COMMAND test_b2_layout_change_does_not_reinit_vs)
+
+add_executable(test_b2_throughput_probe_fallback
+    test_b2_throughput_probe_fallback.cpp)
+target_link_libraries(test_b2_throughput_probe_fallback PRIVATE spe_core)
+target_compile_definitions(test_b2_throughput_probe_fallback PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_throughput_probe_fallback
+    COMMAND test_b2_throughput_probe_fallback)
+
+add_executable(test_b2_ambivs_equivalent_to_b1_at_order3
+    test_b2_ambivs_equivalent_to_b1_at_order3.cpp)
+target_link_libraries(test_b2_ambivs_equivalent_to_b1_at_order3 PRIVATE spe_core)
+target_compile_definitions(test_b2_ambivs_equivalent_to_b1_at_order3 PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_ambivs_equivalent_to_b1_at_order3
+    COMMAND test_b2_ambivs_equivalent_to_b1_at_order3)

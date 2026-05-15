@@ -48,6 +48,27 @@ public:
     void setBinauralSofaPath(const std::string& path)  { binaural_sofa_path_ = path; }
     void setBinauralEnabled(bool on)                   { binaural_enabled_.store(on); }
 
+    // v0.5 P4: binaural mode injection. Same control-thread contract as the
+    // other setters above. Forwards to BinauralMonitor::setRequestedMode().
+    // 0 = B1 Direct (default), 1 = B2 AmbiVS.
+    void setBinauralMode(int mode) {
+        binaural_.setRequestedMode(mode == 1 ? output::BinauralMode::AmbiVS
+                                              : output::BinauralMode::Direct);
+    }
+    int binauralMode() const noexcept {
+        return static_cast<int>(binaural_.requestedMode());
+    }
+    int effectiveBinauralMode() const noexcept {
+        return static_cast<int>(binaural_.effectiveMode());
+    }
+    // Probe accessors — surfaced for VST3 status emission & state v4.
+    float binauralProbeThroughput() const noexcept {
+        return binaural_.probeThroughput();
+    }
+    const char* binauralProbeWarningCode() const noexcept {
+        return binaural_.probeWarningCode();
+    }
+
     const std::string& layoutPath()         const noexcept { return layout_path_; }
     const std::string& binauralSofaPath()   const noexcept { return binaural_sofa_path_; }
     bool               binauralEnabled()    const noexcept { return binaural_enabled_.load(); }
@@ -211,6 +232,12 @@ private:
     // heavy multi-object summation.
     spe::dsp::ChannelLimiter binaural_lim_L_;
     spe::dsp::ChannelLimiter binaural_lim_R_;
+
+    // v0.5 P4: 3rd-order SH (16 ACN channels) accumulator for B2 AmbiVS.
+    // b2_sh_scratch_[k][n] = sum over active objects of (sh_coeffs[k] * dry[n] * gain).
+    // b2_sh_ptrs_ point into b2_sh_scratch_ and are passed to processBlockB2().
+    std::array<std::array<float, MAX_BLOCK>, 16> b2_sh_scratch_{};
+    std::array<const float*, 16>                 b2_sh_ptrs_{};
 
     std::atomic<bool>          prepared_{false};
     std::atomic<bool>          render_ready_{false};

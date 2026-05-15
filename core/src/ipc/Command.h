@@ -47,6 +47,7 @@ enum class CommandTag : uint8_t {
     SysLoadLayout      = 0x16, // /sys/load_layout ,s "<yaml-path>" — store layout YAML path
     SysBinauralSofa    = 0x17, // /sys/binaural_sofa ,s "<.speh-path>" — store binaural SOFA path
     SysBinauralEnable  = 0x18, // /sys/binaural_enable ,i {0|1} — enable binaural bus 1 rendering
+    SysBinauralMode    = 0x19, // /sys/binaural_mode ,i {0|1} — 0 = B1 Direct, 1 = B2 AmbiVS (v0.5 P4)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -231,6 +232,12 @@ struct PayloadSysBinauralEnable {
     bool enable = false;
 };
 
+struct PayloadSysBinauralMode {
+    // 0 = B1 Direct (per-object HRTF), 1 = B2 AmbiVS (24-pt t-design VS).
+    // Unknown values are clamped to 0 by the engine handler.
+    uint8_t mode = 0;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -268,6 +275,7 @@ using CommandPayload = std::variant<
     PayloadSysLoadLayout,
     PayloadSysBinauralSofa,
     PayloadSysBinauralEnable,
+    PayloadSysBinauralMode,
     PayloadUnknown
 >;
 

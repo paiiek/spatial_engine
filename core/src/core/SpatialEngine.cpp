@@ -1,5 +1,6 @@
 // core/src/core/SpatialEngine.cpp
 
+#include "ambi/AmbisonicEncoder.h"
 #include "core/SpatialEngine.h"
 #include "geometry/LayoutLoader.h"
 #include "reverb/ReverbEngine.h"
@@ -154,6 +155,13 @@ SpatialEngine::SpatialEngine(int listen_port)
                     binaural_enabled_.store(p->enable);
                 }
                 return;
+            case ipc::CommandTag::SysBinauralMode:
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralMode>(&cmd.payload)) {
+                    binaural_.setRequestedMode(
+                        p->mode == 1 ? output::BinauralMode::AmbiVS
+                                     : output::BinauralMode::Direct);
+                }
+                return;
             default:
                 return; // not queued
             }
@@ -279,6 +287,11 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     // Wire dry_ptrs_ to scratch buffers
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         dry_ptrs_[static_cast<size_t>(i)] = dry_scratch_[static_cast<size_t>(i)].data();
+    }
+    // v0.5 P4: wire b2_sh_ptrs_ once; AmbiDecoder::decode() reads them every block.
+    for (int k = 0; k < 16; ++k) {
+        b2_sh_ptrs_[static_cast<size_t>(k)] =
+            b2_sh_scratch_[static_cast<size_t>(k)].data();
     }
 
     osc_backend_.start();
@@ -633,34 +646,72 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                       binaural_r_buf_.begin() + block.num_frames, 0.f);
 
             if (binaural_.hasHrtf()) {
-                // Per-object HRTF sum (B1 primary path).
-                for (int i = 0; i < MAX_OBJECTS; ++i) {
-                    const auto& c = obj_cache_[static_cast<std::size_t>(i)];
-                    if (!c.active || c.gain_lin < 1e-6f) continue;
+                const bool b2_active = (binaural_.effectiveMode()
+                                        == output::BinauralMode::AmbiVS);
 
-                    // Update direction (RT-safe: KD-tree lookup + loadInto +
-                    // GainRamp setup; no alloc).
-                    binaural_.setDirection(i, c.az, c.el);
+                if (b2_active) {
+                    // v0.5 P4: B2 AmbiVS path. Encode each active object into
+                    // 3rd-order ACN-ordered SH (16 channels), sum into
+                    // b2_sh_scratch_, then decode→24-VS→HRIR→L/R via
+                    // BinauralMonitor::processBlockB2().
+                    for (int k = 0; k < 16; ++k) {
+                        std::fill(b2_sh_scratch_[static_cast<std::size_t>(k)].begin(),
+                                  b2_sh_scratch_[static_cast<std::size_t>(k)].begin()
+                                  + block.num_frames, 0.f);
+                    }
+                    for (int i = 0; i < MAX_OBJECTS; ++i) {
+                        const auto& c = obj_cache_[static_cast<std::size_t>(i)];
+                        if (!c.active || c.gain_lin < 1e-6f) continue;
+                        const auto coeffs =
+                            spe::ambi::AmbisonicEncoder::encode_3rd_order(c.az, c.el);
+                        const float g = c.gain_lin * transport_gain;
+                        const float* dry =
+                            dry_scratch_[static_cast<std::size_t>(i)].data();
+                        for (int k = 0; k < 16; ++k) {
+                            const float ck = coeffs[static_cast<std::size_t>(k)] * g;
+                            if (ck == 0.f) continue;
+                            float* sh = b2_sh_scratch_[static_cast<std::size_t>(k)].data();
+                            for (int n = 0; n < block.num_frames; ++n) {
+                                sh[n] += ck * dry[n];
+                            }
+                        }
+                    }
+                    binaural_.processBlockB2(b2_sh_ptrs_.data(),
+                                             /*order=*/3,
+                                             block.num_frames,
+                                             binaural_l_buf_.data(),
+                                             binaural_r_buf_.data());
+                } else {
+                    // Per-object HRTF sum (B1 primary path).
+                    for (int i = 0; i < MAX_OBJECTS; ++i) {
+                        const auto& c = obj_cache_[static_cast<std::size_t>(i)];
+                        if (!c.active || c.gain_lin < 1e-6f) continue;
 
-                    // Convolve into the per-object scratch tmp_L/R.
-                    binaural_.processBlockForObject(
-                        i,
-                        dry_scratch_[static_cast<std::size_t>(i)].data(),
-                        block.num_frames,
-                        bin_tmp_L_.data(),
-                        bin_tmp_R_.data());
+                        // Update direction (RT-safe: KD-tree lookup + loadInto +
+                        // GainRamp setup; no alloc).
+                        binaural_.setDirection(i, c.az, c.el);
 
-                    // Sum with per-object gain.
-                    const float g = c.gain_lin * transport_gain;
-                    for (int n = 0; n < block.num_frames; ++n) {
-                        binaural_l_buf_[static_cast<std::size_t>(n)] +=
-                            g * bin_tmp_L_[static_cast<std::size_t>(n)];
-                        binaural_r_buf_[static_cast<std::size_t>(n)] +=
-                            g * bin_tmp_R_[static_cast<std::size_t>(n)];
+                        // Convolve into the per-object scratch tmp_L/R.
+                        binaural_.processBlockForObject(
+                            i,
+                            dry_scratch_[static_cast<std::size_t>(i)].data(),
+                            block.num_frames,
+                            bin_tmp_L_.data(),
+                            bin_tmp_R_.data());
+
+                        // Sum with per-object gain.
+                        const float g = c.gain_lin * transport_gain;
+                        for (int n = 0; n < block.num_frames; ++n) {
+                            binaural_l_buf_[static_cast<std::size_t>(n)] +=
+                                g * bin_tmp_L_[static_cast<std::size_t>(n)];
+                            binaural_r_buf_[static_cast<std::size_t>(n)] +=
+                                g * bin_tmp_R_[static_cast<std::size_t>(n)];
+                        }
                     }
                 }
 
-                // Apply per-channel limiter to prevent clipping under heavy load.
+                // Apply per-channel limiter to prevent clipping under heavy load
+                // (shared by B1 and B2 since both paths write to binaural_*_buf_).
                 for (int n = 0; n < block.num_frames; ++n) {
                     binaural_l_buf_[static_cast<std::size_t>(n)] =
                         binaural_lim_L_.processSample(binaural_l_buf_[static_cast<std::size_t>(n)]);

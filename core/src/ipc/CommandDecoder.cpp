@@ -374,6 +374,13 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadSysBinauralEnable p;
         p.enable = (getInt(0) != 0);
         cmd.payload = p;
+    } else if (addr == "/sys/binaural_mode") {
+        // v0.5 P4: ,i {0=B1 Direct | 1=B2 AmbiVS}
+        cmd.tag = CommandTag::SysBinauralMode;
+        PayloadSysBinauralMode p;
+        const int32_t v = getInt(0);
+        p.mode = (v == 1) ? 1u : 0u;
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;
@@ -718,6 +725,13 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         auto& p = std::get<PayloadSysBinauralEnable>(cmd.payload);
         addr = "/sys/binaural_enable";
         add_i(p.enable ? 1 : 0);
+        break;
+    }
+    case CommandTag::SysBinauralMode: {
+        // v0.5 P4: ,i {0|1}
+        auto& p = std::get<PayloadSysBinauralMode>(cmd.payload);
+        addr = "/sys/binaural_mode";
+        add_i(p.mode ? 1 : 0);
         break;
     }
     case CommandTag::HbPing: {
