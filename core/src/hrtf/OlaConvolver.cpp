@@ -23,6 +23,58 @@ void OlaConvolver::prepare(const float* ir, int ir_len, int block_size)
     block_size_ = block_size;
 }
 
+void OlaConvolver::prepareForReload(int max_ir_len, int block_size)
+{
+    // Clamp + sanity: caller passes a value in (0, kOlaMaxIRLength]; default to
+    // kOlaMaxIRLength on out-of-range.
+    if (max_ir_len <= 0 || max_ir_len > kOlaMaxIRLength) {
+        max_ir_len = kOlaMaxIRLength;
+    }
+    if (block_size < 1) block_size = 1;
+
+    block_size_ = block_size;
+
+    // Reserve + size to worst-case so loadInto() never reallocates.
+    // After priming, ir_ holds kOlaMaxIRLength zeros (so isReady() returns true);
+    // first loadInto() will resize to the real IR length and copy.
+    ir_.reserve(static_cast<std::size_t>(max_ir_len));
+    ir_.assign(static_cast<std::size_t>(max_ir_len), 0.f);
+
+    overlap_.reserve(static_cast<std::size_t>(max_ir_len - 1));
+    overlap_.assign(static_cast<std::size_t>(max_ir_len - 1), 0.f);
+
+    work_.reserve(static_cast<std::size_t>(block_size + max_ir_len - 1));
+    work_.assign(static_cast<std::size_t>(block_size + max_ir_len - 1), 0.f);
+}
+
+void OlaConvolver::loadInto(const float* ir, int ir_len)
+{
+    // Release-build: silent no-op on capacity violation; counter increments.
+    // Note: the capacity-check uses the locked architectural max (kOlaMaxIRLength)
+    // — callers must have primed via prepareForReload() with max_ir_len >= ir_len.
+    const std::size_t need_ir      = static_cast<std::size_t>(kOlaMaxIRLength);
+    const std::size_t need_overlap = static_cast<std::size_t>(kOlaMaxIRLength - 1);
+    const std::size_t need_work    = static_cast<std::size_t>(block_size_ + kOlaMaxIRLength - 1);
+    if (!ir || ir_len <= 0 || ir_len > kOlaMaxIRLength ||
+        ir_.capacity()      < need_ir      ||
+        overlap_.capacity() < need_overlap ||
+        work_.capacity()    < need_work)
+    {
+        load_into_failures_.fetch_add(1, std::memory_order_relaxed);
+        assert(false && "OlaConvolver::loadInto preconditions violated");
+        return;  // no-op in release
+    }
+
+    ir_.resize(static_cast<std::size_t>(ir_len));        // no realloc (capacity preserved)
+    std::copy(ir, ir + ir_len, ir_.begin());
+
+    overlap_.resize(static_cast<std::size_t>(ir_len - 1));  // no realloc
+    std::fill(overlap_.begin(), overlap_.end(), 0.f);       // flush tail on reload
+
+    work_.resize(static_cast<std::size_t>(block_size_ + ir_len - 1));  // no realloc
+    // work_ is fully overwritten at the start of each process(), so no fill here.
+}
+
 void OlaConvolver::process(const float* input, int num_samples, float* output)
 {
     if (ir_.empty()) {

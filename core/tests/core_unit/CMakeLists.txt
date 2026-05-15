@@ -344,3 +344,18 @@ add_executable(test_p_ambi_decoder_in_phase test_p_ambi_decoder_in_phase.cpp)
 target_link_libraries(test_p_ambi_decoder_in_phase PRIVATE spe_core)
 add_test(NAME p_ambi_decoder_in_phase COMMAND test_p_ambi_decoder_in_phase)
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5 P0 — OlaConvolver::loadInto + prepareForReload tests
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(test_ola_convolver_loadinto_rt_safe
+    test_ola_convolver_loadinto_rt_safe.cpp)
+target_link_libraries(test_ola_convolver_loadinto_rt_safe PRIVATE spe_core spe_util)
+add_test(NAME ola_convolver_loadinto_rt_safe
+    COMMAND test_ola_convolver_loadinto_rt_safe)
+
+add_executable(test_ola_convolver_loadinto_capacity_violation_release
+    test_ola_convolver_loadinto_capacity_violation_release.cpp)
+target_link_libraries(test_ola_convolver_loadinto_capacity_violation_release PRIVATE spe_core)
+add_test(NAME ola_convolver_loadinto_capacity_violation_release
+    COMMAND test_ola_convolver_loadinto_capacity_violation_release)
