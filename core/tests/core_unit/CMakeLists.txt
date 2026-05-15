@@ -175,6 +175,38 @@ add_executable(test_p4_flood_malformed test_p4_flood_malformed.cpp)
 target_link_libraries(test_p4_flood_malformed PRIVATE spe_core)
 add_test(NAME p4_flood_malformed COMMAND test_p4_flood_malformed)
 
+# v0.4 P2 — OSC SysLoadLayout round-trip
+add_executable(test_osc_sys_load_layout_roundtrip test_osc_sys_load_layout_roundtrip.cpp)
+target_link_libraries(test_osc_sys_load_layout_roundtrip PRIVATE spe_core)
+add_test(NAME osc_sys_load_layout_roundtrip COMMAND test_osc_sys_load_layout_roundtrip)
+
+# v0.4 P2 — speaker layout load from path (5 YAML files)
+add_executable(test_speaker_layout_load_path test_speaker_layout_load_path.cpp)
+target_link_libraries(test_speaker_layout_load_path PRIVATE spe_core)
+target_compile_definitions(test_speaker_layout_load_path PRIVATE
+    SPE_CONFIGS_DIR="${SPE_CONFIGS_DIR}"
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME speaker_layout_load_path
+    COMMAND test_speaker_layout_load_path "${SPE_CONFIGS_DIR}" "${SPE_FIXTURES_DIR}")
+
+# v0.4 P3 — OSC SysBinauralSofa round-trip
+add_executable(test_osc_sys_binaural_sofa_roundtrip test_osc_sys_binaural_sofa_roundtrip.cpp)
+target_link_libraries(test_osc_sys_binaural_sofa_roundtrip PRIVATE spe_core)
+add_test(NAME osc_sys_binaural_sofa_roundtrip COMMAND test_osc_sys_binaural_sofa_roundtrip)
+
+# v0.4 P3 — OSC SysBinauralEnable round-trip
+add_executable(test_osc_sys_binaural_enable_roundtrip test_osc_sys_binaural_enable_roundtrip.cpp)
+target_link_libraries(test_osc_sys_binaural_enable_roundtrip PRIVATE spe_core)
+add_test(NAME osc_sys_binaural_enable_roundtrip COMMAND test_osc_sys_binaural_enable_roundtrip)
+
+# v0.4 P3 — binaural setBinauralEnabled RT no-alloc (only meaningful with SPE_RT_ASSERTS)
+if(SPATIAL_ENGINE_RT_ASSERTS)
+    add_executable(test_p_binaural_setDirection_no_alloc test_p_binaural_setDirection_no_alloc.cpp)
+    target_link_libraries(test_p_binaural_setDirection_no_alloc PRIVATE spe_core Threads::Threads)
+    add_test(NAME p_binaural_setDirection_no_alloc
+        COMMAND test_p_binaural_setDirection_no_alloc)
+endif()
+
 # P5 tests
 add_executable(test_p5_decoder_underflow test_p5_decoder_underflow.cpp)
 target_link_libraries(test_p5_decoder_underflow PRIVATE spe_core)

@@ -9,6 +9,7 @@
 
 #include "core/SpatialEngine.h"
 #include "core/Constants.h"
+#include "geometry/LayoutLoader.h"
 #include "ipc/Command.h"
 
 #include "pluginterfaces/base/funknown.h"
@@ -673,6 +674,20 @@ SpatialEngineProcessor::setupProcessing(Steinberg::Vst::ProcessSetup& setup)
     if (max_block_ > spe::MAX_BLOCK) {
         // Block size exceeds engine hard cap — suspend (cannot process).
         return Steinberg::kResultFalse;
+    }
+
+    // P2: if a layout path was restored from state v4 section 0x0002, apply it
+    // BEFORE prepareToPlay so the engine sizes its buffers for the correct
+    // speaker count on the very first setup call.
+    const std::string& lp = engine_->layoutPath();
+    if (!lp.empty()) {
+        auto result = spe::geometry::load_layout(lp);
+        if (spe::geometry::is_ok(result)) {
+            engine_->setLayout(std::get<spe::geometry::SpeakerLayout>(result));
+        } else {
+            std::fprintf(stderr, "setupProcessing: layout load failed for '%s': %s\n",
+                         lp.c_str(), std::get<std::string>(result).c_str());
+        }
     }
 
     engine_->prepareToPlay(sample_rate_, static_cast<int>(max_block_));

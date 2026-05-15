@@ -336,6 +336,49 @@ target_compile_definitions(test_v04_binaural_bus_placeholder PRIVATE SPATIAL_ENG
 target_compile_options(test_v04_binaural_bus_placeholder PRIVATE -UNDEBUG)
 add_test(NAME v04_binaural_bus_placeholder COMMAND test_v04_binaural_bus_placeholder)
 
+# ---- v0.4 P2: state persists layout path ------------------------------------
+add_executable(test_vst3_state_persists_layout_path
+    test_vst3_state_persists_layout_path.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_state_persists_layout_path PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_state_persists_layout_path PRIVATE spe_core)
+target_compile_definitions(test_vst3_state_persists_layout_path PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_state_persists_layout_path PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_persists_layout_path
+    COMMAND test_vst3_state_persists_layout_path)
+
+# ---- v0.4 P2: setupProcessing applies restored layout path ------------------
+if(EXISTS "${CMAKE_SOURCE_DIR}/configs")
+    set(_SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/configs")
+else()
+    set(_SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/../configs")
+endif()
+
+add_executable(test_vst3_setup_processing_applies_layout
+    test_vst3_setup_processing_applies_layout.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_setup_processing_applies_layout PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_setup_processing_applies_layout PRIVATE spe_core)
+target_compile_definitions(test_vst3_setup_processing_applies_layout PRIVATE
+    SPATIAL_ENGINE_VST3_BUILD=1
+    SPE_CONFIGS_DIR="${_SPE_CONFIGS_DIR}")
+target_compile_options(test_vst3_setup_processing_applies_layout PRIVATE -UNDEBUG)
+add_test(NAME vst3_setup_processing_applies_layout
+    COMMAND test_vst3_setup_processing_applies_layout "${_SPE_CONFIGS_DIR}")
+
+# ---- v0.4 P3: state persists sofa path + binaural enable --------------------
+add_executable(test_vst3_state_persists_sofa_path
+    test_vst3_state_persists_sofa_path.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_state_persists_sofa_path PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_state_persists_sofa_path PRIVATE spe_core)
+target_compile_definitions(test_vst3_state_persists_sofa_path PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_state_persists_sofa_path PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_persists_sofa_path COMMAND test_vst3_state_persists_sofa_path)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
@@ -344,4 +387,7 @@ set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_saf
                      vst3_state_v3_back_compat
                      vst3_bus_arrangement_speaker_binaural
                      v04_binaural_bus_placeholder
+                     vst3_state_persists_layout_path
+                     vst3_setup_processing_applies_layout
+                     vst3_state_persists_sofa_path
                      PROPERTIES DEPENDS vst3_host_fixture)

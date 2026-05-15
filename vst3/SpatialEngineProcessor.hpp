@@ -103,6 +103,11 @@ public:
     Steinberg::tresult PLUGIN_API disconnect(Steinberg::Vst::IConnectionPoint* other) SMTG_OVERRIDE;
     Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage* message) SMTG_OVERRIDE;
 
+    // Test-only accessor: allows VST3 integration tests to inspect engine state
+    // without going through the public VST3 parameter API.
+    spe::core::SpatialEngine& engine() noexcept { return *engine_; }
+    const spe::core::SpatialEngine& engine() const noexcept { return *engine_; }
+
 private:
     std::atomic<Steinberg::uint32> ref_count_{1};
     std::unique_ptr<spe::core::SpatialEngine> engine_;
