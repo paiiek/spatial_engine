@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -23,10 +24,25 @@ struct Speaker {
 };
 
 struct SpeakerLayout {
+    // Maximum YAML channel number addressable by per-channel handlers
+    // (OSC + algorithm fan-out). Covers any realistic count; matches the
+    // engine MAX_OBJECTS ceiling.
+    static constexpr int kMaxYamlChannel = 64;
+
     std::string           name;
     std::string           version;
     std::vector<Speaker>  speakers;
     Regularity            regularity = Regularity::IRREGULAR;
+
+    // YAML channel (1-based) → vector index in `speakers` (0-based).
+    // -1 = no speaker declares that YAML channel.
+    // LayoutLoader populates this in the same pass that fills `speakers`.
+    std::array<int16_t, static_cast<size_t>(kMaxYamlChannel) + 1> channel_to_idx_{};
+
+    // Translate a wire/YAML channel number to a vector index in `speakers`.
+    // Returns -1 if the channel is out of range or no speaker declares it.
+    // Audio-thread safe (no allocation, no exceptions).
+    int channelToIndex(int yaml_channel) const noexcept;
 
     // Helpers
 

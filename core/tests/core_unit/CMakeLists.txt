@@ -30,6 +30,13 @@ else()
     set(SPE_CONFIGS_DIR "${CMAKE_SOURCE_DIR}/../configs")
 endif()
 
+# v0.3.1 fixtures live under core/tests/fixtures.
+if(EXISTS "${CMAKE_SOURCE_DIR}/core/tests/fixtures")
+    set(SPE_FIXTURES_DIR "${CMAKE_SOURCE_DIR}/core/tests/fixtures")
+else()
+    set(SPE_FIXTURES_DIR "${CMAKE_SOURCE_DIR}/tests/fixtures")
+endif()
+
 add_executable(test_p2_coords test_p2_coords.cpp)
 target_link_libraries(test_p2_coords PRIVATE spe_core)
 add_test(NAME p2_coords COMMAND test_p2_coords)
@@ -45,6 +52,19 @@ target_link_libraries(test_p2_compat_checker PRIVATE spe_core)
 target_compile_definitions(test_p2_compat_checker PRIVATE
     SPE_CONFIGS_DIR="${SPE_CONFIGS_DIR}")
 add_test(NAME p2_compat_checker COMMAND test_p2_compat_checker "${SPE_CONFIGS_DIR}")
+
+# v0.3.1 — SpeakerLayout channel→index lookup + duplicate-channel rejection.
+add_executable(test_speaker_layout_channel_lookup test_speaker_layout_channel_lookup.cpp)
+target_link_libraries(test_speaker_layout_channel_lookup PRIVATE spe_core)
+target_compile_definitions(test_speaker_layout_channel_lookup PRIVATE
+    SPE_CONFIGS_DIR="${SPE_CONFIGS_DIR}"
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME speaker_layout_channel_lookup
+    COMMAND test_speaker_layout_channel_lookup "${SPE_CONFIGS_DIR}" "${SPE_FIXTURES_DIR}")
+
+add_executable(test_channel_map_duplicate_rejects test_channel_map_duplicate_rejects.cpp)
+target_link_libraries(test_channel_map_duplicate_rejects PRIVATE spe_core)
+add_test(NAME channel_map_duplicate_rejects COMMAND test_channel_map_duplicate_rejects)
 
 # RT-assert violation counting only meaningful when SPE_RT_ASSERTS is on.
 if(SPATIAL_ENGINE_RT_ASSERTS)

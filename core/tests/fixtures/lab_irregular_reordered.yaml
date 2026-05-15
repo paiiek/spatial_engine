@@ -1,0 +1,56 @@
+# v0.3.1 — reordered channel map fixture for channel→index lookup tests.
+# 8 speakers, YAML channel numbers interleaved {8, 1, 2, 7, 3, 6, 4, 5}.
+# Each speaker carries a unique gain_db so per-channel addressing can be
+# tested for state landing on the right vector position.
+version: "1.0"
+name: "lab_irregular_reordered"
+regularity_hint: "IRREGULAR"
+speakers:
+  - id: 1
+    channel: 8
+    az_deg:    0.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -1.0
+  - id: 2
+    channel: 1
+    az_deg:   45.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -2.0
+  - id: 3
+    channel: 2
+    az_deg:   90.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -3.0
+  - id: 4
+    channel: 7
+    az_deg:  135.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -4.0
+  - id: 5
+    channel: 3
+    az_deg:  180.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -5.0
+  - id: 6
+    channel: 6
+    az_deg: -135.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -6.0
+  - id: 7
+    channel: 4
+    az_deg:  -90.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -7.0
+  - id: 8
+    channel: 5
+    az_deg:  -45.0
+    el_deg:    0.0
+    dist_m:    1.0
+    gain_db:  -8.0

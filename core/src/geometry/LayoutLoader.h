@@ -17,6 +17,8 @@ inline constexpr const char* kErrBothXyzAndSphere = "both xyz and spherical";
 inline constexpr const char* kErrMissingVersion   = "missing 'version'";
 inline constexpr const char* kErrMissingName      = "missing 'name'";
 inline constexpr const char* kErrBadChannelValue  = "channel must be >= 1";
+inline constexpr const char* kErrDuplicateChannel = "duplicate channel";
+inline constexpr const char* kErrChannelTooLarge  = "channel exceeds kMaxYamlChannel";
 
 // WHY: std::expected is gcc-13+; use variant for broader compatibility.
 using LayoutResult = std::variant<SpeakerLayout, std::string>;

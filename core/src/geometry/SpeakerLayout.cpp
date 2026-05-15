@@ -8,6 +8,15 @@
 
 namespace spe::geometry {
 
+int SpeakerLayout::channelToIndex(int yaml_channel) const noexcept {
+    // 1-based contract: channel 0 is illegal and channel must fit in the
+    // lookup table. Returns -1 for unmapped or out-of-range queries so the
+    // audio thread can drop the command without allocation.
+    if (yaml_channel < 1) return -1;
+    if (yaml_channel > kMaxYamlChannel) return -1;
+    return channel_to_idx_[static_cast<size_t>(yaml_channel)];
+}
+
 int SpeakerLayout::dimensionality() const {
     // Count distinct rounded-to-cm elevation values as dimensionality proxy.
     std::set<int> elevations;

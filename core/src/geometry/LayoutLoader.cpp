@@ -30,6 +30,9 @@ LayoutResult load_layout(const std::string& yaml_path) {
     layout.version = root["version"].as<std::string>();
     layout.name    = root["name"].as<std::string>();
 
+    // Initialise YAML channel → vector index lookup to "unmapped" (-1).
+    layout.channel_to_idx_.fill(static_cast<int16_t>(-1));
+
     // Parse regularity_hint if present.
     if (root["regularity_hint"]) {
         const auto hint = root["regularity_hint"].as<std::string>();
@@ -56,6 +59,14 @@ LayoutResult load_layout(const std::string& yaml_path) {
         if (ch < 1) return make_error(kErrNegativeChannel);
         // Spec says channel >= 1; ch==0 also illegal.
         if (ch < 1) return make_error(kErrBadChannelValue);
+        if (ch > SpeakerLayout::kMaxYamlChannel) return make_error(kErrChannelTooLarge);
+
+        // Reject duplicate YAML channel declarations: a second speaker
+        // claiming the same channel:N would silently shadow the first under
+        // the channel→index lookup. Loud failure beats silent mis-routing.
+        if (layout.channel_to_idx_[static_cast<size_t>(ch)] != -1) {
+            return make_error(kErrDuplicateChannel);
+        }
 
         Speaker sp;
         sp.channel = ch;
@@ -84,6 +95,9 @@ LayoutResult load_layout(const std::string& yaml_path) {
         sp.delay_ms = node["delay_ms"] ? node["delay_ms"].as<float>() : 0.f;
         sp.gain_db  = node["gain_db"]  ? node["gain_db"].as<float>()  : 0.f;
 
+        // Record (1-based YAML channel) → (0-based vector index) before push.
+        layout.channel_to_idx_[static_cast<size_t>(ch)] =
+            static_cast<int16_t>(layout.speakers.size());
         layout.speakers.push_back(sp);
     }
 
