@@ -31,9 +31,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-object binaural test fixture.** `core/tests/fixtures/synthetic_min.speh`
   (committed) drives the v0.5 unit tests; the existing SOFA fixture is
   preserved for the SOFA-format-level tests.
+- **B2 AmbiVS optional render path.** Ambisonic decode to a 24-point
+  t-design virtual-speaker layout, each VS feeding a fixed HRIR pair. A
+  CPU-throughput probe runs at `setActive(true)` (`runThroughputProbe()`
+  in `core/src/output_backend/BinauralMonitor.cpp`); on insufficient
+  headroom (< 1.5× RT) the effective mode clamps back to B1 while
+  `requestedMode()` preserves the user intent for later retry. Mode
+  switching is exposed via OSC `/sys/binaural_mode ,i {0=B1,1=B2}`
+  (`core/src/ipc/Command.h:50`) and persisted in v4 state.
+- **State v4 binaural section is fully populated.** Section `0x0004` now
+  carries `[enable u8, effective_mode u8, requested_mode u8, reserved
+  u8]`. The reader dispatches off `requested_mode` (`payload[2]`) so a
+  user-asked B2 mode is restored across reload **even if a prior session
+  had been clamped to B1 by the throughput probe**. `effective_mode`
+  byte is telemetry-only and re-derived on the next probe. v0.4 sessions
+  written with the previous 2-byte payload still load (enable is
+  applied; mode is left at the in-memory default — guarded by
+  `sec_len >= 3`). The v3 byte-equal merge gate
+  (`test_state_v3_loads_byte_identical_under_v4_writer`) is preserved.
 
-### Deferred to v0.5.1 / v0.6
-- B2 ambi → 24-point virtual-speaker mode (optional low-CPU path).
+### Deferred to v0.6
 - Head-tracker hook (`/sys/headtrack ,fff yaw pitch roll`).
 - JUCE partitioned-convolution binaural path (v0.5 ships OlaConvolver
   only).

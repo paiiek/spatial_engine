@@ -286,6 +286,17 @@ target_compile_definitions(test_vst3_state_v4_persist PRIVATE SPATIAL_ENGINE_VST
 target_compile_options(test_vst3_state_v4_persist PRIVATE -UNDEBUG)
 add_test(NAME vst3_state_v4_persist COMMAND test_vst3_state_v4_persist)
 
+# ---- v0.5 P5: state v4 binaural_state (0x0004) extended payload ------------
+add_executable(test_vst3_state_v4_binaural_section
+    test_vst3_state_v4_binaural_section.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_state_v4_binaural_section PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_state_v4_binaural_section PRIVATE spe_core)
+target_compile_definitions(test_vst3_state_v4_binaural_section PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_state_v4_binaural_section PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_v4_binaural_section COMMAND test_vst3_state_v4_binaural_section)
+
 # ---- v0.4 P0 MERGE GATE: v3 loads byte-identical under v4 writer -----------
 add_executable(test_state_v3_loads_byte_identical_under_v4_writer
     test_state_v3_loads_byte_identical_under_v4_writer.cpp
@@ -384,6 +395,7 @@ set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_saf
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
                      vst3_performedit_threadsafe vst3_state_v3_persist
                      vst3_state_v4_persist vst3_state_v3_to_v4_byte_identical
+                     vst3_state_v4_binaural_section
                      vst3_state_v3_back_compat
                      vst3_bus_arrangement_speaker_binaural
                      v04_binaural_bus_placeholder

@@ -6,7 +6,7 @@
 //   2. Round-trip: write → read → identical 8-float param block.
 //   3. Layout/sofa path sections round-trip a UTF-8 path string set via the
 //      engine setters before getState.
-//   4. binaural_state section round-trips enable=1, mode=0.
+//   4. binaural_state section round-trips enable=1, modes=0 (v0.5: 4-byte layout).
 //   5. Unknown future section IDs are skipped without error.
 
 #include "SpatialEngineProcessor.hpp"
@@ -176,10 +176,12 @@ int main() {
                       && std::memcmp(sp, sofa.data(), sp_len) == 0);
         CHECK(sp_ok, "v4_sofa_path_roundtrip");
 
-        // binaural_state
+        // binaural_state — v0.5: 4-byte layout
+        // [enable, effective_mode, requested_mode, pad]. Default modes = 0.
         uint32 bs_len = 0;
         const uint8_t* bs = findSection(blob, kSecBinauralState, bs_len);
-        CHECK(bs != nullptr && bs_len == 2 && bs[0] == 1 && bs[1] == 0,
+        CHECK(bs != nullptr && bs_len == 4
+              && bs[0] == 1 && bs[1] == 0 && bs[2] == 0 && bs[3] == 0,
               "v4_binaural_state_enable_eq_1_mode_eq_0");
     }
 
@@ -200,7 +202,8 @@ int main() {
 
         uint32 bs_len = 0;
         const uint8_t* bs = findSection(blob, kSecBinauralState, bs_len);
-        CHECK(bs != nullptr && bs_len == 2 && bs[0] == 0 && bs[1] == 0,
+        CHECK(bs != nullptr && bs_len == 4
+              && bs[0] == 0 && bs[1] == 0 && bs[2] == 0 && bs[3] == 0,
               "v4_binaural_state_default_disabled");
     }
 

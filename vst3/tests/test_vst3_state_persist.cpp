@@ -29,12 +29,13 @@ using namespace Steinberg::Vst;
 static constexpr int   kStateBytesV1 = 32;
 static constexpr int   kStateBytesV2 = 36;
 static constexpr int   kStateBytesV3 = 40;
-// v0.4: writer emits v4 sectioned TLV.
+// v0.4 → v0.5: writer emits v4 sectioned TLV. v0.5 P5 expanded
+// binaural_state payload from 2 → 4 bytes (added requested_mode + pad).
 //   8-byte header  + (2 sec_id + 4 sec_len + 32 engine_core_payload) +
 //                   (2 + 4 + 0 layout_path)     +
 //                   (2 + 4 + 0 sofa_path)       +
-//                   (2 + 4 + 2 binaural_state)  = 8 + 38 + 6 + 6 + 8 = 66 bytes
-static constexpr int   kStateBytesV4 = 8 + (6 + 32) + (6 + 0) + (6 + 0) + (6 + 2);
+//                   (2 + 4 + 4 binaural_state)  = 8 + 38 + 6 + 6 + 10 = 68 bytes
+static constexpr int   kStateBytesV4 = 8 + (6 + 32) + (6 + 0) + (6 + 0) + (6 + 4);
 static constexpr int32 kMagicOk      = 0x31455053; // 'SPE1' LE
 
 // Build a v1 32-byte state buffer

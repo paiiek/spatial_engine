@@ -296,8 +296,18 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 //                            interpretation; merge-gate test verifies this).
 //   0x0002 layout_path    — UTF-8 path (no null terminator). Empty = unset.
 //   0x0003 sofa_speh_path — UTF-8 path (no null terminator). Empty = unset.
-//   0x0004 binaural_state — 2 bytes: binaural_enable u8, binaural_mode u8.
-//                            mode reserved for v0.5; emitted as 0 in v0.4.
+//   0x0004 binaural_state — 4 bytes (v0.5):
+//                            byte[0] = binaural_enable u8 (1=on, 0=off)
+//                            byte[1] = effective_mode  u8 (0=Direct, 1=AmbiVS)
+//                                      — telemetry/debugging only; reader
+//                                        ignores this (recomputed post-probe).
+//                            byte[2] = requested_mode  u8 (0=Direct, 1=AmbiVS)
+//                                      — user intent; preserved across B2
+//                                        fallback. Reader dispatches via
+//                                        setBinauralMode().
+//                            byte[3] = reserved padding (0).
+//                            v0.4 short-payload (2 bytes) is reader-compat:
+//                            enable applied, mode left unchanged.
 // ---------------------------------------------------------------------------
 namespace {
 static constexpr Steinberg::int32  kStateMagicLegacy = 0x31455053; // 'SPE1' LE
@@ -417,11 +427,20 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
                 break;
             }
             case kSecBinauralState: {
+                // v0.5 layout: [enable, effective_mode, requested_mode, pad].
+                // v0.4 short-payload (2 bytes) is reader-compat: only enable
+                // is applied; mode is left untouched.
                 if (sec_len >= 1) {
                     const bool enable = (payload[0] != 0);
                     if (engine_) engine_->setBinauralEnabled(enable);
                 }
-                // payload[1] reserved for v0.5 binaural_mode
+                // payload[1] (effective_mode) is telemetry-only; ignored here
+                // since effective_mode is recomputed by the next probe.
+                if (sec_len >= 3) {
+                    const int requested_mode = static_cast<int>(payload[2]);
+                    if (engine_) engine_->setBinauralMode(requested_mode);
+                }
+                // payload[3] reserved padding.
                 break;
             }
             default:
@@ -531,7 +550,11 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
     //     0x0001 engine_core    — 32 bytes (8 × float32 norm values).
     //     0x0002 layout_path    — UTF-8 (engine_->layoutPath()).
     //     0x0003 sofa_speh_path — UTF-8 (engine_->binauralSofaPath()).
-    //     0x0004 binaural_state — 2 bytes: enable + mode.
+    //     0x0004 binaural_state — 4 bytes (v0.5):
+    //                              [enable, effective_mode, requested_mode, pad]
+    //                              requested_mode preserves user intent across
+    //                              B2→Direct fallback; effective_mode is
+    //                              telemetry-only (reader recomputes via probe).
 
     // Snapshot engine-owned strings/flags on the control thread (safe).
     const std::string layout_path =
@@ -540,7 +563,12 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
         engine_ ? engine_->binauralSofaPath() : std::string{};
     const bool binaural_enable =
         engine_ ? engine_->binauralEnabled() : false;
-    const uint8_t binaural_mode = 0;  // reserved for v0.5
+    // v0.5: effective_mode is telemetry/debug; requested_mode preserves user
+    // intent (e.g. AmbiVS) even after the probe clamps effective to Direct.
+    const uint8_t binaural_effective_mode =
+        engine_ ? static_cast<uint8_t>(engine_->effectiveBinauralMode() & 0xFF) : 0u;
+    const uint8_t binaural_requested_mode =
+        engine_ ? static_cast<uint8_t>(engine_->binauralMode() & 0xFF) : 0u;
 
     // Header
     Steinberg::int32 magic = kStateMagicV4;
@@ -600,11 +628,15 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
                       static_cast<Steinberg::uint32>(sofa_path.size())))
         return Steinberg::kResultFalse;
 
-    // ---- 0x0004 binaural_state ----
-    uint8_t bin_payload[2];
+    // ---- 0x0004 binaural_state (v0.5 — 4 bytes) ----
+    // [enable, effective_mode, requested_mode, pad].
+    // effective_mode is telemetry; requested_mode round-trips user intent.
+    uint8_t bin_payload[4];
     bin_payload[0] = binaural_enable ? 1u : 0u;
-    bin_payload[1] = binaural_mode;
-    if (!emit_section(kSecBinauralState, bin_payload, 2))
+    bin_payload[1] = binaural_effective_mode;
+    bin_payload[2] = binaural_requested_mode;
+    bin_payload[3] = 0u;  // reserved
+    if (!emit_section(kSecBinauralState, bin_payload, 4))
         return Steinberg::kResultFalse;
 
     return Steinberg::kResultOk;
