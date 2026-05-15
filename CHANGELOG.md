@@ -5,6 +5,47 @@ All notable changes to the Spatial Engine project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-15
+
+### Added
+- **Commercial-grade binaural decoder on VST3 bus 1.** Replaces the v0.4
+  -6 dB downmix placeholder with per-object HRTF summation (B1 path):
+  for each active source (up to `MAX_OBJECTS = 64`), the engine convolves
+  its dry signal with the nearest HRTF pair and sums into the stereo
+  binaural bus. A `-1 dBFS` channel limiter caps the bus output. This is
+  the same family of binaural rendering shipped by Dolby Atmos Renderer,
+  Nuendo, and Apple Spatial Audio.
+- **RT-safe direction updates.** `BinauralMonitor` now owns two
+  pre-allocated `OlaConvolver` slots per (object, ear) and swaps via an
+  atomic `front_idx_` per object. Control-thread `setDirection()` calls
+  `OlaConvolver::loadInto(ir, ir_len)` — a no-allocation reload contract
+  that returns silently on capacity violation (no audio-thread allocs,
+  ever; tracked via `load_into_failures_` counter). A 2-block linear
+  crossfade (`core/src/dsp/GainRamp.h`) bridges old → new IR with
+  preempt-with-current-gain handoff for rapid direction changes.
+- **O(log N) HRTF lookup.** Replaces the O(N) brute-force `sin`/`cos`
+  search at `core/src/hrtf/HrtfLookup.cpp` with a 3D KD-tree on unit-
+  Cartesian SOFA positions (`core/src/hrtf/KdTree3D.{h,cpp}`). Built
+  once at `.speh` load (control thread, allocations OK); queries are
+  iterative (no recursion) and allocation-free.
+- **Per-object binaural test fixture.** `core/tests/fixtures/synthetic_min.speh`
+  (committed) drives the v0.5 unit tests; the existing SOFA fixture is
+  preserved for the SOFA-format-level tests.
+
+### Deferred to v0.5.1 / v0.6
+- B2 ambi → 24-point virtual-speaker mode (optional low-CPU path).
+- Head-tracker hook (`/sys/headtrack ,fff yaw pitch roll`).
+- JUCE partitioned-convolution binaural path (v0.5 ships OlaConvolver
+  only).
+
+### Notes for users
+- Bus 0 speaker audio is bit-identical to v0.4 for all canonical
+  fixtures.
+- Memory footprint grows by ~1 MiB (64 × 2 × 2 × 1024 floats of slot
+  buffers). MAX_IR_LEN = 1024 matches the SOFA loader's existing cap.
+- If `.speh` is not loaded or binaural is disabled, bus 1 keeps the
+  v0.4 -6 dB downmix placeholder for diagnostic intelligibility.
+
 ## [0.4.0] — 2026-05-15
 
 ### Added
