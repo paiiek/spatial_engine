@@ -5,6 +5,38 @@ All notable changes to the Spatial Engine project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-15 (channel mapping correctness pre-release)
+
+### Fixed
+
+- **Per-channel OSC endpoints now address speakers by YAML channel number,
+  not by position in the YAML file.** Prior to v0.3.1, handlers for
+  `/output/N/gain`, `/output/N/limit`, `/noise/N/type`, and `/noise/N/gain`
+  treated the wire channel `N` as a 0-based index into the speaker vector,
+  ignoring the `channel:` field declared in each layout entry. Reordered
+  or sparse channel maps silently routed automation to the wrong speaker.
+  v0.3.1 adds `SpeakerLayout::channelToIndex()` (backed by a fixed-size
+  YAML-channel → vector-index lookup built by `LayoutLoader`) and rewrites
+  the four drain handlers in `SpatialEngine` to use it.
+- **Loud failure for unmapped channels.** Commands targeting a YAML
+  channel not declared in the active layout are now dropped silently
+  (RT-safe; no allocation). Duplicate `channel:` declarations and
+  channels above `SpeakerLayout::kMaxYamlChannel` (64) are rejected at
+  load time by `LayoutLoader` with explicit error strings.
+
+### Breaking semantic note
+
+External OSC automation that historically targeted *position* (e.g.
+`/output/0/gain` to mean "first speaker in the YAML file") will now
+target *YAML channel* (i.e. the speaker whose `channel: 0` is declared
+— which is invalid under the 1-based contract, so the command is
+dropped). All four canonical fixtures (`lab_4ch.yaml`, `lab_8ch.yaml`,
+`lab_8ch_aligned.yaml`, `lab_8ch_irregular.yaml`) declare sequential
+1-based channel numbers, so default workflows see zero behavior change.
+Users running reordered or sparse channel maps may need to update their
+automation scripts to address speakers by their declared YAML channel
+number rather than their position in the file.
+
 ## [0.2.0] — 2026-05-10 (DAW hands-on pending — see release notes)
 
 ### Added
