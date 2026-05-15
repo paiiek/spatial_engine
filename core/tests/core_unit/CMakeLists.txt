@@ -374,3 +374,31 @@ add_executable(test_kdtree3d_query_rt_safe
 target_link_libraries(test_kdtree3d_query_rt_safe PRIVATE spe_core spe_util)
 add_test(NAME kdtree3d_query_rt_safe
     COMMAND test_kdtree3d_query_rt_safe)
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5 P1 — BinauralMonitor double-buffer + crossfade tests
+# Use the committed synthetic_min.speh fixture for the .speh path.
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(test_p_binaural_alloc_free_rt
+    test_p_binaural_alloc_free_rt.cpp)
+target_link_libraries(test_p_binaural_alloc_free_rt PRIVATE spe_core spe_util Threads::Threads)
+target_compile_definitions(test_p_binaural_alloc_free_rt PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME p_binaural_alloc_free_rt
+    COMMAND test_p_binaural_alloc_free_rt)
+
+add_executable(test_p_binaural_crossfade_smooth
+    test_p_binaural_crossfade_smooth.cpp)
+target_link_libraries(test_p_binaural_crossfade_smooth PRIVATE spe_core)
+target_compile_definitions(test_p_binaural_crossfade_smooth PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME p_binaural_crossfade_smooth
+    COMMAND test_p_binaural_crossfade_smooth)
+
+add_executable(test_p_binaural_chained_crossfade
+    test_p_binaural_chained_crossfade.cpp)
+target_link_libraries(test_p_binaural_chained_crossfade PRIVATE spe_core)
+target_compile_definitions(test_p_binaural_chained_crossfade PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME p_binaural_chained_crossfade
+    COMMAND test_p_binaural_chained_crossfade)
