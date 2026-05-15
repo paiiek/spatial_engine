@@ -154,8 +154,9 @@ public:
     float runThroughputProbe();
 
     // Test-only hook to inject a synthetic throughput value without running
-    // the real probe (useful for slow-CPU fallback unit tests).
-    void injectProbeThroughput(float throughput_rt) noexcept;
+    // the real probe (useful for slow-CPU fallback unit tests). Suffixed to
+    // discourage production callers; do NOT invoke from VST3/UI code.
+    void injectProbeThroughputForTest(float throughput_rt) noexcept;
 
     // Last probe result (multiples of real-time). 0.f before the first probe.
     float probeThroughput() const noexcept {
@@ -177,7 +178,11 @@ public:
     //   order ∈ {1, 2, 3} (clamped). K = (order+1)².
     //   sh_planar[k] is a [num_samples]-long block for ACN channel k.
     //   leftOut / rightOut are overwritten (not accumulated) by this call.
-    // No-op (writes silence) when hasB2()==false or effectiveMode()!=AmbiVS.
+    // No-op (writes silence) when hasB2()==false or num_samples invalid
+    // or sh_planar==nullptr. The mode gate is the CALLER's responsibility:
+    // SpatialEngine snapshots effectiveMode() once per block and dispatches.
+    // (C1 fix — eliminates the dual-read race that produced silent blocks on
+    //  B1↔B2 transitions when an OSC mode flip arrived mid-block.)
     void processBlockB2(const float* const* sh_planar,
                         int                 order,
                         int                 num_samples,

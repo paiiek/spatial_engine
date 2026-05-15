@@ -68,6 +68,16 @@ public:
     const char* binauralProbeWarningCode() const noexcept {
         return binaural_.probeWarningCode();
     }
+    // v0.5 P4.1 (A6): host-lifecycle probe trigger. Call this from
+    // VST3 SpatialEngineProcessor::setActive(true) — control thread only.
+    // Runs the synthetic 24-fan-out throughput bench; on insufficient
+    // CPU headroom (<1.5x RT) clamps effectiveBinauralMode() to Direct
+    // and surfaces binauralProbeWarningCode() == "ambivs_disabled_cpu".
+    // TODO(A2): emit the /sys/binaural_warning OSC reply when an outbound
+    //   channel is wired (separate patch).
+    float triggerBinauralProbe() {
+        return binaural_.runThroughputProbe();
+    }
 
     const std::string& layoutPath()         const noexcept { return layout_path_; }
     const std::string& binauralSofaPath()   const noexcept { return binaural_sofa_path_; }

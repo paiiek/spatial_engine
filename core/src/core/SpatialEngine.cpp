@@ -639,13 +639,30 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         // internal binaural_l_buf_/binaural_r_buf_ when an HRTF is loaded;
         // VST3 wiring (and the legacy speaker-bus-tail path below) read those
         // buffers via binauralL()/binauralR().
-        if (binaural_ok_) {
+        // v0.5 P4 fix (M2): gate the entire binaural processing block on
+        // binaural_enabled_. Pre-P4 the B1 path also ignored this flag; under
+        // B2 the expensive 16ch SH+24-conv fan-out would otherwise run while
+        // the user thinks binaural is off. Buffers stay zeroed when disabled.
+        const bool binaural_enabled_now =
+            binaural_enabled_.load(std::memory_order_acquire);
+        if (binaural_ok_ && binaural_enabled_now) {
             std::fill(binaural_l_buf_.begin(),
                       binaural_l_buf_.begin() + block.num_frames, 0.f);
             std::fill(binaural_r_buf_.begin(),
                       binaural_r_buf_.begin() + block.num_frames, 0.f);
 
             if (binaural_.hasHrtf()) {
+                // C1 fix: snapshot effectiveMode() exactly once per block. A
+                // second read inside BinauralMonitor::processBlockB2 used to
+                // race with an OSC mode flip mid-block, producing a silent
+                // gap. The snapshot is the dispatch authority.
+                // TODO(A3, P4.2): B1↔B2 mode-transition crossfade. Today a
+                //   mode flip swaps the entire render branch at block
+                //   boundary; on user-driven OSC toggles this can produce
+                //   an audible click. Per plan §P4 A5, a 2-block ramp from
+                //   the outgoing path to the incoming path should be added
+                //   (run both, ramp old→0, new→0→1 over 2*block_size_).
+                //   Deferred to keep this hotfix surgical.
                 const bool b2_active = (binaural_.effectiveMode()
                                         == output::BinauralMode::AmbiVS);
 
@@ -720,6 +737,14 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 }
             }
             // else: no .speh loaded — buffers stay zeroed.
+        } else if (binaural_ok_) {
+            // binaural_enabled_=0: zero the binaural buffers so downstream
+            // readers (VST3 bus 1, legacy speaker-bus-tail) see silence
+            // without paying for any DSP.
+            std::fill(binaural_l_buf_.begin(),
+                      binaural_l_buf_.begin() + block.num_frames, 0.f);
+            std::fill(binaural_r_buf_.begin(),
+                      binaural_r_buf_.begin() + block.num_frames, 0.f);
 
             // Legacy speaker-bus-tail wiring: if the caller exposes channels
             // [n_spk, n_spk+1] in the output bus (NullBackend ctest path),

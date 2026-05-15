@@ -43,7 +43,7 @@ int main()
     REQUIRE(std::string(mon.probeWarningCode()).empty());
 
     // Inject a slow-CPU probe result: 0.5x RT (below kMinB2Throughput = 1.5).
-    mon.injectProbeThroughput(0.5f);
+    mon.injectProbeThroughputForTest(0.5f);
 
     // Effective mode must clamp to Direct; requested intent is preserved.
     REQUIRE(mon.effectiveMode() == spe::output::BinauralMode::Direct);
@@ -53,7 +53,7 @@ int main()
 
     // Later, on a faster system or after a sample-rate change, the probe
     // measures >= 1.5x → fallback is cleared and the request is honoured.
-    mon.injectProbeThroughput(2.0f);
+    mon.injectProbeThroughputForTest(2.0f);
     REQUIRE(mon.effectiveMode() == spe::output::BinauralMode::AmbiVS);
     REQUIRE(std::string(mon.probeWarningCode()).empty());
     REQUIRE(mon.probeThroughput() == 2.0f);

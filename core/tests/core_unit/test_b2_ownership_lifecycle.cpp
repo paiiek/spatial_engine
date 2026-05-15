@@ -59,7 +59,12 @@ int run()
         REQUIRE(mon.b2HrirLeft(-1)   == nullptr);
         REQUIRE(mon.b2HrirRight(99)  == nullptr);
 
-        // Default effective mode is Direct → processBlockB2 must emit silence.
+        // Default effective mode is Direct. Mode-gating is the CALLER's
+        // responsibility (C1 fix — processBlockB2 no longer self-gates to
+        // avoid the dual-read race that produced silent blocks on B1↔B2
+        // transitions). The SpatialEngine dispatch path checks effectiveMode()
+        // exactly once per block; this test exercises BinauralMonitor
+        // directly so the mode flag is observational here.
         REQUIRE(mon.effectiveMode() == spe::output::BinauralMode::Direct);
 
         std::vector<float>             sh_storage(16 * blockSize, 0.f);
@@ -70,12 +75,7 @@ int run()
         // Non-zero W channel to force any leak through the path.
         for (int n = 0; n < blockSize; ++n) sh_storage[n] = 0.5f;
 
-        std::vector<float> L(blockSize, 7.f), R(blockSize, 7.f);
-        mon.processBlockB2(sh_ptrs.data(), 3, blockSize, L.data(), R.data());
-        for (int n = 0; n < blockSize; ++n) {
-            REQUIRE(L[static_cast<std::size_t>(n)] == 0.f);
-            REQUIRE(R[static_cast<std::size_t>(n)] == 0.f);
-        }
+        std::vector<float> L(blockSize, 0.f), R(blockSize, 0.f);
 
         // Switching to AmbiVS should produce non-zero output for the constant
         // W input above (impulse response × DC offset != 0).

@@ -221,6 +221,18 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 {
     if (state && !active_) {
         active_ = true;
+
+        // v0.5 P4.1 (A6): one-shot B2 throughput probe at activation. VST3
+        // spec guarantees setActive(true) is a control-thread call across
+        // all major hosts; setupProcessing() is ambiguous on threading in
+        // JUCE-wrapped hosts (Bitwig/FL/Cubase startup paths can call it
+        // from the audio render thread). Probe is no-op when B2 not
+        // initialized; otherwise measures 24-fan-out throughput and on
+        // insufficient CPU clamps effectiveBinauralMode() to Direct.
+        if (engine_) {
+            engine_->triggerBinauralProbe();
+        }
+
 #ifdef SPATIAL_ENGINE_VST3_OSC
         if (!udp_io_) {
             // S4: build reverse-path lambda if controller is already connected.

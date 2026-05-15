@@ -329,19 +329,25 @@ float BinauralMonitor::runThroughputProbe()
         return 0.f;
     }
 
-    // Synthetic 512-sample HRIR: unit impulse + exponential decay.
-    // Stack-allocated; control thread so this is fine.
+    // M1 fix (per code-review): use 24 DISTINCT sacrificial convolvers,
+    // each with a slightly different decay, so the probe loop exercises the
+    // same cache-eviction pressure as the production B2 fan-out (24 unique
+    // 1024-tap IRs in flight). A single re-used convolver gave optimistic
+    // throughput because the IR / overlap stayed L1-resident.
     constexpr int kProbeIRLen = 512;
-    std::array<float, kProbeIRLen> probe_ir{};
-    probe_ir[0] = 1.f;
-    for (int i = 1; i < kProbeIRLen; ++i)
-        probe_ir[static_cast<std::size_t>(i)] =
-            std::exp(-static_cast<float>(i) / 50.f);
-
-    // Sacrificial convolver. We allocate a fresh one (control thread).
-    hrtf::OlaConvolver probe_conv;
-    probe_conv.prepareForReload(hrtf::kOlaMaxIRLength, block_size_);
-    probe_conv.loadInto(probe_ir.data(), kProbeIRLen);
+    std::array<std::array<float, kProbeIRLen>, kNumVirtualSpeakers> probe_irs{};
+    std::array<hrtf::OlaConvolver, kNumVirtualSpeakers>             probe_convs{};
+    for (int vs = 0; vs < kNumVirtualSpeakers; ++vs) {
+        const float tau = 30.f + static_cast<float>(vs) * 2.5f;  // 30..87.5
+        probe_irs[static_cast<std::size_t>(vs)][0] = 1.f;
+        for (int i = 1; i < kProbeIRLen; ++i)
+            probe_irs[static_cast<std::size_t>(vs)][static_cast<std::size_t>(i)] =
+                std::exp(-static_cast<float>(i) / tau);
+        probe_convs[static_cast<std::size_t>(vs)].prepareForReload(
+            hrtf::kOlaMaxIRLength, block_size_);
+        probe_convs[static_cast<std::size_t>(vs)].loadInto(
+            probe_irs[static_cast<std::size_t>(vs)].data(), kProbeIRLen);
+    }
 
     std::array<float, MAX_BLOCK> input{};
     for (int i = 0; i < block_size_; ++i)
@@ -352,9 +358,9 @@ float BinauralMonitor::runThroughputProbe()
     constexpr int kProbeBlocks = 256;
     const auto t0 = std::chrono::steady_clock::now();
     for (int b = 0; b < kProbeBlocks; ++b) {
-        // Simulate 24 VS fan-out per block.
         for (int vs = 0; vs < kNumVirtualSpeakers; ++vs) {
-            probe_conv.process(input.data(), block_size_, output.data());
+            probe_convs[static_cast<std::size_t>(vs)].process(
+                input.data(), block_size_, output.data());
         }
     }
     const auto t1 = std::chrono::steady_clock::now();
@@ -384,7 +390,7 @@ float BinauralMonitor::runThroughputProbe()
     return throughput;
 }
 
-void BinauralMonitor::injectProbeThroughput(float throughput_rt) noexcept
+void BinauralMonitor::injectProbeThroughputForTest(float throughput_rt) noexcept
 {
     probe_throughput_.store(throughput_rt, std::memory_order_release);
     if (throughput_rt < kMinB2Throughput) {
@@ -433,15 +439,25 @@ void BinauralMonitor::processBlockB2(const float* const* sh_planar,
     const std::size_t out_bytes =
         static_cast<std::size_t>(num_samples) * sizeof(float);
 
+    // Structural validity only; mode gate lives in the caller (see header
+    // contract — SpatialEngine snapshots effectiveMode() once per block).
     if (!b2_initialized_
-        || effective_mode_.load(std::memory_order_acquire)
-            != static_cast<int>(BinauralMode::AmbiVS)
         || num_samples <= 0
         || num_samples > MAX_BLOCK
         || sh_planar == nullptr) {
         std::memset(leftOut,  0, out_bytes);
         std::memset(rightOut, 0, out_bytes);
         return;
+    }
+    // Defense-in-depth (L2): per-channel pointer null check for K=(order+1)².
+    const int K_check = (order < 1 ? 1 : (order > 3 ? 3 : order));
+    const int K_n     = (K_check + 1) * (K_check + 1);
+    for (int k = 0; k < K_n; ++k) {
+        if (!sh_planar[k]) {
+            std::memset(leftOut,  0, out_bytes);
+            std::memset(rightOut, 0, out_bytes);
+            return;
+        }
     }
 
     // Clamp order to {1, 2, 3}.
