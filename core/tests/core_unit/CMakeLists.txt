@@ -402,3 +402,30 @@ target_compile_definitions(test_p_binaural_chained_crossfade PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME p_binaural_chained_crossfade
     COMMAND test_p_binaural_chained_crossfade)
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5 P3 — Multi-object B1 per-object HRTF sum tests
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(test_binaural_b1_one_object
+    test_binaural_b1_one_object.cpp)
+target_link_libraries(test_binaural_b1_one_object PRIVATE spe_core)
+target_compile_definitions(test_binaural_b1_one_object PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME binaural_b1_one_object
+    COMMAND test_binaural_b1_one_object)
+
+add_executable(test_binaural_b1_two_objects_linear
+    test_binaural_b1_two_objects_linear.cpp)
+target_link_libraries(test_binaural_b1_two_objects_linear PRIVATE spe_core)
+target_compile_definitions(test_binaural_b1_two_objects_linear PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME binaural_b1_two_objects_linear
+    COMMAND test_binaural_b1_two_objects_linear)
+
+add_executable(test_binaural_b1_64_objects_rt_safe
+    test_binaural_b1_64_objects_rt_safe.cpp)
+target_link_libraries(test_binaural_b1_64_objects_rt_safe PRIVATE spe_core spe_util)
+target_compile_definitions(test_binaural_b1_64_objects_rt_safe PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME binaural_b1_64_objects_rt_safe
+    COMMAND test_binaural_b1_64_objects_rt_safe)

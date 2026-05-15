@@ -157,6 +157,11 @@ private:
     // v0.4 P1 A7: write -6 dB speaker→binaural downmix to bus 1.
     // RT-safe: no allocations, no mutex.
     void writeBinauralPlaceholder(Steinberg::Vst::ProcessData& data) noexcept;
+
+    // v0.5 P3: write bus 1 by copying the engine's binaural buffer; falls
+    // back to the v0.4 placeholder when no .speh is loaded or binaural
+    // is disabled.
+    void writeBinauralBus(Steinberg::Vst::ProcessData& data) noexcept;
 };
 
 } // namespace spe::vst3

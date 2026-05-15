@@ -865,12 +865,16 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
                 writeBinauralPlaceholder(data);
             }
         } else if (active_) {
-            // Normal path — drive engine on bus 0 then fill bus 1 placeholder.
+            // Normal path — drive engine on bus 0 then route bus 1.
             spe::audio_io::AudioBlock block =
                 ProcessDataAdapter::adapt(data, sample_rate_);
             engine_->audioBlock(block);
             if (data.outputs && data.numOutputs >= 2) {
-                writeBinauralPlaceholder(data);
+                // v0.5 P3: route the engine's binaural buffers to bus 1 when a
+                // .speh has been loaded. Falls back to the v0.4 -6 dB downmix
+                // placeholder when no HRTF path is active (preserves
+                // diagnostic intelligibility).
+                writeBinauralBus(data);
             }
         } else {
             // Inactive — make sure bus 1 (if present) is zeroed.
@@ -881,6 +885,35 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
     }
 
     return Steinberg::kResultOk;
+}
+
+// v0.5 P3: bus 1 routing.
+//   * If the engine has a loaded .speh and binaural is enabled, copy the
+//     engine's per-block binaural L/R into bus 1.
+//   * Otherwise, fall back to the v0.4 -6 dB speaker downmix placeholder
+//     (diagnostic intelligibility — see ADR A7).
+void SpatialEngineProcessor::writeBinauralBus(
+        Steinberg::Vst::ProcessData& data) noexcept
+{
+    using namespace Steinberg::Vst;
+    if (!engine_) { writeBinauralPlaceholder(data); return; }
+
+    const float* engL = engine_->binauralL();
+    const float* engR = engine_->binauralR();
+    const bool   enabled = engine_->binauralEnabled();
+    if (!engL || !engR || !enabled) {
+        writeBinauralPlaceholder(data);
+        return;
+    }
+
+    AudioBusBuffers& bin = data.outputs[1];
+    if (bin.numChannels < 2 || !bin.channelBuffers32) return;
+    float* binL = bin.channelBuffers32[0];
+    float* binR = bin.channelBuffers32[1];
+    if (!binL || !binR) return;
+    const std::size_t n = static_cast<std::size_t>(data.numSamples);
+    std::memcpy(binL, engL, n * sizeof(float));
+    std::memcpy(binR, engR, n * sizeof(float));
 }
 
 // v0.4 P1 A7: -6 dB speaker→binaural downmix placeholder.

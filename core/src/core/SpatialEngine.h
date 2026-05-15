@@ -116,6 +116,17 @@ public:
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
 
+    // v0.5 P3: binaural bus 1 readout. Returns pointers to the most recent
+    // block's binaural L/R outputs. Valid until the next audioBlock() call.
+    // Returns nullptr if no .speh is loaded (caller should fall back to its
+    // own placeholder). Length matches the last audioBlock's num_frames.
+    const float* binauralL() const noexcept {
+        return binaural_ok_ && binaural_.hasHrtf() ? binaural_l_buf_.data() : nullptr;
+    }
+    const float* binauralR() const noexcept {
+        return binaural_ok_ && binaural_.hasHrtf() ? binaural_r_buf_.data() : nullptr;
+    }
+
 private:
     // OSC receive → command FIFO → StateModel on audio thread
     util::CommandFifo<1024>  cmd_fifo_;
@@ -193,6 +204,13 @@ private:
     // Binaural side-output L/R
     std::vector<float>  binaural_l_buf_;
     std::vector<float>  binaural_r_buf_;
+    // v0.5 P3: per-object temporary buffers for B1 per-object HRTF sum.
+    std::vector<float>  bin_tmp_L_;
+    std::vector<float>  bin_tmp_R_;
+    // v0.5 P3: limiters on the binaural bus output to prevent clipping under
+    // heavy multi-object summation.
+    spe::dsp::ChannelLimiter binaural_lim_L_;
+    spe::dsp::ChannelLimiter binaural_lim_R_;
 
     std::atomic<bool>          prepared_{false};
     std::atomic<bool>          render_ready_{false};

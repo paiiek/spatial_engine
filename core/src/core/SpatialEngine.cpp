@@ -259,14 +259,22 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     }
     for (auto& c : chains_) c.prepareToPlay(sample_rate);
 
-    // BinauralMonitor side-output (pass-through if no SOFA file present)
+    // BinauralMonitor side-output. v0.5 P3: pass the .speh path through if one
+    // has been set via OSC /sys/binaural_sofa. Pass-through fallback when empty.
     output::BinauralMonitor::Config bcfg;
-    bcfg.sofaPath   = "";  // pass-through; full HRTF requires .speh path injection
+    bcfg.sofaPath   = binaural_sofa_path_;
     bcfg.sampleRate = static_cast<float>(sample_rate);
     bcfg.blockSize  = max_block_size;
     binaural_ok_ = (binaural_.initialize(bcfg) == output::BinauralMonitor::InitResult::Ok);
     binaural_l_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
     binaural_r_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
+    bin_tmp_L_.assign(static_cast<size_t>(max_block_size), 0.f);
+    bin_tmp_R_.assign(static_cast<size_t>(max_block_size), 0.f);
+    binaural_lim_L_.prepare(sample_rate);
+    binaural_lim_R_.prepare(sample_rate);
+    // -1 dBFS threshold on the binaural bus.
+    binaural_lim_L_.setThreshold(std::pow(10.f, -1.f / 20.f));
+    binaural_lim_R_.setThreshold(std::pow(10.f, -1.f / 20.f));
 
     // Wire dry_ptrs_ to scratch buffers
     for (int i = 0; i < MAX_OBJECTS; ++i) {
@@ -614,38 +622,70 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             }
         }
 
-        // BinauralMonitor side-output on channels [n_spk, n_spk+1]
-        // Source: first active object as the primary monitor target (v0 simple policy).
-        if (binaural_ok_ &&
-            block.output_channel_count >= n_spk + 2 &&
-            block.output_channels &&
-            block.output_channels[n_spk] &&
-            block.output_channels[n_spk + 1])
-        {
-            int first_active = -1;
-            for (int i = 0; i < MAX_OBJECTS; ++i) {
-                if (obj_cache_[static_cast<size_t>(i)].active) { first_active = i; break; }
+        // v0.5 P3: B1 per-object HRTF summation. Always render into the
+        // internal binaural_l_buf_/binaural_r_buf_ when an HRTF is loaded;
+        // VST3 wiring (and the legacy speaker-bus-tail path below) read those
+        // buffers via binauralL()/binauralR().
+        if (binaural_ok_) {
+            std::fill(binaural_l_buf_.begin(),
+                      binaural_l_buf_.begin() + block.num_frames, 0.f);
+            std::fill(binaural_r_buf_.begin(),
+                      binaural_r_buf_.begin() + block.num_frames, 0.f);
+
+            if (binaural_.hasHrtf()) {
+                // Per-object HRTF sum (B1 primary path).
+                for (int i = 0; i < MAX_OBJECTS; ++i) {
+                    const auto& c = obj_cache_[static_cast<std::size_t>(i)];
+                    if (!c.active || c.gain_lin < 1e-6f) continue;
+
+                    // Update direction (RT-safe: KD-tree lookup + loadInto +
+                    // GainRamp setup; no alloc).
+                    binaural_.setDirection(i, c.az, c.el);
+
+                    // Convolve into the per-object scratch tmp_L/R.
+                    binaural_.processBlockForObject(
+                        i,
+                        dry_scratch_[static_cast<std::size_t>(i)].data(),
+                        block.num_frames,
+                        bin_tmp_L_.data(),
+                        bin_tmp_R_.data());
+
+                    // Sum with per-object gain.
+                    const float g = c.gain_lin * transport_gain;
+                    for (int n = 0; n < block.num_frames; ++n) {
+                        binaural_l_buf_[static_cast<std::size_t>(n)] +=
+                            g * bin_tmp_L_[static_cast<std::size_t>(n)];
+                        binaural_r_buf_[static_cast<std::size_t>(n)] +=
+                            g * bin_tmp_R_[static_cast<std::size_t>(n)];
+                    }
+                }
+
+                // Apply per-channel limiter to prevent clipping under heavy load.
+                for (int n = 0; n < block.num_frames; ++n) {
+                    binaural_l_buf_[static_cast<std::size_t>(n)] =
+                        binaural_lim_L_.processSample(binaural_l_buf_[static_cast<std::size_t>(n)]);
+                    binaural_r_buf_[static_cast<std::size_t>(n)] =
+                        binaural_lim_R_.processSample(binaural_r_buf_[static_cast<std::size_t>(n)]);
+                }
             }
-            if (first_active >= 0) {
-                const auto& c = obj_cache_[static_cast<size_t>(first_active)];
-                binaural_.setDirection(c.az, c.el);
-                binaural_.processBlock(
-                    dry_scratch_[static_cast<size_t>(first_active)].data(),
-                    block.num_frames,
-                    binaural_l_buf_.data(),
-                    binaural_r_buf_.data());
-            } else {
-                std::fill(binaural_l_buf_.begin(),
-                          binaural_l_buf_.begin() + block.num_frames, 0.f);
-                std::fill(binaural_r_buf_.begin(),
-                          binaural_r_buf_.begin() + block.num_frames, 0.f);
+            // else: no .speh loaded — buffers stay zeroed.
+
+            // Legacy speaker-bus-tail wiring: if the caller exposes channels
+            // [n_spk, n_spk+1] in the output bus (NullBackend ctest path),
+            // mirror the binaural buffers there too. VST3 routes the same
+            // buffers to bus 1 via SpatialEngine::binauralL()/binauralR().
+            if (block.output_channel_count >= n_spk + 2 &&
+                block.output_channels &&
+                block.output_channels[n_spk] &&
+                block.output_channels[n_spk + 1])
+            {
+                std::copy(binaural_l_buf_.begin(),
+                          binaural_l_buf_.begin() + block.num_frames,
+                          block.output_channels[n_spk]);
+                std::copy(binaural_r_buf_.begin(),
+                          binaural_r_buf_.begin() + block.num_frames,
+                          block.output_channels[n_spk + 1]);
             }
-            std::copy(binaural_l_buf_.begin(),
-                      binaural_l_buf_.begin() + block.num_frames,
-                      block.output_channels[n_spk]);
-            std::copy(binaural_r_buf_.begin(),
-                      binaural_r_buf_.begin() + block.num_frames,
-                      block.output_channels[n_spk + 1]);
         }
     }
 
