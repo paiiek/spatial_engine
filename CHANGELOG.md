@@ -5,6 +5,20 @@ All notable changes to the Spatial Engine project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-15
+
+### Added
+- VST3 plugin now exposes two output buses: bus 0 "Speakers" (variable
+  channel count negotiated via setBusArrangements; 2/4/6/8/12/16/24
+  supported) and bus 1 "Binaural" (fixed stereo). Bus 1 currently emits
+  a -6 dB speaker downmix placeholder; real binaural rendering arrives
+  in v0.5.
+- Plugin state schema migrated to v4 (sectioned TLV). v3 sessions load
+  unchanged (back-compat merge-gate test).
+- Layout YAML path and SOFA (.speh) path are persisted in plugin state
+  and runtime-injectable via OSC (`/sys/load_layout ,s <path>`,
+  `/sys/binaural_sofa ,s <path>`, `/sys/binaural_enable ,i {0,1}`).
+
 ## [0.3.1] — 2026-05-15 (channel mapping correctness pre-release)
 
 ### Fixed
