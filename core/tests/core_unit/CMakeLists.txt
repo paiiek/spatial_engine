@@ -359,3 +359,18 @@ add_executable(test_ola_convolver_loadinto_capacity_violation_release
 target_link_libraries(test_ola_convolver_loadinto_capacity_violation_release PRIVATE spe_core)
 add_test(NAME ola_convolver_loadinto_capacity_violation_release
     COMMAND test_ola_convolver_loadinto_capacity_violation_release)
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5 P2 — KdTree3D HRTF lookup tests
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(test_kdtree3d_matches_brute_force
+    test_kdtree3d_matches_brute_force.cpp)
+target_link_libraries(test_kdtree3d_matches_brute_force PRIVATE spe_core)
+add_test(NAME kdtree3d_matches_brute_force
+    COMMAND test_kdtree3d_matches_brute_force)
+
+add_executable(test_kdtree3d_query_rt_safe
+    test_kdtree3d_query_rt_safe.cpp)
+target_link_libraries(test_kdtree3d_query_rt_safe PRIVATE spe_core spe_util)
+add_test(NAME kdtree3d_query_rt_safe
+    COMMAND test_kdtree3d_query_rt_safe)

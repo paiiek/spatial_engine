@@ -1,14 +1,17 @@
 // core/src/hrtf/HrtfLookup.cpp
 
 #include "hrtf/HrtfLookup.h"
+#include "hrtf/KdTree3D.h"
+
 #include <cmath>
 #include <limits>
 
 namespace spe::hrtf {
 
 static constexpr float kDeg2Rad = 3.14159265358979323846f / 180.f;
+static constexpr float kRad2Deg = 180.f / 3.14159265358979323846f;
 
-int nearestPosition(const HrtfTable& table, float az_deg, float el_deg)
+int nearestPositionBruteForceForTest(const HrtfTable& table, float az_deg, float el_deg)
 {
     const float az1 = az_deg * kDeg2Rad;
     const float el1 = el_deg * kDeg2Rad;
@@ -34,11 +37,26 @@ int nearestPosition(const HrtfTable& table, float az_deg, float el_deg)
     return best_idx;
 }
 
+int nearestPosition(const HrtfTable& table, float az_deg, float el_deg)
+{
+    return nearestPositionBruteForceForTest(table, az_deg, el_deg);
+}
+
 HrtfPair lookupHrtf(const HrtfTable& table, float az_rad, float el_rad)
 {
-    const float az_deg = az_rad * (180.f / 3.14159265358979323846f);
-    const float el_deg = el_rad * (180.f / 3.14159265358979323846f);
-    const int   idx    = nearestPosition(table, az_deg, el_deg);
+    const float az_deg = az_rad * kRad2Deg;
+    const float el_deg = el_rad * kRad2Deg;
+    const int   idx    = nearestPositionBruteForceForTest(table, az_deg, el_deg);
+    return {table.ir(idx, 0), table.ir(idx, 1),
+            static_cast<int>(table.ir_length)};
+}
+
+HrtfPair lookupHrtfFromTree(const HrtfTable& table,
+                            const KdTree3D&  tree,
+                            float            az_rad,
+                            float            el_rad) noexcept
+{
+    const int idx = tree.isBuilt() ? tree.nearest(az_rad, el_rad) : 0;
     return {table.ir(idx, 0), table.ir(idx, 1),
             static_cast<int>(table.ir_length)};
 }
