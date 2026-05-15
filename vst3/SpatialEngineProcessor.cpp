@@ -22,6 +22,8 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
 #include "SpatialEnginePluginUdp.h"
@@ -235,30 +237,56 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
 }
 
 // ---------------------------------------------------------------------------
-// State persistence — C4-S7: v3 writer activated; v3 reader promoted from D3-γ.
-// Binary format v3 (40 bytes, little-endian):
-//   bytes  0-3:  magic 'S','P','E','1' (0x31455053)
-//   bytes  4-5:  version uint16 = 3
-//   bytes  6-7:  param_count uint16 = 8
-//   bytes  8-39: 8 × float32 normalized values (params 0..7, [6]=bypass, [7]=kMute)
+// State persistence
+// ---------------------------------------------------------------------------
 //
-// v2 format (36 bytes): version=2, param_count=7, 7 floats ([6]=bypass).
-// v1 format (32 bytes): version=1, param_count=6, 6 floats.
-// v4+: forward-compat refusal — returns kResultFalse (ADR 0011 §rule-6).
-// Reader handles v1/v2/v3. Writer emits v3 from this commit onward (S7).
-// Backward compat: v2 reader sets kMute=0 (mute-off default).
+// v0.4 — state v4 sectioned/TLV schema. Magic 'SPE4'. Writer always emits v4.
+// Reader auto-detects v1/v2/v3 (legacy 'SPE1' magic) and walks v4 TLV when
+// 'SPE4' magic is present. v5+ returns kResultFalse (forward-compat refusal).
+//
+// Legacy v1/v2/v3 framing (kept verbatim for back-compat reader):
+//   bytes  0-3:  magic 'S','P','E','1' (0x31455053)
+//   bytes  4-5:  version uint16
+//   bytes  6-7:  param_count uint16
+//   bytes  8..:  param_count × float32 normalized values
+//
+// v4 framing (this commit, v0.4):
+//   bytes  0-3:  magic 'S','P','E','4' (0x34455053)
+//   bytes  4-5:  version uint16 = 4
+//   bytes  6-7:  section_count uint16
+//   per section, packed:
+//     bytes 0-1: section_id   uint16
+//     bytes 2-5: section_len  uint32
+//     bytes 6..: payload[section_len]
+//
+// Section IDs for v0.4:
+//   0x0001 engine_core    — verbatim copy of the v3 8-float param block
+//                            (32 bytes; byte-for-byte identical to v3 reader
+//                            interpretation; merge-gate test verifies this).
+//   0x0002 layout_path    — UTF-8 path (no null terminator). Empty = unset.
+//   0x0003 sofa_speh_path — UTF-8 path (no null terminator). Empty = unset.
+//   0x0004 binaural_state — 2 bytes: binaural_enable u8, binaural_mode u8.
+//                            mode reserved for v0.5; emitted as 0 in v0.4.
 // ---------------------------------------------------------------------------
 namespace {
-static constexpr Steinberg::int32  kStateMagic      = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::int32  kStateMagicLegacy = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::int32  kStateMagicV4     = 0x34455053; // 'SPE4' LE
 static constexpr Steinberg::int32  kStateBytesV1    = 32;
 static constexpr Steinberg::int32  kStateBytesV2    = 36;
 static constexpr Steinberg::int32  kStateBytesV3    = 40;
 static constexpr Steinberg::uint16 kStateVersionV1  = 1;
 static constexpr Steinberg::uint16 kStateVersionV2  = 2;
 static constexpr Steinberg::uint16 kStateVersionV3  = 3;
+static constexpr Steinberg::uint16 kStateVersionV4  = 4;
 static constexpr Steinberg::uint16 kStateNParamsV1  = 6;
 static constexpr Steinberg::uint16 kStateNParamsV2  = 7;
 static constexpr Steinberg::uint16 kStateNParamsV3  = 8;
+
+// v4 section IDs
+static constexpr Steinberg::uint16 kSecEngineCore   = 0x0001;
+static constexpr Steinberg::uint16 kSecLayoutPath   = 0x0002;
+static constexpr Steinberg::uint16 kSecSofaPath     = 0x0003;
+static constexpr Steinberg::uint16 kSecBinauralState = 0x0004;
 } // namespace
 
 Steinberg::tresult PLUGIN_API
@@ -278,7 +306,105 @@ SpatialEngineProcessor::setState(Steinberg::IBStream* state)
 
     Steinberg::int32 magic = 0;
     std::memcpy(&magic, buf + 0, 4);
-    if (magic != kStateMagic) {
+
+    // v0.4: dispatch on magic. 'SPE4' → walk TLV; 'SPE1' → legacy v1/v2/v3.
+    if (magic == kStateMagicV4) {
+        Steinberg::uint16 version = 0;
+        std::memcpy(&version, buf + 4, 2);
+        Steinberg::uint16 section_count = 0;
+        std::memcpy(&section_count, buf + 6, 2);
+
+        if (version != kStateVersionV4) {
+            // v5+ forward-compat refusal
+            std::fprintf(stderr, "VST3 setState: unsupported future v4-family version v=%u\n",
+                         (unsigned)version);
+            return Steinberg::kResultFalse;
+        }
+
+        // Walk sections. Header byte 6/7 already read into section_count.
+        // For each section: 2-byte id + 4-byte len + payload.
+        for (Steinberg::uint16 si = 0; si < section_count; ++si) {
+            uint8_t hdr[6];
+            Steinberg::int32 nr = 0;
+            r = state->read(hdr, 6, &nr);
+            if (r != Steinberg::kResultOk || nr < 6) {
+                std::fprintf(stderr, "VST3 setState v4: truncated section header at idx=%u\n",
+                             (unsigned)si);
+                return Steinberg::kResultOk;
+            }
+            Steinberg::uint16 sec_id = 0;
+            Steinberg::uint32 sec_len = 0;
+            std::memcpy(&sec_id, hdr + 0, 2);
+            std::memcpy(&sec_len, hdr + 2, 4);
+
+            // Bound payload to a safe limit (paths/headers are small)
+            if (sec_len > 65536u) {
+                std::fprintf(stderr, "VST3 setState v4: oversized section len=%u, aborting\n",
+                             (unsigned)sec_len);
+                return Steinberg::kResultOk;
+            }
+
+            std::vector<uint8_t> payload(sec_len);
+            if (sec_len > 0) {
+                nr = 0;
+                r = state->read(payload.data(),
+                                static_cast<Steinberg::int32>(sec_len), &nr);
+                if (r != Steinberg::kResultOk || nr < static_cast<Steinberg::int32>(sec_len)) {
+                    std::fprintf(stderr, "VST3 setState v4: truncated section payload sec_id=0x%04x\n",
+                                 (unsigned)sec_id);
+                    return Steinberg::kResultOk;
+                }
+            }
+
+            switch (sec_id) {
+            case kSecEngineCore: {
+                // 8 × float32 = 32 bytes (identical to v3 8-float payload).
+                if (sec_len < 32) {
+                    std::fprintf(stderr, "VST3 setState v4: engine_core short (%u<32)\n",
+                                 (unsigned)sec_len);
+                    break;
+                }
+                for (int i = 0; i < 8; ++i) {
+                    float v = 0.f;
+                    std::memcpy(&v, payload.data() + i * 4, 4);
+                    norm_values_[i].store(v, std::memory_order_relaxed);
+                    if (i < 6) {
+                        dispatchParamChange(static_cast<Steinberg::Vst::ParamID>(i),
+                                            static_cast<Steinberg::Vst::ParamValue>(v));
+                    }
+                }
+                break;
+            }
+            case kSecLayoutPath: {
+                std::string path(reinterpret_cast<const char*>(payload.data()), sec_len);
+                if (engine_) engine_->setLayoutPath(path);
+                break;
+            }
+            case kSecSofaPath: {
+                std::string path(reinterpret_cast<const char*>(payload.data()), sec_len);
+                if (engine_) engine_->setBinauralSofaPath(path);
+                break;
+            }
+            case kSecBinauralState: {
+                if (sec_len >= 1) {
+                    const bool enable = (payload[0] != 0);
+                    if (engine_) engine_->setBinauralEnabled(enable);
+                }
+                // payload[1] reserved for v0.5 binaural_mode
+                break;
+            }
+            default:
+                // Unknown section — skipped (forward-compat per ADR pattern).
+                break;
+            }
+        }
+
+        std::fprintf(stderr, "VST3 setState: v4 loaded (%u sections)\n",
+                     (unsigned)section_count);
+        return Steinberg::kResultOk;
+    }
+
+    if (magic != kStateMagicLegacy) {
         std::fprintf(stderr, "VST3 setState: magic mismatch, defaults retained\n");
         return Steinberg::kResultOk;
     }
@@ -366,44 +492,91 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
 {
     if (!state) return Steinberg::kInvalidArgument;
 
-    // C4-S7: emit v3 (40 bytes) — includes kMute at index 7.
-    // Binary layout v3 (40 bytes, little-endian):
-    //   bytes  0-3:  magic 'SPE1' = 0x31455053
-    //   bytes  4-5:  version uint16 = 3
-    //   bytes  6-7:  param_count uint16 = 8
-    //   bytes  8-11: float32 norm_values_[0] = kPanAz
-    //   bytes 12-15: float32 norm_values_[1] = kPanEl
-    //   bytes 16-19: float32 norm_values_[2] = kSourceWidth
-    //   bytes 20-23: float32 norm_values_[3] = kMasterGain
-    //   bytes 24-27: float32 norm_values_[4] = kAmbiOrder
-    //   bytes 28-31: float32 norm_values_[5] = kRoomPreset
-    //   bytes 32-35: float32 norm_values_[6] = kBypass
-    //   bytes 36-39: float32 norm_values_[7] = kMute
-    uint8_t buf[kStateBytesV3];
+    // v0.4: emit v4 sectioned TLV.
+    //
+    // Layout:
+    //   header (8 bytes): magic 'SPE4' | version=4 | section_count
+    //   sections:
+    //     0x0001 engine_core    — 32 bytes (8 × float32 norm values).
+    //     0x0002 layout_path    — UTF-8 (engine_->layoutPath()).
+    //     0x0003 sofa_speh_path — UTF-8 (engine_->binauralSofaPath()).
+    //     0x0004 binaural_state — 2 bytes: enable + mode.
 
-    // Magic
-    Steinberg::int32 magic = kStateMagic;
-    std::memcpy(buf + 0, &magic, 4);
+    // Snapshot engine-owned strings/flags on the control thread (safe).
+    const std::string layout_path =
+        engine_ ? engine_->layoutPath() : std::string{};
+    const std::string sofa_path =
+        engine_ ? engine_->binauralSofaPath() : std::string{};
+    const bool binaural_enable =
+        engine_ ? engine_->binauralEnabled() : false;
+    const uint8_t binaural_mode = 0;  // reserved for v0.5
 
-    // Version = 3
-    Steinberg::uint16 version = kStateVersionV3;
-    std::memcpy(buf + 4, &version, 2);
+    // Header
+    Steinberg::int32 magic = kStateMagicV4;
+    Steinberg::uint16 version = kStateVersionV4;
+    Steinberg::uint16 section_count = 4;
 
-    // Param count = 8
-    Steinberg::uint16 nparams = kStateNParamsV3;
-    std::memcpy(buf + 6, &nparams, 2);
+    Steinberg::int32 written_total = 0;
+    Steinberg::int32 written = 0;
+    Steinberg::tresult r;
 
-    // 8 float normalized values (params 0..7, [7]=kMute)
+    uint8_t hdr[8];
+    std::memcpy(hdr + 0, &magic, 4);
+    std::memcpy(hdr + 4, &version, 2);
+    std::memcpy(hdr + 6, &section_count, 2);
+    r = state->write(hdr, 8, &written);
+    if (r != Steinberg::kResultOk || written < 8) return Steinberg::kResultFalse;
+    written_total += written;
+
+    // ---- helper: emit one section ----
+    auto emit_section = [&](Steinberg::uint16 sec_id, const uint8_t* payload,
+                            Steinberg::uint32 payload_len) -> bool {
+        uint8_t sh[6];
+        std::memcpy(sh + 0, &sec_id, 2);
+        std::memcpy(sh + 2, &payload_len, 4);
+        Steinberg::int32 w = 0;
+        if (state->write(sh, 6, &w) != Steinberg::kResultOk || w < 6) return false;
+        written_total += w;
+        if (payload_len > 0) {
+            w = 0;
+            if (state->write(const_cast<uint8_t*>(payload),
+                              static_cast<Steinberg::int32>(payload_len), &w)
+                != Steinberg::kResultOk
+                || w < static_cast<Steinberg::int32>(payload_len)) return false;
+            written_total += w;
+        }
+        return true;
+    };
+
+    // ---- 0x0001 engine_core (32 bytes; byte-equal to v3 8-float block) ----
+    uint8_t core_payload[32];
     for (int i = 0; i < 8; ++i) {
         float v = norm_values_[i].load(std::memory_order_relaxed);
-        std::memcpy(buf + 8 + i * 4, &v, 4);
+        std::memcpy(core_payload + i * 4, &v, 4);
     }
+    if (!emit_section(kSecEngineCore, core_payload, 32))
+        return Steinberg::kResultFalse;
 
-    Steinberg::int32 written = 0;
-    Steinberg::tresult r = state->write(buf, kStateBytesV3, &written);
-    return (r == Steinberg::kResultOk && written == kStateBytesV3)
-               ? Steinberg::kResultOk
-               : Steinberg::kResultFalse;
+    // ---- 0x0002 layout_path ----
+    if (!emit_section(kSecLayoutPath,
+                      reinterpret_cast<const uint8_t*>(layout_path.data()),
+                      static_cast<Steinberg::uint32>(layout_path.size())))
+        return Steinberg::kResultFalse;
+
+    // ---- 0x0003 sofa_speh_path ----
+    if (!emit_section(kSecSofaPath,
+                      reinterpret_cast<const uint8_t*>(sofa_path.data()),
+                      static_cast<Steinberg::uint32>(sofa_path.size())))
+        return Steinberg::kResultFalse;
+
+    // ---- 0x0004 binaural_state ----
+    uint8_t bin_payload[2];
+    bin_payload[0] = binaural_enable ? 1u : 0u;
+    bin_payload[1] = binaural_mode;
+    if (!emit_section(kSecBinauralState, bin_payload, 2))
+        return Steinberg::kResultFalse;
+
+    return Steinberg::kResultOk;
 }
 
 // ---------------------------------------------------------------------------

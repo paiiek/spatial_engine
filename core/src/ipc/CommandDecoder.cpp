@@ -348,6 +348,32 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadSysLtcChase p;
         p.enable = (getInt(0) != 0);
         cmd.payload = p;
+    } else if (addr == "/sys/load_layout") {
+        // v0.4: ,s "<path>" — control-thread layout YAML injection
+        if (args.n_str > 0) {
+            cmd.tag = CommandTag::SysLoadLayout;
+            PayloadSysLoadLayout p;
+            p.path = args.strings[0];
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
+    } else if (addr == "/sys/binaural_sofa") {
+        // v0.4: ,s "<.speh path>" — control-thread sofa path injection
+        if (args.n_str > 0) {
+            cmd.tag = CommandTag::SysBinauralSofa;
+            PayloadSysBinauralSofa p;
+            p.path = args.strings[0];
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
+    } else if (addr == "/sys/binaural_enable") {
+        // v0.4: ,i {0|1} — toggle binaural bus 1 rendering
+        cmd.tag = CommandTag::SysBinauralEnable;
+        PayloadSysBinauralEnable p;
+        p.enable = (getInt(0) != 0);
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;
@@ -664,6 +690,33 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
     case CommandTag::SysLtcChase: {
         addr = "/sys/ltc_chase";
         auto& p = std::get<PayloadSysLtcChase>(cmd.payload);
+        add_i(p.enable ? 1 : 0);
+        break;
+    }
+    case CommandTag::SysLoadLayout: {
+        // v0.4: ,s "<yaml-path>" (control-thread only)
+        auto& p = std::get<PayloadSysLoadLayout>(cmd.payload);
+        addr = "/sys/load_layout";
+        tags += 's';
+        for (char c : p.path) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SysBinauralSofa: {
+        // v0.4: ,s "<.speh-path>" (control-thread only)
+        auto& p = std::get<PayloadSysBinauralSofa>(cmd.payload);
+        addr = "/sys/binaural_sofa";
+        tags += 's';
+        for (char c : p.path) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SysBinauralEnable: {
+        // v0.4: ,i {0|1}
+        auto& p = std::get<PayloadSysBinauralEnable>(cmd.payload);
+        addr = "/sys/binaural_enable";
         add_i(p.enable ? 1 : 0);
         break;
     }

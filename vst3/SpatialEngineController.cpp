@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // UString128 helper: write ASCII string into Steinberg::Vst::String128
@@ -310,16 +311,20 @@ Steinberg::tresult PLUGIN_API SpatialEngineController::terminate()
 // Controller decodes and reflects into norm_values_ (UI thread, no performEdit).
 // ---------------------------------------------------------------------------
 namespace {
-static constexpr Steinberg::int32  kCtlStateMagic    = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::int32  kCtlStateMagicLegacy = 0x31455053; // 'SPE1' LE
+static constexpr Steinberg::int32  kCtlStateMagicV4     = 0x34455053; // 'SPE4' LE
 static constexpr Steinberg::uint16 kCtlStateVersionV1 = 1;
 static constexpr Steinberg::uint16 kCtlStateVersionV2 = 2;
 static constexpr Steinberg::uint16 kCtlStateVersionV3 = 3;
+static constexpr Steinberg::uint16 kCtlStateVersionV4 = 4;
 static constexpr Steinberg::uint16 kCtlStateNParamsV1 = 6;
 static constexpr Steinberg::uint16 kCtlStateNParamsV2 = 7;
 static constexpr Steinberg::uint16 kCtlStateNParamsV3 = 8;
 static constexpr Steinberg::int32  kCtlStateBytesV1   = 32;
 static constexpr Steinberg::int32  kCtlStateBytesV2   = 36;
 static constexpr Steinberg::int32  kCtlStateBytesV3   = 40;
+// v4 section IDs (must match SpatialEngineProcessor.cpp)
+static constexpr Steinberg::uint16 kCtlSecEngineCore  = 0x0001;
 } // namespace
 
 Steinberg::tresult PLUGIN_API
@@ -338,7 +343,61 @@ SpatialEngineController::setComponentState(Steinberg::IBStream* state)
 
     Steinberg::int32 magic = 0;
     std::memcpy(&magic, buf + 0, 4);
-    if (magic != kCtlStateMagic) {
+
+    // v0.4: dispatch on magic. 'SPE4' → walk v4 TLV (controller reads only
+    // the engine_core section; layout/sofa/binaural state lives on the
+    // processor side and is not surfaced via the controller param model).
+    if (magic == kCtlStateMagicV4) {
+        Steinberg::uint16 v4_version = 0;
+        std::memcpy(&v4_version, buf + 4, 2);
+        Steinberg::uint16 section_count = 0;
+        std::memcpy(&section_count, buf + 6, 2);
+        if (v4_version != kCtlStateVersionV4) {
+            std::fprintf(stderr, "VST3 controller setComponentState: unsupported future v4-family v=%u\n",
+                         (unsigned)v4_version);
+            return Steinberg::kResultOk;
+        }
+        for (Steinberg::uint16 si = 0; si < section_count; ++si) {
+            uint8_t sh[6];
+            Steinberg::int32 nr = 0;
+            r = state->read(sh, 6, &nr);
+            if (r != Steinberg::kResultOk || nr < 6) {
+                std::fprintf(stderr, "VST3 controller setComponentState v4: truncated section header\n");
+                return Steinberg::kResultOk;
+            }
+            Steinberg::uint16 sec_id = 0;
+            Steinberg::uint32 sec_len = 0;
+            std::memcpy(&sec_id, sh + 0, 2);
+            std::memcpy(&sec_len, sh + 2, 4);
+            if (sec_len > 65536u) return Steinberg::kResultOk;
+
+            std::vector<uint8_t> payload(sec_len);
+            if (sec_len > 0) {
+                nr = 0;
+                r = state->read(payload.data(),
+                                static_cast<Steinberg::int32>(sec_len), &nr);
+                if (r != Steinberg::kResultOk || nr < static_cast<Steinberg::int32>(sec_len)) {
+                    return Steinberg::kResultOk;
+                }
+            }
+            if (sec_id == kCtlSecEngineCore && sec_len >= 32) {
+                for (int i = 0; i < 8; ++i) {
+                    float v = 0.f;
+                    std::memcpy(&v, payload.data() + i * 4, 4);
+                    if (v < 0.f) v = 0.f;
+                    if (v > 1.f) v = 1.f;
+                    norm_values_[i] = static_cast<double>(v);
+                }
+            }
+            // other sections — ignored by controller (processor-only state).
+        }
+        if (comp_handler_) {
+            comp_handler_->restartComponent(Steinberg::Vst::kParamValuesChanged);
+        }
+        return Steinberg::kResultOk;
+    }
+
+    if (magic != kCtlStateMagicLegacy) {
         std::fprintf(stderr, "VST3 controller setComponentState: magic mismatch, defaults retained\n");
         return Steinberg::kResultOk;
     }

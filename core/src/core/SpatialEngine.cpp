@@ -136,6 +136,24 @@ SpatialEngine::SpatialEngine(int listen_port)
                     std::memcpy(qc.obj_name, p->name, 32);
                 }
                 break;
+            // v0.4 — runtime path injection. Strings are NOT queueable through
+            // the POD FIFO; handle on the control thread before the FIFO push
+            // and early-return so no QueuedCmd is enqueued.
+            case ipc::CommandTag::SysLoadLayout:
+                if (auto* p = std::get_if<ipc::PayloadSysLoadLayout>(&cmd.payload)) {
+                    layout_path_ = p->path;
+                }
+                return;
+            case ipc::CommandTag::SysBinauralSofa:
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralSofa>(&cmd.payload)) {
+                    binaural_sofa_path_ = p->path;
+                }
+                return;
+            case ipc::CommandTag::SysBinauralEnable:
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralEnable>(&cmd.payload)) {
+                    binaural_enabled_.store(p->enable);
+                }
+                return;
             default:
                 return; // not queued
             }

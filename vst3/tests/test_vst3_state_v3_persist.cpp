@@ -34,7 +34,8 @@ using spe::vst3::kPanAz;
 // ---------------------------------------------------------------------------
 // Constants matching processor internals
 // ---------------------------------------------------------------------------
-static constexpr int32  kMagicOk      = 0x31455053; // 'SPE1' LE
+static constexpr int32  kMagicOk      = 0x31455053; // 'SPE1' LE (legacy)
+static constexpr int32  kMagicV4      = 0x34455053; // 'SPE4' LE
 static constexpr int    kStateBytesV2 = 36;
 static constexpr int    kStateBytesV3 = 40;
 
@@ -62,8 +63,11 @@ static void setupProc(SpatialEngineProcessor& proc)
     proc.setActive(true);
 }
 
-// Read 8 floats from v3 getState output.
-// Returns true if getState produced v3 stream and all 8 floats were read.
+// Read 8 floats from getState output.
+//
+// v0.4: writer emits v4 sectioned TLV. We walk to section 0x0001 (engine_core)
+// and extract its 8 float32 payload. Helper retains the v3-era name to keep
+// the rest of the test readable.
 static bool extractNormsV3(SpatialEngineProcessor& proc, float out[8])
 {
     MemoryStream* ms = new MemoryStream();
@@ -73,26 +77,39 @@ static bool extractNormsV3(SpatialEngineProcessor& proc, float out[8])
     int64 res = 0;
     ms->seek(0, IBStream::kIBSeekSet, &res);
 
-    uint8_t buf[kStateBytesV3]{};
+    // Read whole stream
+    uint8_t buf[2048]{};
     int32 nr = 0;
-    ms->read(buf, kStateBytesV3, &nr);
+    ms->read(buf, sizeof(buf), &nr);
     ms->release();
+    if (nr < 8) return false;
 
-    if (nr < kStateBytesV3) return false;
-
-    // Verify magic and version=3
     int32 magic = 0;
     std::memcpy(&magic, buf + 0, 4);
-    if (magic != kMagicOk) return false;
+    if (magic != kMagicV4) return false;
 
     uint16_t version = 0;
     std::memcpy(&version, buf + 4, 2);
-    if (version != 3) return false;
+    if (version != 4) return false;
 
-    for (int i = 0; i < 8; ++i)
-        std::memcpy(&out[i], buf + 8 + i * 4, 4);
+    uint16_t section_count = 0;
+    std::memcpy(&section_count, buf + 6, 2);
 
-    return true;
+    int off = 8;
+    for (int s = 0; s < section_count && off + 6 <= nr; ++s) {
+        uint16_t sec_id = 0; uint32_t sec_len = 0;
+        std::memcpy(&sec_id, buf + off + 0, 2);
+        std::memcpy(&sec_len, buf + off + 2, 4);
+        off += 6;
+        if (off + static_cast<int>(sec_len) > nr) return false;
+        if (sec_id == 0x0001 && sec_len >= 32) {
+            for (int i = 0; i < 8; ++i)
+                std::memcpy(&out[i], buf + off + i * 4, 4);
+            return true;
+        }
+        off += sec_len;
+    }
+    return false;
 }
 
 // Build a synthetic v2 stream (36 bytes)
@@ -150,10 +167,11 @@ int main()
             CHK(r == kResultOk, "A15b_1_setState_v3_ok");
         }
 
-        // getState should emit v3
+        // v0.4: getState emits v4 sectioned TLV. We still read engine_core
+        // section and verify the 8-float param block round-trips.
         float got1[8]{};
         bool extracted = extractNormsV3(proc1, got1);
-        CHK(extracted, "A15b_1_getState_emits_v3");
+        CHK(extracted, "A15b_1_getState_emits_v4");
 
         // Round-trip: capture the stream and load into fresh plugin
         MemoryStream* ms2 = new MemoryStream();
@@ -169,7 +187,7 @@ int main()
 
         float got2[8]{};
         bool extracted2 = extractNormsV3(proc2, got2);
-        CHK(extracted2, "A15b_1_roundtrip_getState_v3");
+        CHK(extracted2, "A15b_1_roundtrip_getState_v4");
 
         // kMute must round-trip to 1.0
         CHK(std::fabs(got2[7] - 1.0f) < 1e-5f, "A15b_1_kMute_roundtrip_1_0");
@@ -221,10 +239,10 @@ int main()
         ms->release();
         CHK(r == kResultOk, "A15b_2_v2_setState_ok");
 
-        // getState now emits v3 — read it back
+        // v0.4: getState now emits v4 — read it back via the v4 extractor.
         float got[8]{};
         bool extracted = extractNormsV3(proc, got);
-        CHK(extracted, "A15b_2_v2_input_getState_v3");
+        CHK(extracted, "A15b_2_v2_input_getState_v4");
 
         // kBypass must be loaded from v2 stream
         CHK(std::fabs(got[6] - 1.0f) < 1e-5f, "A15b_2_v2_kBypass_loaded_1");
@@ -241,8 +259,10 @@ int main()
     }
 
     // -----------------------------------------------------------------------
-    // Sub-case 3: Forward-version compat — v3 stream with version byte mutated
-    // to 4 → setState returns kResultFalse (ADR 0011 §rule-6).
+    // Sub-case 3: Forward-version compat — legacy 'SPE1' magic with the
+    // version byte mutated to 4 → legacy reader refuses (ADR 0011 §rule-6).
+    // (v0.4: this exercises the legacy-magic reader; SPE4-magic streams go
+    // through the new TLV path which accepts version=4.)
     // -----------------------------------------------------------------------
     {
         SpatialEngineProcessor proc;

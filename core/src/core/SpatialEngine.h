@@ -38,6 +38,20 @@ public:
     // Set speaker layout BEFORE start(). Defaults to 8-ch circular if not set.
     void setLayout(spe::geometry::SpeakerLayout layout);
 
+    // ─────────────────────────────────────────────────────────────────────
+    // v0.4 — runtime path injection (control-thread only).
+    // Setters store the path/flag; the audio path consumes them lazily at
+    // the next prepareToPlay() boundary. None of these touch RT state, so
+    // they are safe to call from the OSC handler dispatch.
+    // ─────────────────────────────────────────────────────────────────────
+    void setLayoutPath(const std::string& path)        { layout_path_ = path; }
+    void setBinauralSofaPath(const std::string& path)  { binaural_sofa_path_ = path; }
+    void setBinauralEnabled(bool on)                   { binaural_enabled_.store(on); }
+
+    const std::string& layoutPath()         const noexcept { return layout_path_; }
+    const std::string& binauralSofaPath()   const noexcept { return binaural_sofa_path_; }
+    bool               binauralEnabled()    const noexcept { return binaural_enabled_.load(); }
+
     void audioBlock(const spe::audio_io::AudioBlock& block) override;
     void prepareToPlay(double sample_rate, int max_block_size) override;
     void releaseResources() override;
@@ -184,6 +198,12 @@ private:
     std::atomic<bool>          render_ready_{false};
     std::atomic<bool>          transport_play_{true};
     std::atomic<bool>          ltc_chase_enable_{false};
+    // v0.4 — control-thread storage for runtime path injection. Audio path
+    // does NOT read these directly; consumed by prepareToPlay() / VST3
+    // setupProcessing() at block boundaries.
+    std::string                layout_path_;
+    std::string                binaural_sofa_path_;
+    std::atomic<bool>          binaural_enabled_{false};
     spe::sync::LtcChase        ltc_chase_;
     std::atomic<std::uint64_t> blocks_processed_{0};
     double                     sample_rate_{48000.0};

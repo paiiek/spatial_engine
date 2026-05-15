@@ -275,8 +275,48 @@ target_compile_definitions(test_vst3_state_v3_persist PRIVATE SPATIAL_ENGINE_VST
 target_compile_options(test_vst3_state_v3_persist PRIVATE -UNDEBUG)
 add_test(NAME vst3_state_v3_persist COMMAND test_vst3_state_v3_persist)
 
+# ---- v0.4 P0: state v4 sectioned TLV round-trip ----------------------------
+add_executable(test_vst3_state_v4_persist
+    test_vst3_state_v4_persist.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_state_v4_persist PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_state_v4_persist PRIVATE spe_core)
+target_compile_definitions(test_vst3_state_v4_persist PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_state_v4_persist PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_v4_persist COMMAND test_vst3_state_v4_persist)
+
+# ---- v0.4 P0 MERGE GATE: v3 loads byte-identical under v4 writer -----------
+add_executable(test_state_v3_loads_byte_identical_under_v4_writer
+    test_state_v3_loads_byte_identical_under_v4_writer.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_state_v3_loads_byte_identical_under_v4_writer
+    PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_state_v3_loads_byte_identical_under_v4_writer
+    PRIVATE spe_core)
+target_compile_definitions(test_state_v3_loads_byte_identical_under_v4_writer
+    PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_state_v3_loads_byte_identical_under_v4_writer
+    PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_v3_to_v4_byte_identical
+    COMMAND test_state_v3_loads_byte_identical_under_v4_writer)
+
+# ---- v0.4 P0: v3 reader fall-through via v4-capable reader -----------------
+add_executable(test_vst3_state_v3_back_compat
+    test_vst3_state_v3_back_compat.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_state_v3_back_compat PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_state_v3_back_compat PRIVATE spe_core)
+target_compile_definitions(test_vst3_state_v3_back_compat PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_state_v3_back_compat PRIVATE -UNDEBUG)
+add_test(NAME vst3_state_v3_back_compat COMMAND test_vst3_state_v3_back_compat)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
                      vst3_performedit_threadsafe vst3_state_v3_persist
+                     vst3_state_v4_persist vst3_state_v3_to_v4_byte_identical
+                     vst3_state_v3_back_compat
                      PROPERTIES DEPENDS vst3_host_fixture)

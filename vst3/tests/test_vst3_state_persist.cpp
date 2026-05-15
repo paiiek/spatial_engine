@@ -28,7 +28,13 @@ using namespace Steinberg::Vst;
 
 static constexpr int   kStateBytesV1 = 32;
 static constexpr int   kStateBytesV2 = 36;
-static constexpr int   kStateBytesV3 = 40;  // C4-S7: writer now emits v3
+static constexpr int   kStateBytesV3 = 40;
+// v0.4: writer emits v4 sectioned TLV.
+//   8-byte header  + (2 sec_id + 4 sec_len + 32 engine_core_payload) +
+//                   (2 + 4 + 0 layout_path)     +
+//                   (2 + 4 + 0 sofa_path)       +
+//                   (2 + 4 + 2 binaural_state)  = 8 + 38 + 6 + 6 + 8 = 66 bytes
+static constexpr int   kStateBytesV4 = 8 + (6 + 32) + (6 + 0) + (6 + 0) + (6 + 2);
 static constexpr int32 kMagicOk      = 0x31455053; // 'SPE1' LE
 
 // Build a v1 32-byte state buffer
@@ -63,19 +69,52 @@ static MemoryStream* makeStream(const uint8_t* buf, int len)
     return ms;
 }
 
-// Extract raw 7 floats from getState output.
-// C4-S7: writer now emits v3 (40 bytes); floats 0-6 are at same offsets as v2.
+// Extract first 7 floats from getState output.
+// v0.4: writer emits v4 sectioned TLV — walk to engine_core (0x0001) and
+// read its 32-byte payload (8 × float32). First 7 mirror the legacy
+// v1/v2/v3 param layout.
 static void extractNormsV2(spe::vst3::SpatialEngineProcessor& proc, float out[7])
 {
+    static constexpr int32 kMagicV4 = 0x34455053; // 'SPE4' LE
     MemoryStream* ms = new MemoryStream();
     proc.getState(ms);
     int64 res = 0;
     ms->seek(0, IBStream::kIBSeekSet, &res);
-    uint8_t buf[kStateBytesV3]{};
+    uint8_t buf[256]{};
     int32 nr = 0;
-    ms->read(buf, kStateBytesV3, &nr);
+    ms->read(buf, sizeof(buf), &nr);
     ms->release();
-    for (int i = 0; i < 7; ++i) std::memcpy(&out[i], buf + 8 + i*4, 4);
+
+    // Default to zeros so the "defaults retained" assertions still pass on
+    // truncated / wrong-magic streams.
+    for (int i = 0; i < 7; ++i) out[i] = 0.f;
+    if (nr < 8) return;
+
+    int32 magic = 0;
+    std::memcpy(&magic, buf + 0, 4);
+    if (magic != kMagicV4) return;
+
+    uint16_t version = 0;
+    std::memcpy(&version, buf + 4, 2);
+    if (version != 4) return;
+
+    uint16_t section_count = 0;
+    std::memcpy(&section_count, buf + 6, 2);
+
+    int off = 8;
+    for (int s = 0; s < section_count && off + 6 <= nr; ++s) {
+        uint16_t sec_id = 0; uint32_t sec_len = 0;
+        std::memcpy(&sec_id, buf + off + 0, 2);
+        std::memcpy(&sec_len, buf + off + 2, 4);
+        off += 6;
+        if (off + static_cast<int>(sec_len) > nr) return;
+        if (sec_id == 0x0001 && sec_len >= 32) {
+            for (int i = 0; i < 7; ++i)
+                std::memcpy(&out[i], buf + off + i * 4, 4);
+            return;
+        }
+        off += sec_len;
+    }
 }
 
 static void setupProc(spe::vst3::SpatialEngineProcessor& proc)
@@ -214,8 +253,8 @@ int main()
         int64 pos = 0;
         ms->seek(0, IBStream::kIBSeekEnd, &pos);
         ms->release();
-        // C4-S7: writer now emits v3 (40 bytes)
-        CHECK(r == kResultOk && pos == 40, "12_getState_40_bytes");
+        // v0.4: writer now emits v4 (kStateBytesV4 bytes — see definition).
+        CHECK(r == kResultOk && pos == kStateBytesV4, "12_getState_v4_bytes");
     }
 
     // -------------------------------------------------------------------
@@ -301,7 +340,7 @@ int main()
             int64 pos = 0;
             ms->seek(0, IBStream::kIBSeekEnd, &pos);
             ms->release();
-            if (pos != 40) ++crashes;  // C4-S7: getState now emits v3 (40 bytes)
+            if (pos != kStateBytesV4) ++crashes;  // v0.4: getState now emits v4 sectioned TLV
         }
         done.store(true);
         setter.join();
@@ -321,22 +360,22 @@ int main()
             MemoryStream* ms = makeStream(v1buf, kStateBytesV1);
             proc1.setState(ms); ms->release();
         }
-        // getState -> v3 buf (C4-S7: writer emits v3 = 40 bytes)
-        uint8_t v3out[kStateBytesV3]{};
+        // v0.4: getState -> v4 buf (sectioned TLV).
+        uint8_t v4out[kStateBytesV4]{};
         {
             MemoryStream* ms = new MemoryStream();
             proc1.getState(ms);
             int64 res = 0;
             ms->seek(0, IBStream::kIBSeekSet, &res);
             int32 nr = 0;
-            ms->read(v3out, kStateBytesV3, &nr);
+            ms->read(v4out, kStateBytesV4, &nr);
             ms->release();
         }
-        // Fresh proc reads v3 stream
+        // Fresh proc reads v4 stream
         spe::vst3::SpatialEngineProcessor proc2;
         setupProc(proc2);
         {
-            MemoryStream* ms = makeStream(v3out, kStateBytesV3);
+            MemoryStream* ms = makeStream(v4out, kStateBytesV4);
             proc2.setState(ms); ms->release();
         }
         float got[7];
@@ -345,7 +384,7 @@ int main()
         for (int i = 0; i < 6; ++i)
             if (std::fabs(got[i] - kTestVals[i]) >= 1e-5f) ok=false;
         if (std::fabs(got[6] - 0.f) >= 1e-5f) ok=false; // bypass=0
-        CHECK(ok, "16_v1_to_v3_upgrade");
+        CHECK(ok, "16_v1_to_v4_upgrade");
     }
 
     // -------------------------------------------------------------------

@@ -98,21 +98,49 @@ static void setupProc(spe::vst3::SpatialEngineProcessor& proc)
     proc.setActive(true);
 }
 
-// Extract 7 active norms via getState (C4-S7: writer emits v3 = 40 bytes).
-// Reads v3 stream and extracts the first 7 floats (indices 0-6).
-// Index 7 (kMute) is ignored here — callers that need it use extractNormsV3.
+// Extract 7 active norms via getState.
+// v0.4: writer emits v4 sectioned TLV — walk to engine_core (0x0001) and
+// read its 32-byte payload (8 floats). First 7 mirror legacy params.
 static void extractNormsV2(spe::vst3::SpatialEngineProcessor& proc, float out[7])
 {
+    static constexpr int32 kMagicV4 = 0x34455053; // 'SPE4' LE
     MemoryStream* ms = new MemoryStream();
     proc.getState(ms);
     int64 res = 0;
     ms->seek(0, IBStream::kIBSeekSet, &res);
-    uint8_t buf[kStateBytesV3]{};
+    uint8_t buf[256]{};
     int32 nr = 0;
-    ms->read(buf, kStateBytesV3, &nr);
+    ms->read(buf, sizeof(buf), &nr);
     ms->release();
-    // Works for both v2 (36 bytes) and v3 (40 bytes): floats 0-6 are at same offsets.
-    for (int i = 0; i < 7; ++i) std::memcpy(&out[i], buf + 8 + i*4, 4);
+
+    for (int i = 0; i < 7; ++i) out[i] = 0.f;
+    if (nr < 8) return;
+
+    int32 magic = 0;
+    std::memcpy(&magic, buf + 0, 4);
+    if (magic != kMagicV4) return;
+
+    uint16_t version = 0;
+    std::memcpy(&version, buf + 4, 2);
+    if (version != 4) return;
+
+    uint16_t section_count = 0;
+    std::memcpy(&section_count, buf + 6, 2);
+
+    int off = 8;
+    for (int s = 0; s < section_count && off + 6 <= nr; ++s) {
+        uint16_t sec_id = 0; uint32_t sec_len = 0;
+        std::memcpy(&sec_id, buf + off + 0, 2);
+        std::memcpy(&sec_len, buf + off + 2, 4);
+        off += 6;
+        if (off + static_cast<int>(sec_len) > nr) return;
+        if (sec_id == 0x0001 && sec_len >= 32) {
+            for (int i = 0; i < 7; ++i)
+                std::memcpy(&out[i], buf + off + i * 4, 4);
+            return;
+        }
+        off += sec_len;
+    }
 }
 
 // Dump a binary buffer to a file (used for fixture creation)

@@ -43,6 +43,10 @@ enum class CommandTag : uint8_t {
     SysAmbiOrder       = 0x13, // /sys/ambi_order ,i {1|2|3} — Ambisonic decoding order
     SysLtcChase        = 0x14, // /sys/ltc_chase ,i {0|1} — enable LTC chase from input ch 0
     SysAmbiDecoderType = 0x15, // /sys/ambi_decoder_type ,i {0..4} — decoder algorithm
+    // v0.4: runtime layout / binaural path injection (control-thread only).
+    SysLoadLayout      = 0x16, // /sys/load_layout ,s "<yaml-path>" — store layout YAML path
+    SysBinauralSofa    = 0x17, // /sys/binaural_sofa ,s "<.speh-path>" — store binaural SOFA path
+    SysBinauralEnable  = 0x18, // /sys/binaural_enable ,i {0|1} — enable binaural bus 1 rendering
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -213,6 +217,20 @@ struct PayloadOutputLimit {
     float    threshold_db = 0.f; // 0 dB = no limiting
 };
 
+// v0.4 — runtime path injection. Strings are control-thread only; never
+// touched on the audio thread (see SpatialEngine OSC handler dispatch).
+struct PayloadSysLoadLayout {
+    std::string path;
+};
+
+struct PayloadSysBinauralSofa {
+    std::string path;
+};
+
+struct PayloadSysBinauralEnable {
+    bool enable = false;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -247,6 +265,9 @@ using CommandPayload = std::variant<
     PayloadReverbSelect,
     PayloadOutputGain,
     PayloadOutputLimit,
+    PayloadSysLoadLayout,
+    PayloadSysBinauralSofa,
+    PayloadSysBinauralEnable,
     PayloadUnknown
 >;
 
