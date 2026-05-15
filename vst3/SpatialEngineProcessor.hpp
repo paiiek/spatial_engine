@@ -110,6 +110,18 @@ private:
     Steinberg::int32 max_block_{512};
     bool active_{false};
 
+    // v0.4 P1: two output buses (speakers + binaural).
+    //   bus 0 "Speakers"  — channel count = out_bus0_channels_ (default 8;
+    //                       negotiated via setBusArrangements).
+    //   bus 1 "Binaural"  — always kStereo (2 channels).
+    // The negotiated bus 0 arrangement is cached so getBusArrangement
+    // returns the host-selected SpeakerArrangement without re-deriving it.
+    Steinberg::Vst::SpeakerArrangement out_bus0_arr_{Steinberg::Vst::SpeakerArr::kStereo};
+    Steinberg::int32                   out_bus0_channels_{2};
+    // Default bus 0 channel count when no setBusArrangements has been
+    // called yet (matches the host's "best guess" for first-instantiation
+    // before parameter routing). Engine still defaults to 8 internally.
+
     // Atomic norm value snapshot for 8 params (C4-S7: resized from [7] to [8]).
     // norm_values_[6] = bypass (0.0=off, 1.0=on). Read directly in process().
     // norm_values_[7] = kMute (0.0=off, 1.0=on). Zeroes output when >= 0.5.
@@ -136,6 +148,10 @@ private:
 
     // Dispatch a single normalized param change to the engine (Step 2.3/2.4)
     void dispatchParamChange(Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue norm) noexcept;
+
+    // v0.4 P1 A7: write -6 dB speaker→binaural downmix to bus 1.
+    // RT-safe: no allocations, no mutex.
+    void writeBinauralPlaceholder(Steinberg::Vst::ProcessData& data) noexcept;
 };
 
 } // namespace spe::vst3

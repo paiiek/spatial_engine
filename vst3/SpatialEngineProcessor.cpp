@@ -146,10 +146,12 @@ SpatialEngineProcessor::setIoMode(Steinberg::Vst::IoMode /*mode*/)
 
 Steinberg::int32 PLUGIN_API
 SpatialEngineProcessor::getBusCount(Steinberg::Vst::MediaType type,
-                                     Steinberg::Vst::BusDirection /*dir*/)
+                                     Steinberg::Vst::BusDirection dir)
 {
-    // One audio input bus + one audio output bus. No event buses.
-    if (type == Steinberg::Vst::kAudio) return 1;
+    // v0.4 P1: one mono-ish input bus + two output buses (speakers + binaural).
+    if (type != Steinberg::Vst::kAudio) return 0;
+    if (dir == Steinberg::Vst::kInput)  return 1;  // 1 input bus
+    if (dir == Steinberg::Vst::kOutput) return 2;  // bus 0 speakers, bus 1 binaural
     return 0;
 }
 
@@ -160,25 +162,41 @@ SpatialEngineProcessor::getBusInfo(Steinberg::Vst::MediaType type,
                                     Steinberg::Vst::BusInfo& bus)
 {
     using namespace Steinberg::Vst;
-    if (type != kAudio || index != 0) return Steinberg::kInvalidArgument;
+    if (type != kAudio) return Steinberg::kInvalidArgument;
 
-    bus.mediaType    = kAudio;
-    bus.direction    = dir;
-    bus.channelCount = 2; // stereo
-    bus.busType      = kMain;
-    bus.flags        = BusInfo::kDefaultActive;
+    bus.mediaType  = kAudio;
+    bus.direction  = dir;
+    bus.flags      = BusInfo::kDefaultActive;
+
+    auto setName = [&](const char* name) {
+        for (int i = 0; name[i] && i < 128; ++i)
+            bus.name[i] = static_cast<Steinberg::Vst::TChar>(name[i]);
+    };
 
     if (dir == kInput) {
-        // "Spatial Input" — stereo stem from host
-        const char* name = "Spatial Input";
-        for (int i = 0; name[i] && i < 128; ++i)
-            bus.name[i] = static_cast<Steinberg::Vst::TChar>(name[i]);
-    } else {
-        const char* name = "Spatial Output";
-        for (int i = 0; name[i] && i < 128; ++i)
-            bus.name[i] = static_cast<Steinberg::Vst::TChar>(name[i]);
+        if (index != 0) return Steinberg::kInvalidArgument;
+        bus.channelCount = 2; // stereo input stem
+        bus.busType      = kMain;
+        setName("Spatial Input");
+        return Steinberg::kResultOk;
     }
-    return Steinberg::kResultOk;
+
+    // Output buses
+    if (index == 0) {
+        // Speaker bus — channel count tracks the negotiated arrangement.
+        bus.channelCount = out_bus0_channels_;
+        bus.busType      = kMain;
+        setName("Speakers");
+        return Steinberg::kResultOk;
+    }
+    if (index == 1) {
+        // v0.4 P1: binaural side-bus (stereo, A7 placeholder until v0.5).
+        bus.channelCount = 2;
+        bus.busType      = kAux;
+        setName("Binaural");
+        return Steinberg::kResultOk;
+    }
+    return Steinberg::kInvalidArgument;
 }
 
 Steinberg::tresult PLUGIN_API
@@ -586,20 +604,50 @@ SpatialEngineProcessor::getState(Steinberg::IBStream* state)
 Steinberg::tresult PLUGIN_API
 SpatialEngineProcessor::setBusArrangements(Steinberg::Vst::SpeakerArrangement* /*inputs*/,
                                              Steinberg::int32 /*numIns*/,
-                                             Steinberg::Vst::SpeakerArrangement* /*outputs*/,
-                                             Steinberg::int32 /*numOuts*/)
+                                             Steinberg::Vst::SpeakerArrangement* outputs,
+                                             Steinberg::int32 numOuts)
 {
-    // Accept any arrangement for now; stereo is reported in getBusInfo.
-    return Steinberg::kResultOk;
+    using namespace Steinberg::Vst;
+
+    // v0.4 P1: require both output buses with bus 1 == kStereo.
+    if (numOuts < 2 || outputs == nullptr) return Steinberg::kResultFalse;
+
+    const SpeakerArrangement spk_arr = outputs[0];
+    const SpeakerArrangement bin_arr = outputs[1];
+
+    // Bus 1 must be exactly kStereo (binaural side-output is always 2-ch).
+    if (bin_arr != SpeakerArr::kStereo) return Steinberg::kResultFalse;
+
+    // Bus 0: accept the SDK-defined arrangements whose channel count falls
+    // in {2,4,6,8,12,16,24}. We negotiate on channel count rather than
+    // matching the exact bitset so DAWs that offer non-standard speaker
+    // bundles (e.g. host-defined 8-channel arrangements) still work.
+    const Steinberg::int32 ch = SpeakerArr::getChannelCount(spk_arr);
+    const bool ok_ch = (ch == 2 || ch == 4 || ch == 6 || ch == 8
+                        || ch == 12 || ch == 16 || ch == 24);
+    if (!ok_ch) return Steinberg::kResultFalse;
+
+    out_bus0_arr_      = spk_arr;
+    out_bus0_channels_ = ch;
+    return Steinberg::kResultTrue;
 }
 
 Steinberg::tresult PLUGIN_API
-SpatialEngineProcessor::getBusArrangement(Steinberg::Vst::BusDirection /*dir*/,
-                                            Steinberg::int32 /*index*/,
+SpatialEngineProcessor::getBusArrangement(Steinberg::Vst::BusDirection dir,
+                                            Steinberg::int32 index,
                                             Steinberg::Vst::SpeakerArrangement& arr)
 {
-    arr = Steinberg::Vst::SpeakerArr::kStereo;
-    return Steinberg::kResultOk;
+    using namespace Steinberg::Vst;
+    if (dir == kInput) {
+        if (index != 0) return Steinberg::kInvalidArgument;
+        arr = SpeakerArr::kStereo;
+        return Steinberg::kResultOk;
+    }
+    if (dir == kOutput) {
+        if (index == 0) { arr = out_bus0_arr_;          return Steinberg::kResultOk; }
+        if (index == 1) { arr = SpeakerArr::kStereo;    return Steinberg::kResultOk; }
+    }
+    return Steinberg::kInvalidArgument;
 }
 
 Steinberg::tresult PLUGIN_API
@@ -753,19 +801,26 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
     //   of bypass state. Distinct from kBypass (dry pass-through, input→output).
     // kBypass (id=6, C2B postmortem S3): dry pass-through — input identity-copied.
     if (data.numSamples > 0) {
+        // Helper: zero all channels of one output bus.
+        auto zeroBus = [&](AudioBusBuffers& outBus) {
+            for (Steinberg::int32 ch = 0; ch < outBus.numChannels; ++ch) {
+                if (outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
+                    std::memset(outBus.channelBuffers32[ch], 0,
+                                static_cast<std::size_t>(data.numSamples) * sizeof(float));
+                }
+            }
+        };
+
         if (norm_values_[kMute].load(std::memory_order_acquire) >= 0.5f) {
-            // kMute=on: zero all output buffers, no audio output.
-            if (data.outputs && data.numOutputs > 0) {
-                AudioBusBuffers& outBus = data.outputs[0];
-                for (Steinberg::int32 ch = 0; ch < outBus.numChannels; ++ch) {
-                    if (outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
-                        std::memset(outBus.channelBuffers32[ch], 0,
-                                    static_cast<std::size_t>(data.numSamples) * sizeof(float));
-                    }
+            // kMute=on: zero ALL output buses (speakers + binaural side-bus).
+            if (data.outputs) {
+                for (Steinberg::int32 b = 0; b < data.numOutputs; ++b) {
+                    zeroBus(data.outputs[b]);
                 }
             }
         } else if (norm_values_[kBypass].load(std::memory_order_acquire) >= 0.5f) {
             // Bypass: dry pass-through — RT-safe, alloc=0, no mutex.
+            // Input → bus 0 (speakers), identity copy on min channels.
             if (data.inputs  && data.numInputs  > 0 &&
                 data.outputs && data.numOutputs > 0) {
                 const AudioBusBuffers& inBus  = data.inputs[0];
@@ -774,7 +829,6 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
                     (inBus.numChannels < outBus.numChannels)
                     ? inBus.numChannels : outBus.numChannels;
 
-                // Identity copy for min(in,out) channels
                 for (Steinberg::int32 ch = 0; ch < minCh; ++ch) {
                     if (inBus.channelBuffers32  && inBus.channelBuffers32[ch] &&
                         outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
@@ -783,7 +837,6 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
                                     static_cast<std::size_t>(data.numSamples) * sizeof(float));
                     }
                 }
-                // Zero remaining output channels (if outBus has more than inBus)
                 for (Steinberg::int32 ch = minCh; ch < outBus.numChannels; ++ch) {
                     if (outBus.channelBuffers32 && outBus.channelBuffers32[ch]) {
                         std::memset(outBus.channelBuffers32[ch], 0,
@@ -791,14 +844,66 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
                     }
                 }
             }
+            // Bus 1 (binaural) under bypass: emit -6 dB downmix of the dry
+            // bus-0 channels so users still hear a recognisable signal.
+            if (data.outputs && data.numOutputs >= 2) {
+                writeBinauralPlaceholder(data);
+            }
         } else if (active_) {
+            // Normal path — drive engine on bus 0 then fill bus 1 placeholder.
             spe::audio_io::AudioBlock block =
                 ProcessDataAdapter::adapt(data, sample_rate_);
             engine_->audioBlock(block);
+            if (data.outputs && data.numOutputs >= 2) {
+                writeBinauralPlaceholder(data);
+            }
+        } else {
+            // Inactive — make sure bus 1 (if present) is zeroed.
+            if (data.outputs && data.numOutputs >= 2) {
+                zeroBus(data.outputs[1]);
+            }
         }
     }
 
     return Steinberg::kResultOk;
+}
+
+// v0.4 P1 A7: -6 dB speaker→binaural downmix placeholder.
+// Until v0.5 wires real BinauralMonitor::process(), bus 1 emits the mono
+// sum of bus 0 channels 0+1 (×0.5 = -6 dB). When binaural is disabled
+// OR no .speh has been loaded, this is what the user hears on bus 1.
+//
+// Lives in the VST3 processor (NOT in the engine) so v0.5 can replace
+// this branch with a one-line engine call without re-touching processor
+// state-machine code.
+void SpatialEngineProcessor::writeBinauralPlaceholder(
+        Steinberg::Vst::ProcessData& data) noexcept
+{
+    using namespace Steinberg::Vst;
+    AudioBusBuffers& spk = data.outputs[0];
+    AudioBusBuffers& bin = data.outputs[1];
+    if (bin.numChannels < 2 || !bin.channelBuffers32) return;
+    float* binL = bin.channelBuffers32[0];
+    float* binR = bin.channelBuffers32[1];
+    if (!binL || !binR) return;
+
+    // Speaker channels 0 and 1 form the mono sum. If the speaker bus is
+    // mono or empty, fall back to whichever channel is available.
+    const float* sL = (spk.numChannels >= 1 && spk.channelBuffers32)
+        ? spk.channelBuffers32[0] : nullptr;
+    const float* sR = (spk.numChannels >= 2 && spk.channelBuffers32)
+        ? spk.channelBuffers32[1] : sL;
+    if (!sL) {
+        std::memset(binL, 0, static_cast<std::size_t>(data.numSamples) * sizeof(float));
+        std::memset(binR, 0, static_cast<std::size_t>(data.numSamples) * sizeof(float));
+        return;
+    }
+
+    for (Steinberg::int32 n = 0; n < data.numSamples; ++n) {
+        const float mix = 0.5f * (sL[n] + (sR ? sR[n] : 0.f));
+        binL[n] = mix;
+        binR[n] = mix;
+    }
 }
 
 Steinberg::uint32 PLUGIN_API SpatialEngineProcessor::getTailSamples()

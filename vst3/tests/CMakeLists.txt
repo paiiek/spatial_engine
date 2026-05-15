@@ -313,10 +313,35 @@ target_compile_definitions(test_vst3_state_v3_back_compat PRIVATE SPATIAL_ENGINE
 target_compile_options(test_vst3_state_v3_back_compat PRIVATE -UNDEBUG)
 add_test(NAME vst3_state_v3_back_compat COMMAND test_vst3_state_v3_back_compat)
 
+# ---- v0.4 P1: two-bus speaker + binaural arrangement negotiation ----------
+add_executable(test_vst3_bus_arrangement_speaker_binaural
+    test_vst3_bus_arrangement_speaker_binaural.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_bus_arrangement_speaker_binaural PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_bus_arrangement_speaker_binaural PRIVATE spe_core)
+target_compile_definitions(test_vst3_bus_arrangement_speaker_binaural PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_bus_arrangement_speaker_binaural PRIVATE -UNDEBUG)
+add_test(NAME vst3_bus_arrangement_speaker_binaural
+    COMMAND test_vst3_bus_arrangement_speaker_binaural)
+
+# ---- v0.4 P1: A7 -6 dB binaural-bus downmix placeholder --------------------
+add_executable(test_v04_binaural_bus_placeholder
+    test_v04_binaural_bus_placeholder.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_v04_binaural_bus_placeholder PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_v04_binaural_bus_placeholder PRIVATE spe_core)
+target_compile_definitions(test_v04_binaural_bus_placeholder PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_v04_binaural_bus_placeholder PRIVATE -UNDEBUG)
+add_test(NAME v04_binaural_bus_placeholder COMMAND test_v04_binaural_bus_placeholder)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
                      vst3_performedit_threadsafe vst3_state_v3_persist
                      vst3_state_v4_persist vst3_state_v3_to_v4_byte_identical
                      vst3_state_v3_back_compat
+                     vst3_bus_arrangement_speaker_binaural
+                     v04_binaural_bus_placeholder
                      PROPERTIES DEPENDS vst3_host_fixture)
