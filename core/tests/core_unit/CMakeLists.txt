@@ -66,6 +66,42 @@ add_executable(test_channel_map_duplicate_rejects test_channel_map_duplicate_rej
 target_link_libraries(test_channel_map_duplicate_rejects PRIVATE spe_core)
 add_test(NAME channel_map_duplicate_rejects COMMAND test_channel_map_duplicate_rejects)
 
+# v0.3.1 P1b — OSC per-channel routing via SpeakerLayout::channelToIndex().
+# Four merge-gate tests, one per affected handler. Each runs against the
+# reordered fixture {8,1,2,7,3,6,4,5} and asserts state lands on the
+# vector position whose YAML channel matches the wire channel.
+add_executable(test_osc_output_gain_reordered_channels
+    test_osc_output_gain_reordered_channels.cpp)
+target_link_libraries(test_osc_output_gain_reordered_channels PRIVATE spe_core)
+target_compile_definitions(test_osc_output_gain_reordered_channels PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME osc_output_gain_reordered_channels
+    COMMAND test_osc_output_gain_reordered_channels "${SPE_FIXTURES_DIR}")
+
+add_executable(test_osc_output_limit_reordered_channels
+    test_osc_output_limit_reordered_channels.cpp)
+target_link_libraries(test_osc_output_limit_reordered_channels PRIVATE spe_core)
+target_compile_definitions(test_osc_output_limit_reordered_channels PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME osc_output_limit_reordered_channels
+    COMMAND test_osc_output_limit_reordered_channels "${SPE_FIXTURES_DIR}")
+
+add_executable(test_osc_noise_type_reordered_channels
+    test_osc_noise_type_reordered_channels.cpp)
+target_link_libraries(test_osc_noise_type_reordered_channels PRIVATE spe_core)
+target_compile_definitions(test_osc_noise_type_reordered_channels PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME osc_noise_type_reordered_channels
+    COMMAND test_osc_noise_type_reordered_channels "${SPE_FIXTURES_DIR}")
+
+add_executable(test_osc_noise_gain_reordered_channels
+    test_osc_noise_gain_reordered_channels.cpp)
+target_link_libraries(test_osc_noise_gain_reordered_channels PRIVATE spe_core)
+target_compile_definitions(test_osc_noise_gain_reordered_channels PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME osc_noise_gain_reordered_channels
+    COMMAND test_osc_noise_gain_reordered_channels "${SPE_FIXTURES_DIR}")
+
 # RT-assert violation counting only meaningful when SPE_RT_ASSERTS is on.
 if(SPATIAL_ENGINE_RT_ASSERTS)
     add_executable(test_p1_rt_no_alloc test_p1_rt_no_alloc.cpp)

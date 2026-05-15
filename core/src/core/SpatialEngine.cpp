@@ -307,20 +307,27 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             case ipc::CommandTag::SysReset:
                 obj_cache_.fill(ObjCache{});
                 break;
-            case ipc::CommandTag::NoiseType:
-                if (qc.noise_ch < noise_chans_.size()) {
-                    noise_chans_[qc.noise_ch].pink = qc.noise_pink;
+            case ipc::CommandTag::NoiseType: {
+                // v0.3.1: wire channel is 1-based YAML channel. Translate via
+                // SpeakerLayout::channelToIndex() to the vector position; drop
+                // silently on unmapped channels (channelToIndex returns -1).
+                const int idx = layout_.channelToIndex(static_cast<int>(qc.noise_ch));
+                if (idx >= 0 && static_cast<size_t>(idx) < noise_chans_.size()) {
+                    noise_chans_[static_cast<size_t>(idx)].pink = qc.noise_pink;
                 }
                 break;
-            case ipc::CommandTag::NoiseGain:
-                if (qc.noise_ch < noise_chans_.size()) {
+            }
+            case ipc::CommandTag::NoiseGain: {
+                const int idx = layout_.channelToIndex(static_cast<int>(qc.noise_ch));
+                if (idx >= 0 && static_cast<size_t>(idx) < noise_chans_.size()) {
                     // -60 dB ≈ silent floor; convert dB → linear
                     const float g = (qc.noise_gain_db <= -60.f)
                         ? 0.f
                         : std::pow(10.f, qc.noise_gain_db / 20.f);
-                    noise_chans_[qc.noise_ch].gain_lin = g;
+                    noise_chans_[static_cast<size_t>(idx)].gain_lin = g;
                 }
                 break;
+            }
             case ipc::CommandTag::TransportPlay:
                 transport_play_.store(true, std::memory_order_relaxed);
                 break;
@@ -341,15 +348,25 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 ltc_chase_enable_.store(qc.ltc_chase_enable != 0,
                                         std::memory_order_relaxed);
                 break;
-            case ipc::CommandTag::OutputGain:
-                if (qc.output_ch < spk_gain_lin_.size())
-                    spk_gain_lin_[qc.output_ch] = std::pow(10.f, qc.output_value_db / 20.f);
+            case ipc::CommandTag::OutputGain: {
+                // v0.3.1: route by YAML channel via channel_to_idx_. Drop the
+                // command silently on unmapped channels — audio-thread cannot
+                // allocate/log without breaking RT contract.
+                const int idx = layout_.channelToIndex(static_cast<int>(qc.output_ch));
+                if (idx >= 0 && static_cast<size_t>(idx) < spk_gain_lin_.size()) {
+                    spk_gain_lin_[static_cast<size_t>(idx)] =
+                        std::pow(10.f, qc.output_value_db / 20.f);
+                }
                 break;
-            case ipc::CommandTag::OutputLimit:
-                if (qc.output_ch < spk_limiters_.size())
-                    spk_limiters_[qc.output_ch].setThreshold(
+            }
+            case ipc::CommandTag::OutputLimit: {
+                const int idx = layout_.channelToIndex(static_cast<int>(qc.output_ch));
+                if (idx >= 0 && static_cast<size_t>(idx) < spk_limiters_.size()) {
+                    spk_limiters_[static_cast<size_t>(idx)].setThreshold(
                         std::pow(10.f, qc.output_value_db / 20.f));
+                }
                 break;
+            }
             case ipc::CommandTag::ObjDsp:
                 switch (qc.dsp_param) {
                 case 0: c.eq_gain_db[0] = qc.dsp_value; break;

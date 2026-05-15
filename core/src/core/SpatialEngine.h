@@ -76,6 +76,28 @@ public:
     bool getLtcCurrentTimecode(spe::sync::Timecode& out) const noexcept {
         return ltc_chase_.getCurrentTimecode(out);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // v0.3.1 test introspection — per-speaker state by vector position.
+    // Used by OSC channel-routing tests to verify that wire channel N lands
+    // in the vector position whose YAML channel field is N. Not RT-safe;
+    // callers must avoid concurrent FIFO drains. Returns sentinel on OOB.
+    // ─────────────────────────────────────────────────────────────────────
+    float spkGainLinAt(size_t idx) const noexcept {
+        return (idx < spk_gain_lin_.size()) ? spk_gain_lin_[idx] : -1.f;
+    }
+    float spkLimiterThresholdAt(size_t idx) const noexcept {
+        return (idx < spk_limiters_.size()) ? spk_limiters_[idx].getThreshold() : -1.f;
+    }
+    float noiseGainLinAt(size_t idx) const noexcept {
+        return (idx < noise_chans_.size()) ? noise_chans_[idx].gain_lin : -1.f;
+    }
+    bool noisePinkAt(size_t idx) const noexcept {
+        return (idx < noise_chans_.size()) ? noise_chans_[idx].pink : false;
+    }
+    size_t spkGainLinSize()    const noexcept { return spk_gain_lin_.size(); }
+    size_t spkLimitersSize()   const noexcept { return spk_limiters_.size(); }
+    size_t noiseChansSize()    const noexcept { return noise_chans_.size(); }
     std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
