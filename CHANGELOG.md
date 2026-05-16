@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JUCE partitioned-convolution binaural path (v0.5 ships OlaConvolver
   only).
 
+### Fixed
+- **Playwright webgui test seed loops** (`ui/webgui/tests/playwright/`):
+  `seed_64_objs` / `seed_single_obj` / `test_fps_desktop` iterated
+  `for (i=1; i<=64; i++)`, but `canvas.js` declares `objects` as
+  `Array.from({length: MAX_OBJECTS})` (0-indexed, 0..63). Accesses to
+  `objects[64]` returned `undefined` and the JS injection threw
+  `TypeError: Cannot set properties of undefined`. Iteration now uses
+  `i=0..63`; production code unchanged.
+
 ### Notes for users
 - Bus 0 speaker audio is bit-identical to v0.4 for all canonical
   fixtures.
@@ -62,6 +71,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffers). MAX_IR_LEN = 1024 matches the SOFA loader's existing cap.
 - If `.speh` is not loaded or binaural is disabled, bus 1 keeps the
   v0.4 -6 dB downmix placeholder for diagnostic intelligibility.
+
+### Release validation (P6)
+- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **75/75 PASS**.
+  Includes all new v0.5 tests (`ola_convolver_loadinto_*`,
+  `kdtree3d_matches_brute_force`, `binaural_b1_64_objects_rt_safe`,
+  `b2_throughput_probe_fallback`, `vst3_state_v4_binaural_section`).
+- `python3 -m pytest`: **221 passed, 3 skipped, 0 failed** (full suite
+  including `ui/webgui/tests/playwright/`).
+- ASan + UBSan (NO_JUCE, `-fsanitize=address,undefined -O1 -g`): the
+  v0.5 binaural surface (`vst3_state_v4_binaural_section`,
+  `binaural_b1_64_objects_rt_safe`, `b2_throughput_probe_fallback`,
+  `ola_convolver_loadinto_*`, `vst3_state_v4_persist`,
+  `vst3_state_v3_back_compat`, `vst3_dispatch_rt_safety`) is **clean**.
+  Two pre-existing ASan failures (`vst3_intra_plugin_spsc_drain`,
+  `vst3_console_flood`) emit `munmap_chunk(): invalid pointer` during
+  subprocess shutdown — Steinberg SDK static-destruction order with
+  ASan-tracked UDP socket teardown. Both tests pass under the regular
+  build. The failures pre-date v0.5 (introduced by C4-S3 commit
+  `12be2f0` and C4-S2.6 commit `94a6e9a`) and are scheduled for v0.6
+  ASan-cleanup work; they do not touch the binaural code path.
 
 ## [0.4.0] — 2026-05-15
 

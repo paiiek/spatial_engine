@@ -53,12 +53,12 @@ SEED_64_OBJ_JS = """
     // simulating a WsClient.onMessage call.
     return { ok: false, reason: 'objects symbol unreachable' };
   }
-  for (let i = 1; i <= 64; i++) {
+  for (let i = 0; i < 64; i++) {
     objects[i].active = true;
-    objects[i].azim = ((i - 1) * 5.625) % 360;       // 0..360, deterministic
+    objects[i].azim = (i * 5.625) % 360;             // 0..360, deterministic
     if (objects[i].azim > 180) objects[i].azim -= 360; // normalise to -180..180
-    objects[i].elev = ((i % 9) - 4) * 5;             // -20..+20
-    objects[i].dist = 0.3 + ((i % 8) * 0.08);        // 0.3..0.86
+    objects[i].elev = (((i + 1) % 9) - 4) * 5;       // -20..+20
+    objects[i].dist = 0.3 + (((i + 1) % 8) * 0.08);  // 0.3..0.86
   }
   return { ok: true, n: 64 };
 }
@@ -120,12 +120,12 @@ async def _seed_64(page) -> dict:
         const objs = (0, eval)('typeof objects !== "undefined" ? objects : null');
         if (!objs) return { ok: false, reason: 'objects unreachable in eval' };
         window.__forceSeedObjects = (n) => {
-          for (let i = 1; i <= n; i++) {
+          for (let i = 0; i < n; i++) {
             objs[i].active = true;
-            objs[i].azim = ((i - 1) * 5.625) % 360;
+            objs[i].azim = (i * 5.625) % 360;
             if (objs[i].azim > 180) objs[i].azim -= 360;
-            objs[i].elev = ((i % 9) - 4) * 5;
-            objs[i].dist = 0.3 + ((i % 8) * 0.08);
+            objs[i].elev = (((i + 1) % 9) - 4) * 5;
+            objs[i].dist = 0.3 + (((i + 1) % 8) * 0.08);
           }
         };
         window.__forceSeedObjects(64);

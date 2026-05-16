@@ -38,12 +38,12 @@ _SEED_DIRECT_JS = """
   if (typeof objects === 'undefined') {
     return { ok: false, reason: 'objects symbol unreachable' };
   }
-  for (let i = 1; i <= 64; i++) {
+  for (let i = 0; i < 64; i++) {
     objects[i].active = true;
-    objects[i].azim = ((i - 1) * 5.625) % 360;
+    objects[i].azim = (i * 5.625) % 360;
     if (objects[i].azim > 180) objects[i].azim -= 360;
-    objects[i].elev = ((i % 9) - 4) * 5;
-    objects[i].dist = 0.3 + ((i % 8) * 0.08);
+    objects[i].elev = (((i + 1) % 9) - 4) * 5;
+    objects[i].dist = 0.3 + (((i + 1) % 8) * 0.08);
   }
   return { ok: true, n: 64, via: 'direct' };
 }
@@ -60,12 +60,12 @@ _SEED_EVAL_FALLBACK_JS = """
     const objs = (0, eval)('typeof objects !== "undefined" ? objects : null');
     if (!objs) return { ok: false, reason: 'objects unreachable in eval' };
     window.__forceSeedObjects = (n) => {
-      for (let i = 1; i <= n; i++) {
+      for (let i = 0; i < n; i++) {
         objs[i].active = true;
-        objs[i].azim = ((i - 1) * 5.625) % 360;
+        objs[i].azim = (i * 5.625) % 360;
         if (objs[i].azim > 180) objs[i].azim -= 360;
-        objs[i].elev = ((i % 9) - 4) * 5;
-        objs[i].dist = 0.3 + ((i % 8) * 0.08);
+        objs[i].elev = (((i + 1) % 9) - 4) * 5;
+        objs[i].dist = 0.3 + (((i + 1) % 8) * 0.08);
       }
     };
     window.__forceSeedObjects(64);
@@ -100,7 +100,7 @@ async def seed_single_obj(page, obj_id: int, azim_deg: float, elev_deg: float, d
     js = f"""
     () => {{
       const place = (objs) => {{
-        for (let i = 1; i <= 64; i++) objs[i].active = false;
+        for (let i = 0; i < 64; i++) objs[i].active = false;
         const o = objs[{int(obj_id)}];
         o.active = true;
         o.azim = {float(azim_deg)};
