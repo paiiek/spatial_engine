@@ -195,6 +195,9 @@ class OscSink:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", self.port))
+        # When port==0 the OS assigns an ephemeral port; record the actual port
+        # so callers can route traffic correctly and report it.
+        self.actual_port: int = self.sock.getsockname()[1]
         self.sock.settimeout(0.5)
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="osc-sink-9100")
@@ -486,6 +489,7 @@ async def _run(args: argparse.Namespace) -> dict:
         "fault_injections": 0,
         "ws_counters": counters,
         "osc_sink_recv_count": 0,
+        "osc_sink_port_actual": 0,
         "dry_run": bool(args.dry_run),
     }
 
@@ -567,6 +571,7 @@ async def _run(args: argparse.Namespace) -> dict:
             _stop_uvicorn(proc)
         sink.close()
         report["osc_sink_recv_count"] = sink.recv_count
+        report["osc_sink_port_actual"] = getattr(sink, "actual_port", args.osc_sink_port)
         report["duration_actual_s"] = round(
             time.monotonic() - start_mono, 3
         )

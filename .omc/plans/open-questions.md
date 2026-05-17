@@ -128,3 +128,9 @@ Round-2 Critic R1 review applied 4 CRITICAL + 4 MAJOR + 2 MINOR fixes. M2HOA-Q i
 - [x] **WGUI-Q4 (CLOSED Round-2)**: 매뉴얼 챕터 번호 — Ch.6 (`docs/manual_kr/CH6_WEBGUI.md`), Ch.5는 VST3 + ADM-OSC 직결 모드 (기존 commit `a492ef9`).
 - [x] **WGUI-Q5 (CLOSED Round-2)**: 실기 smoke 게이트 강도 — emulation (iPhone 13 + Pixel 5 playwright)으로 본 sprint G2/G4 게이트 충족 가능. 실제 단말 G8은 conditional / out-of-scope (Phase 0 MOU 필요).
 - [x] **WGUI-Q6 (CLOSED S4, commit 2de8e93)**: G4 ±2° 좌표 정밀도 — S4 playwright desktop emulation 실측 결과 **azim diff = 0.0946°** (보수 상한 2° 대비 21배 여유). 2° 상한 유지 (relax 불필요). derivation: 32-bit float wire + canvas 1px ≈ 0.5° @ 720px → 측정값이 이론치 안에 들어옴.
+
+## spatial-engine-v0.5.1-binaural-hotfix - 2026-05-16
+
+- [ ] **V051-OQ1 (Q1 telemetry cadence):** `/sys/binaural_status` 1 Hz on the existing heartbeat tick vs 0.2 Hz on a slower dedicated cadence — affects DAW log noise vs failure-detection latency. Planner default: 1 Hz. Architect to confirm or override during ralplan review.
+- [ ] **V051-OQ2 (Q5 commitment level):** Runtime sticky-underrun auto-demote — keep as stretch (land only if Q1–Q4 finish with budget remaining) vs promote to a committed Q5 phase. Planner default: stretch. Architect to decide based on cycle tolerance.
+- [ ] **V051-OQ3 (Q3 documentation surface):** SOFA-missing fallback note — `docs/USER_GUIDE.md` (if it exists) vs v0.5.1 release notes only vs both. Affects integrator-facing communication surface for the silence + warning behaviour change.

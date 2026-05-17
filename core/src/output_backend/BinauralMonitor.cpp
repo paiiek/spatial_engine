@@ -16,6 +16,19 @@ BinauralMonitor::InitResult BinauralMonitor::initialize(const Config& cfg)
     block_size_  = std::min(cfg.blockSize, MAX_BLOCK);
     sample_rate_ = cfg.sampleRate;
 
+    // Q2 — pre-compute linear ramp envelopes once block_size_ is known.
+    // Recomputed on every initialize() so block-size changes propagate.
+    buildXfadeEnvelopes();
+    // Reset audio-thread-local crossfade state to a known steady value so a
+    // re-initialise (e.g. SOFA path change) does not strand an in-flight ramp.
+    prev_effective_mode_         = effective_mode_.load(std::memory_order_acquire);
+    xfade_blocks_remaining_      = 0;
+    xfade_total_blocks_          = 0;
+    outgoing_mode_               = prev_effective_mode_;
+    incoming_mode_               = prev_effective_mode_;
+    xfade_blocks_remaining_atomic_.store(0, std::memory_order_release);
+    xfade_truncated_pending_.store(false, std::memory_order_release);
+
     if (cfg.sofaPath.empty()) {
         // Pass-through mode: do NOT prime per-object slots. processBlockForObject
         // becomes a no-op writer for unprimed slots, processBlock falls back to
@@ -427,6 +440,122 @@ const float* BinauralMonitor::b2HrirRight(int vs_idx) const noexcept
     if (vs_idx < 0 || vs_idx >= kNumVirtualSpeakers || !b2_initialized_)
         return nullptr;
     return vs_hrir_R_[static_cast<std::size_t>(vs_idx)].data();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v0.5.1 Q2 — A3 mode-transition crossfade.
+// ─────────────────────────────────────────────────────────────────────────
+
+void BinauralMonitor::buildXfadeEnvelopes() noexcept
+{
+    // Defensive: zero-fill the envelope arrays so unused tail samples (beyond
+    // total_blocks * block_size_) remain at 0 even if the caller indexes
+    // past the live ramp window.
+    xfade_inc_env_1_.fill(0.f);
+    xfade_out_env_1_.fill(0.f);
+    xfade_inc_env_2_.fill(0.f);
+    xfade_out_env_2_.fill(0.f);
+
+    const int bs = block_size_;
+    if (bs <= 0 || bs > MAX_BLOCK) {
+        xfade_envelopes_built_ = false;
+        return;
+    }
+
+    // total_blocks = 1: linear ramp 0 → 1 over bs samples.
+    // Convention: env[n] = (n + 1) / N where N = total_samples. This avoids
+    // the degenerate env[0] = 0 case (which would zero out the first block's
+    // incoming branch sample) while still summing to 1 with the outgoing
+    // complement (env_out[n] = 1 - env_in[n]).
+    {
+        const int N = bs;
+        for (int n = 0; n < N; ++n) {
+            const float inc = static_cast<float>(n + 1) / static_cast<float>(N);
+            xfade_inc_env_1_[static_cast<std::size_t>(n)] = inc;
+            xfade_out_env_1_[static_cast<std::size_t>(n)] = 1.f - inc;
+        }
+    }
+    // total_blocks = 2: linear ramp across 2 * bs samples.
+    {
+        const int N = 2 * bs;
+        for (int n = 0; n < N; ++n) {
+            const float inc = static_cast<float>(n + 1) / static_cast<float>(N);
+            xfade_inc_env_2_[static_cast<std::size_t>(n)] = inc;
+            xfade_out_env_2_[static_cast<std::size_t>(n)] = 1.f - inc;
+        }
+    }
+
+    xfade_envelopes_built_ = true;
+}
+
+BinauralMonitor::XfadeStep BinauralMonitor::observeAndArmXfade() noexcept
+{
+    XfadeStep step{};
+    const int effective = effective_mode_.load(std::memory_order_acquire);
+
+    if (xfade_blocks_remaining_ == 0 && effective != prev_effective_mode_) {
+        // Arm a new ramp. Truncate to 1 block when the probe has surfaced a
+        // CPU-warning condition (saves dual-branch render cost at the price
+        // of a residual click — surfaced via xfade_truncated_pending_).
+        const bool warn =
+            probe_warning_set_.load(std::memory_order_acquire);
+        const int total = warn ? 1 : kXfadeBlocksDefault;
+        outgoing_mode_           = prev_effective_mode_;
+        incoming_mode_           = effective;
+        xfade_total_blocks_      = total;
+        xfade_blocks_remaining_  = total;
+        xfade_blocks_remaining_atomic_.store(total, std::memory_order_release);
+        if (total == 1) {
+            xfade_truncated_pending_.store(true, std::memory_order_release);
+        }
+    }
+
+    if (xfade_blocks_remaining_ > 0) {
+        step.active           = true;
+        step.outgoing         = static_cast<BinauralMode>(outgoing_mode_);
+        step.incoming         = static_cast<BinauralMode>(incoming_mode_);
+        step.steady           = step.incoming;
+        step.total_blocks     = xfade_total_blocks_;
+        step.blocks_remaining = xfade_blocks_remaining_;
+        step.block_index      = xfade_total_blocks_ - xfade_blocks_remaining_;
+    } else {
+        step.active           = false;
+        step.outgoing         = static_cast<BinauralMode>(prev_effective_mode_);
+        step.incoming         = static_cast<BinauralMode>(prev_effective_mode_);
+        step.steady           = step.outgoing;
+        step.total_blocks     = 0;
+        step.blocks_remaining = 0;
+        step.block_index      = 0;
+    }
+    return step;
+}
+
+void BinauralMonitor::finalizeXfadeBlock() noexcept
+{
+    if (xfade_blocks_remaining_ > 0) {
+        --xfade_blocks_remaining_;
+        xfade_blocks_remaining_atomic_.store(xfade_blocks_remaining_,
+                                             std::memory_order_release);
+        if (xfade_blocks_remaining_ == 0) {
+            prev_effective_mode_ = incoming_mode_;
+        }
+    }
+}
+
+const float* BinauralMonitor::xfadeIncomingEnvelope(int total_blocks) const noexcept
+{
+    if (!xfade_envelopes_built_) return nullptr;
+    if (total_blocks == 1) return xfade_inc_env_1_.data();
+    if (total_blocks == kXfadeBlocksDefault) return xfade_inc_env_2_.data();
+    return nullptr;
+}
+
+const float* BinauralMonitor::xfadeOutgoingEnvelope(int total_blocks) const noexcept
+{
+    if (!xfade_envelopes_built_) return nullptr;
+    if (total_blocks == 1) return xfade_out_env_1_.data();
+    if (total_blocks == kXfadeBlocksDefault) return xfade_out_env_2_.data();
+    return nullptr;
 }
 
 void BinauralMonitor::processBlockB2(const float* const* sh_planar,

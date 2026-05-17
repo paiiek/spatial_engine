@@ -317,6 +317,15 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         cmd.tag = CommandTag::SysHandshake;
         PayloadSysHandshake p;
         p.client_schema_version = static_cast<uint16_t>(getInt(0));
+        // v0.5.1 Q1 (WM-2) — optional reply_port int. When absent (legacy
+        // clients) getInt() returns 0, which the engine interprets as
+        // "reply to the sender's source port" via the recvfrom()-captured
+        // endpoint. When present and valid (>0), the engine targets that
+        // explicit port on the same host.
+        const int32_t rp = getInt(1);
+        if (rp > 0 && rp <= 65535) {
+            p.reply_port = static_cast<uint16_t>(rp);
+        }
         cmd.payload = p;
     } else if (addr == "/sys/algo_swap") {
         cmd.tag = CommandTag::SysAlgoSwap;
@@ -670,6 +679,12 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         addr = "/sys/handshake";
         auto& p = std::get<PayloadSysHandshake>(cmd.payload);
         add_i(static_cast<int32_t>(p.client_schema_version));
+        // v0.5.1 Q1 (WM-2) — additive reply_port int. Only emit when set
+        // so legacy single-int encoders/decoders stay byte-identical for
+        // the common (reply_port==0) case.
+        if (p.reply_port != 0) {
+            add_i(static_cast<int32_t>(p.reply_port));
+        }
         break;
     }
     case CommandTag::SysAlgoSwap: {

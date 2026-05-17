@@ -73,11 +73,39 @@ public:
     // Runs the synthetic 24-fan-out throughput bench; on insufficient
     // CPU headroom (<1.5x RT) clamps effectiveBinauralMode() to Direct
     // and surfaces binauralProbeWarningCode() == "ambivs_disabled_cpu".
-    // TODO(A2): emit the /sys/binaural_warning OSC reply when an outbound
-    //   channel is wired (separate patch).
-    float triggerBinauralProbe() {
-        return binaural_.runThroughputProbe();
+    // v0.5.1 Q1 (A2 resolution): after the clamp, emit
+    //   /sys/binaural_warning ,sf "ambivs_disabled_cpu" <throughput>
+    // through the OSC outbound reply channel. Drops silently if no client
+    // has talked to us yet (no captured peer endpoint).
+    float triggerBinauralProbe();
+
+    // v0.5.1 Q1 — engine-level forwarder for binaural-bus telemetry. Lets
+    // the VST3 heartbeat tick read the failure counter without taking a
+    // direct dependency on BinauralMonitor.
+    std::uint64_t loadIntoFailuresCount() const noexcept {
+        return binaural_.loadIntoFailures();
     }
+
+    // v0.5.1 Q2 — engine-level forwarder for the mode-transition crossfade
+    // truncation telemetry. Audio thread sets the flag in BinauralMonitor
+    // when a ramp is armed with kXfadeBlocks=1 (probe-clamped CPU
+    // truncation); the IO-thread heartbeat (1 Hz) drains the flag via
+    // this forwarder and emits /sys/binaural_warning ,s "xfade_truncated_cpu".
+    bool binauralDrainXfadeTruncatedPending() noexcept {
+        return binaural_.drainXfadeTruncatedPending();
+    }
+
+    // v0.5.1 Q2 — engine-level forwarder. Test/heartbeat-only visibility into
+    // whether a B1↔B2 ramp is currently in flight on the audio thread.
+    bool binauralXfadeActive() const noexcept {
+        return binaural_.xfadeActive();
+    }
+
+    // v0.5.1 Q1 — test-only hook: inject a synthetic probe throughput and
+    // emit the matching /sys/binaural_warning if the injected value forces
+    // a B2→B1 fallback. Used exclusively by the soak harness CLI flag
+    // `--inject-probe-throughput`. NOT for production callers.
+    void injectProbeThroughputAndEmit(float throughput_rt);
 
     const std::string& layoutPath()         const noexcept { return layout_path_; }
     const std::string& binauralSofaPath()   const noexcept { return binaural_sofa_path_; }
@@ -156,6 +184,11 @@ public:
     }
     const float* binauralR() const noexcept {
         return binaural_ok_ && binaural_.hasHrtf() ? binaural_r_buf_.data() : nullptr;
+    }
+    // v0.5.1 Q1 — true iff a .speh has loaded HRTF data. Used by VST3
+    // process() to decide whether to emit the "no_sofa_loaded" warning.
+    bool binauralHasHrtf() const noexcept {
+        return binaural_ok_ && binaural_.hasHrtf();
     }
 
 private:
@@ -248,6 +281,17 @@ private:
     // b2_sh_ptrs_ point into b2_sh_scratch_ and are passed to processBlockB2().
     std::array<std::array<float, MAX_BLOCK>, 16> b2_sh_scratch_{};
     std::array<const float*, 16>                 b2_sh_ptrs_{};
+
+    // v0.5.1 Q2 (A3) — outgoing / incoming branch scratch buffers for the
+    // B1↔B2 mode-transition crossfade. Pre-allocated MAX_BLOCK each (no heap
+    // touch on the audio thread). Used ONLY when BinauralMonitor's xfade is
+    // active: the engine renders both branches into these, then envelope-mixes
+    // into binaural_l_buf_ / binaural_r_buf_. In steady state these stay
+    // untouched.
+    std::array<float, MAX_BLOCK> bin_xfade_out_L_{};
+    std::array<float, MAX_BLOCK> bin_xfade_out_R_{};
+    std::array<float, MAX_BLOCK> bin_xfade_in_L_{};
+    std::array<float, MAX_BLOCK> bin_xfade_in_R_{};
 
     std::atomic<bool>          prepared_{false};
     std::atomic<bool>          render_ready_{false};

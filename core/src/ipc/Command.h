@@ -106,6 +106,11 @@ struct PayloadObjAlgo {
 
 struct PayloadSysHandshake {
     uint16_t client_schema_version = SCHEMA_VERSION;
+    // v0.5.1 Q1 (WM-2): optional client reply port. When 0 (default), the
+    // engine replies to the sender's source UDP port (captured via
+    // recvfrom()). Additive — old clients ship reply_port=0 and still
+    // receive replies via the source-port fallback.
+    uint16_t reply_port = 0;
 };
 
 struct PayloadSysAlgoSwap {
@@ -296,12 +301,22 @@ enum class ReplyTag : uint8_t {
     Warning          = 0x04, // /sys/warning
     Error            = 0x05, // /sys/error  (generic)
     HeartbeatMiss    = 0x06, // /sys/heartbeat_miss
+    // v0.5.1 Q1 — typed engine→client telemetry channels.
+    BinauralWarning  = 0x07, // /sys/binaural_warning  ,s | ,sf
+    BinauralStatus   = 0x08, // /sys/binaural_status   ,i  (1 Hz heartbeat)
 };
 
 struct Reply {
     ReplyTag    tag     = ReplyTag::Error;
     uint32_t    seq     = 0;
-    std::string message; // human-readable detail
+    std::string message; // human-readable detail (existing Warning/Error users)
+    // v0.5.1 Q1 — optional typed payload for BinauralWarning (warning code
+    // string + optional throughput) and BinauralStatus (int counter). The
+    // existing message-based Warning/Error path is untouched; consumers that
+    // do not read these fields are unaffected.
+    std::string code;            // e.g. "ambivs_disabled_cpu", "no_sofa_loaded"
+    float       float_payload = 0.f;
+    int32_t     int_payload   = 0;
 };
 
 } // namespace spe::ipc

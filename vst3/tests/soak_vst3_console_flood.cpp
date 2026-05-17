@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -333,5 +334,9 @@ int main()
 
     std::printf("[soak_vst3_console_flood] PASS — A.10 p50=%.2f ms, p99=%.2f ms, alloc=0\n",
                 p50, p99);
-    return 0;
+    // ASan workaround: Steinberg SDK static dtor raises glibc SIGABRT
+    // (munmap_chunk: invalid pointer) before ASan's exit handler runs.
+    // quick_exit(0) skips static destruction; per-allocation ASan tracking
+    // during the test body is unaffected. See docs/CI_QUARANTINE.md.
+    std::quick_exit(0);
 }

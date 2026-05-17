@@ -174,6 +174,7 @@ target_include_directories(test_vst3_intra_plugin_spsc_drain PRIVATE
 )
 target_compile_options(test_vst3_intra_plugin_spsc_drain PRIVATE -UNDEBUG -fno-lto)
 add_test(NAME vst3_intra_plugin_spsc_drain COMMAND test_vst3_intra_plugin_spsc_drain)
+# Note: test binary calls std::quick_exit(0) to avoid Steinberg SDK static-dtor SIGABRT under ASan. See docs/CI_QUARANTINE.md.
 
 # ---- test_vst3_spsc_ring_overrun (S3 overrun policy) -----------------------
 add_executable(test_vst3_spsc_ring_overrun
@@ -259,6 +260,7 @@ target_compile_definitions(soak_vst3_console_flood PRIVATE
 )
 target_compile_options(soak_vst3_console_flood PRIVATE -UNDEBUG -fno-lto)
 add_test(NAME vst3_console_flood COMMAND soak_vst3_console_flood)
+# Note: soak binary calls std::quick_exit(0) to avoid Steinberg SDK static-dtor SIGABRT under ASan. See docs/CI_QUARANTINE.md.
 set_tests_properties(vst3_console_flood PROPERTIES
     TIMEOUT 30
     LABELS "perf"
@@ -347,6 +349,17 @@ target_compile_definitions(test_v04_binaural_bus_placeholder PRIVATE SPATIAL_ENG
 target_compile_options(test_v04_binaural_bus_placeholder PRIVATE -UNDEBUG)
 add_test(NAME v04_binaural_bus_placeholder COMMAND test_v04_binaural_bus_placeholder)
 
+# ---- v0.5.1 Q3: active-path no-SOFA mute + /sys/binaural_warning latch -----
+add_executable(test_writebinaural_no_sofa_muted
+    test_writebinaural_no_sofa_muted.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_writebinaural_no_sofa_muted PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_writebinaural_no_sofa_muted PRIVATE spe_core)
+target_compile_definitions(test_writebinaural_no_sofa_muted PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_writebinaural_no_sofa_muted PRIVATE -UNDEBUG)
+add_test(NAME writebinaural_no_sofa_muted COMMAND test_writebinaural_no_sofa_muted)
+
 # ---- v0.4 P2: state persists layout path ------------------------------------
 add_executable(test_vst3_state_persists_layout_path
     test_vst3_state_persists_layout_path.cpp
@@ -390,6 +403,17 @@ target_compile_definitions(test_vst3_state_persists_sofa_path PRIVATE SPATIAL_EN
 target_compile_options(test_vst3_state_persists_sofa_path PRIVATE -UNDEBUG)
 add_test(NAME vst3_state_persists_sofa_path COMMAND test_vst3_state_persists_sofa_path)
 
+# ---- v0.5.1 Q1 heartbeat shutdown fast (condvar wakeup) --------------------
+add_executable(test_vst3_heartbeat_shutdown_fast
+    test_vst3_heartbeat_shutdown_fast.cpp
+    ${PLUGIN_SRCS}
+)
+target_include_directories(test_vst3_heartbeat_shutdown_fast PRIVATE ${VST3_TEST_INCLUDES})
+target_link_libraries(test_vst3_heartbeat_shutdown_fast PRIVATE spe_core)
+target_compile_definitions(test_vst3_heartbeat_shutdown_fast PRIVATE SPATIAL_ENGINE_VST3_BUILD=1)
+target_compile_options(test_vst3_heartbeat_shutdown_fast PRIVATE -UNDEBUG)
+add_test(NAME vst3_heartbeat_shutdown_fast COMMAND test_vst3_heartbeat_shutdown_fast)
+
 # ---- ctest dependency chain (AM-R3-9) --------------------------------------
 set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_safety
                      vst3_bypass vst3_state_persist vst3_state_v3_reader_only
@@ -399,7 +423,9 @@ set_tests_properties(vst3_param_layout vst3_param_roundtrip vst3_dispatch_rt_saf
                      vst3_state_v3_back_compat
                      vst3_bus_arrangement_speaker_binaural
                      v04_binaural_bus_placeholder
+                     writebinaural_no_sofa_muted
                      vst3_state_persists_layout_path
                      vst3_setup_processing_applies_layout
                      vst3_state_persists_sofa_path
+                     vst3_heartbeat_shutdown_fast
                      PROPERTIES DEPENDS vst3_host_fixture)

@@ -147,6 +147,27 @@ add_executable(test_p4_handshake test_p4_handshake.cpp)
 target_link_libraries(test_p4_handshake PRIVATE spe_core)
 add_test(NAME p4_handshake COMMAND test_p4_handshake)
 
+# v0.5.1 Q1 — OSC outbound reply channel end-to-end smoke test.
+# Binds a loopback client, sends a handshake into OSCBackend (which
+# captures the sender via recvfrom()), drives sendReply() from the
+# control thread, asserts the packet arrives back within 200 ms.
+# Runs 10 consecutive rounds on ephemeral ports (WM-2 legacy-client path).
+add_executable(test_osc_outbound_reply_smoke test_osc_outbound_reply_smoke.cpp)
+target_link_libraries(test_osc_outbound_reply_smoke PRIVATE spe_core Threads::Threads)
+add_test(NAME osc_outbound_reply_smoke COMMAND test_osc_outbound_reply_smoke)
+
+# v0.5.1 Q1 — binaural probe → /sys/binaural_warning emission test.
+# Injects a synthetic low-throughput result, drives the warning emission
+# path, asserts the client receives the ,sf "ambivs_disabled_cpu" packet.
+add_executable(test_binaural_probe_warning_emission
+    test_binaural_probe_warning_emission.cpp)
+target_link_libraries(test_binaural_probe_warning_emission PRIVATE
+    spe_core Threads::Threads)
+target_compile_definitions(test_binaural_probe_warning_emission PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME binaural_probe_warning_emission
+    COMMAND test_binaural_probe_warning_emission)
+
 add_executable(test_p4_command_decode test_p4_command_decode.cpp)
 target_link_libraries(test_p4_command_decode PRIVATE spe_core)
 add_test(NAME p4_command_decode COMMAND test_p4_command_decode)
@@ -375,6 +396,12 @@ target_link_libraries(test_kdtree3d_query_rt_safe PRIVATE spe_core spe_util)
 add_test(NAME kdtree3d_query_rt_safe
     COMMAND test_kdtree3d_query_rt_safe)
 
+add_executable(test_kdtree3d_8_canonical_directions
+    test_kdtree3d_8_canonical_directions.cpp)
+target_link_libraries(test_kdtree3d_8_canonical_directions PRIVATE spe_core)
+add_test(NAME kdtree3d_8_canonical_directions
+    COMMAND test_kdtree3d_8_canonical_directions)
+
 # ─────────────────────────────────────────────────────────────────────────
 # v0.5 P1 — BinauralMonitor double-buffer + crossfade tests
 # Use the committed synthetic_min.speh fixture for the .speh path.
@@ -464,3 +491,67 @@ target_compile_definitions(test_b2_ambivs_equivalent_to_b1_at_order3 PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME b2_ambivs_equivalent_to_b1_at_order3
     COMMAND test_b2_ambivs_equivalent_to_b1_at_order3)
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5.1 Q2 (A3) — B1↔B2 mode-transition crossfade tests.
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(test_b1_b2_mode_transition_smooth
+    test_b1_b2_mode_transition_smooth.cpp)
+target_link_libraries(test_b1_b2_mode_transition_smooth PRIVATE spe_core)
+target_compile_definitions(test_b1_b2_mode_transition_smooth PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b1_b2_mode_transition_smooth
+    COMMAND test_b1_b2_mode_transition_smooth)
+
+add_executable(test_b1_b2_mode_transition_probe_clamped
+    test_b1_b2_mode_transition_probe_clamped.cpp)
+target_link_libraries(test_b1_b2_mode_transition_probe_clamped PRIVATE spe_core)
+target_compile_definitions(test_b1_b2_mode_transition_probe_clamped PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b1_b2_mode_transition_probe_clamped
+    COMMAND test_b1_b2_mode_transition_probe_clamped)
+
+# ─────────────────────────────────────────────────────────────────────────
+# v0.5.1 hotfix — post-validation must-fix regression tests.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Fix 1 (code-reviewer MAJOR): xfade arm-skip on disable→re-enable. Ensures
+# prev_effective_mode_ stays in lock-step while binaural is disabled so
+# the first re-enabled block does NOT arm a phantom ramp.
+add_executable(test_b1_b2_mode_transition_disable_reenable
+    test_b1_b2_mode_transition_disable_reenable.cpp)
+target_link_libraries(test_b1_b2_mode_transition_disable_reenable
+    PRIVATE spe_core)
+target_compile_definitions(test_b1_b2_mode_transition_disable_reenable PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b1_b2_mode_transition_disable_reenable
+    COMMAND test_b1_b2_mode_transition_disable_reenable)
+
+# Fix 2 + Fix 3 (security H1 + M1): overridePeerPort validation +
+# capture-peer-only-on-valid-decode.
+add_executable(test_osc_security_peer_validation
+    test_osc_security_peer_validation.cpp)
+target_link_libraries(test_osc_security_peer_validation
+    PRIVATE spe_core Threads::Threads)
+add_test(NAME osc_security_peer_validation
+    COMMAND test_osc_security_peer_validation)
+
+# Fix 4 (code-MINOR): multi-producer SPSC ring safety. Stress 3 producers x
+# 1000 iters and verify sent+drops accounting + payload integrity.
+add_executable(test_osc_outbound_multi_producer
+    test_osc_outbound_multi_producer.cpp)
+target_link_libraries(test_osc_outbound_multi_producer
+    PRIVATE spe_core Threads::Threads)
+add_test(NAME osc_outbound_multi_producer
+    COMMAND test_osc_outbound_multi_producer)
+
+# v0.5.1 final polish (Sec H2): default OSC bind is loopback (127.0.0.1).
+# Asserts: (a) no setBindAddr() call leaves the listener on 127.0.0.1,
+# (b) explicit "0.0.0.0" still binds the wildcard, (c) invalid bind strings
+# fall back to loopback with a stderr warning.
+add_executable(test_osc_bind_loopback_default
+    test_osc_bind_loopback_default.cpp)
+target_link_libraries(test_osc_bind_loopback_default
+    PRIVATE spe_core Threads::Threads)
+add_test(NAME osc_bind_loopback_default
+    COMMAND test_osc_bind_loopback_default)

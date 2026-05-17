@@ -17,6 +17,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 static int failures = 0;
@@ -128,5 +129,9 @@ int main()
 
     std::printf("test_vst3_intra_plugin_spsc_drain: %s (%d recv, alloc_total=%zu)\n",
                 failures == 0 ? "PASS" : "FAIL", received, alloc_total);
-    return failures == 0 ? 0 : 1;
+    // ASan workaround: Steinberg SDK static dtor raises glibc SIGABRT
+    // (munmap_chunk: invalid pointer) before ASan's exit handler runs.
+    // quick_exit(0) skips static destruction; per-allocation ASan tracking
+    // during the test body is unaffected. See docs/CI_QUARANTINE.md.
+    std::quick_exit(failures == 0 ? 0 : 1);
 }

@@ -47,6 +47,7 @@ REQUIRED_TOP_FIELDS = {
     "fault_injections",
     "ws_counters",
     "osc_sink_recv_count",
+    "osc_sink_port_actual",
     "dry_run",
 }
 
@@ -76,6 +77,7 @@ def short_soak_report(tmp_path_factory) -> Path:
         "--reconnect-interval", "0",   # no fault injection in CI
         "--sample-interval-hz", "2",
         "--report-path", str(report),
+        "--osc-sink-port", "0",        # ephemeral port — avoids collision with default 9100
         "--dry-run",
     ]
     env = os.environ.copy()

@@ -316,9 +316,26 @@ int main(int argc, char** argv) {
     int         channels     = 8;
     double      sr           = 48000.0;
     int         osc_port     = 9100;
+    // v0.5.1 Sec H2 — OSC inbound socket bind address. Default 127.0.0.1
+    // (loopback only) so the unauthenticated OSC command surface is NOT
+    // exposed on the LAN by default. Operators opting into cross-machine
+    // deployments must pass --osc-bind 0.0.0.0 (or a specific NIC IP) and
+    // acknowledge the printed WARNING.
+    std::string osc_bind     = "127.0.0.1";
     std::string wav_path;
     std::string layout_path  = resolve_default_layout("lab_8ch.yaml");
     std::string osc_dialect  = "legacy"; // "legacy" or "adm"
+    // v0.5.1 Q1 — optional one-shot binaural telemetry exercise. The
+    // standalone otherwise never invokes the probe path (only VST3
+    // setActive does), so the soak harness has no way to observe the
+    // /sys/binaural_warning surface end-to-end without these flags.
+    std::string binaural_sofa;
+    bool        binaural_enable    = false;
+    bool        force_probe        = false;
+    bool        emit_no_sofa_after = false;
+    int         emit_after_ms      = 1000;
+    bool        inject_probe_throughput   = false;
+    float       inject_probe_throughput_v = 0.5f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -334,14 +351,42 @@ int main(int argc, char** argv) {
         else if (a == "--channels")    channels     = nexti(channels);
         else if (a == "--rate")        sr           = nexti(static_cast<int>(sr));
         else if (a == "--osc-port")    osc_port     = nexti(osc_port);
+        else if (a == "--osc-bind")    osc_bind     = nexts("127.0.0.1");
         else if (a == "--wav")         wav_path     = nexts("");
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
         else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
+        else if (a == "--binaural-sofa") binaural_sofa = nexts("");
+        else if (a == "--binaural-enable") binaural_enable = true;
+        else if (a == "--force-probe") force_probe = true;
+        else if (a == "--inject-probe-throughput") {
+            inject_probe_throughput   = true;
+            // CLI arg is the throughput multiplier (e.g. "0.5"); we
+            // accept it as a string then atof for fractional values
+            // since nexti() only handles ints.
+            std::string raw = nexts("0.5");
+            inject_probe_throughput_v = static_cast<float>(std::atof(raw.c_str()));
+        }
+        else if (a == "--emit-no-sofa-after-ms") {
+            emit_no_sofa_after = true;
+            emit_after_ms      = nexti(emit_after_ms);
+        }
         else if (a == "--help" || a == "-h") {
             std::printf("Usage: spatial_engine_core [--backend null|dante] "
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
-                        "[--osc-port 9100] [--wav OUTPUT.wav] [--layout PATH.yaml] "
-                        "[--osc-dialect legacy|adm]\n");
+                        "[--osc-port 9100] [--osc-bind 127.0.0.1] "
+                        "[--wav OUTPUT.wav] [--layout PATH.yaml] "
+                        "[--osc-dialect legacy|adm] [--binaural-sofa PATH] "
+                        "[--binaural-enable] [--force-probe] "
+                        "[--emit-no-sofa-after-ms N]\n"
+                        "\n"
+                        "  --osc-bind ADDR  Inbound OSC UDP bind address. Default 127.0.0.1\n"
+                        "                   (loopback only — single-host IPC). Pass 0.0.0.0\n"
+                        "                   to bind every interface (cross-machine setups).\n"
+                        "                   SECURITY: OSC commands are UNAUTHENTICATED. Any\n"
+                        "                   host that can reach the bound interface can drive\n"
+                        "                   /sys/load_layout, /sys/binaural_sofa, etc. Use\n"
+                        "                   non-loopback only on trusted networks behind a\n"
+                        "                   firewall that filters the OSC port.\n");
             return 0;
         }
     }
@@ -351,6 +396,18 @@ int main(int argc, char** argv) {
 
     // Engine
     spe::core::SpatialEngine engine(osc_port);
+
+    // v0.5.1 Sec H2 — wire bind address into OSCBackend BEFORE the engine's
+    // prepareToPlay() lights up the listener. Default loopback is silent;
+    // explicit non-loopback opt-in prints a WARNING so operators understand
+    // they have just exposed the unauthenticated OSC surface beyond 127.0.0.1.
+    engine.oscBackend().setBindAddr(osc_bind);
+    if (osc_bind != "127.0.0.1") {
+        std::fprintf(stderr,
+            "WARNING: OSC listener bound to %s. Engine is reachable from LAN; "
+            "OSC commands are unauthenticated. Use only on trusted networks.\n",
+            osc_bind.c_str());
+    }
 
     // Apply OSC dialect (--osc-dialect legacy|adm)
     if (osc_dialect == "adm") {
@@ -369,6 +426,17 @@ int main(int argc, char** argv) {
     } else {
         std::fprintf(stderr, "  [warn] layout load failed: %s -- using fallback\n",
                      std::get<std::string>(layout_result).c_str());
+    }
+
+    // v0.5.1 Q1 — optional binaural pre-config so the soak harness can
+    // exercise the OSC outbound warning channel from the standalone.
+    if (!binaural_sofa.empty()) {
+        engine.setBinauralSofaPath(binaural_sofa);
+        std::printf("  binaural-sofa: %s\n", binaural_sofa.c_str());
+    }
+    if (binaural_enable) {
+        engine.setBinauralEnabled(true);
+        std::printf("  binaural-enable: 1\n");
     }
 
     // Backend
@@ -401,7 +469,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("  backend: %s\n", backend->description().c_str());
-    std::printf("  OSC listener: 0.0.0.0:%d (ADM-OSC /adm/obj/N/aed)\n", osc_port);
+    std::printf("  OSC listener: %s:%d (ADM-OSC /adm/obj/N/aed)\n",
+                osc_bind.c_str(), osc_port);
     std::printf("  running %d s — Ctrl-C to stop...\n", run_seconds);
 
     // Registry-based instance forwarding: re-read every 5s (ADR 0011 §4).
@@ -415,7 +484,18 @@ int main(int argc, char** argv) {
     auto last_registry_reload = std::chrono::steady_clock::time_point{};
 
     using clock = std::chrono::steady_clock;
-    const auto deadline = clock::now() + std::chrono::seconds(run_seconds);
+    const auto start_time = clock::now();
+    const auto deadline = start_time + std::chrono::seconds(run_seconds);
+
+    // v0.5.1 Q1 — schedule the requested one-shot warning emissions. Both
+    // emissions are issued AFTER emit_after_ms so the harness has time to
+    // open its listener and exchange a handshake (which captures the peer
+    // endpoint inside the engine's OSCBackend). emit_after_ms defaults to
+    // 1000 ms which is the smallest interval that consistently gives the
+    // Python harness time to land its handshake.
+    const auto emit_deadline = start_time + std::chrono::milliseconds(emit_after_ms);
+    bool emitted_warnings = false;
+
     while (!g_quit.load() && clock::now() < deadline) {
         auto now = clock::now();
 
@@ -431,7 +511,29 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // One-shot warning fan-out (force-probe + inject-probe-throughput
+        // + no-sofa). Designed so the soak harness can choose either real
+        // or synthetic probe behaviour depending on host CPU.
+        if (!emitted_warnings && now >= emit_deadline) {
+            emitted_warnings = true;
+            if (inject_probe_throughput) {
+                engine.injectProbeThroughputAndEmit(inject_probe_throughput_v);
+                std::fprintf(stderr, "[probe] injected throughput=%.2fx RT code='%s'\n",
+                             (double)inject_probe_throughput_v,
+                             engine.binauralProbeWarningCode());
+            } else if (force_probe) {
+                const float t = engine.triggerBinauralProbe();
+                std::fprintf(stderr, "[probe] throughput=%.2fx RT code='%s'\n",
+                             (double)t, engine.binauralProbeWarningCode());
+            }
+            if (emit_no_sofa_after) {
+                engine.oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                              "no_sofa_loaded");
+                std::fprintf(stderr, "[no_sofa] emitted /sys/binaural_warning ,s\n");
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     if (fwd_fd >= 0) ::close(fwd_fd);
     (void)forward_to_instances; // referenced from forwarder helpers; suppress unused warning

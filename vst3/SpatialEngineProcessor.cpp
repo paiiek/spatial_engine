@@ -23,7 +23,9 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
@@ -40,7 +42,15 @@ SpatialEngineProcessor::SpatialEngineProcessor()
     : engine_(std::make_unique<spe::core::SpatialEngine>(0 /*no UDP*/))
 {}
 
-SpatialEngineProcessor::~SpatialEngineProcessor() = default;
+SpatialEngineProcessor::~SpatialEngineProcessor()
+{
+    // v0.5.1 Q1 — last-resort cleanup. Hosts that never call terminate()
+    // (or test fixtures that bypass the SDK lifecycle entirely) would
+    // otherwise let a joinable std::thread fall off the cliff in
+    // heartbeat_thread_'s dtor. stopHeartbeatTimer() is idempotent —
+    // safe to call even when the timer was never started.
+    stopHeartbeatTimer();
+}
 
 // ---------------------------------------------------------------------------
 // FUnknown
@@ -111,6 +121,9 @@ SpatialEngineProcessor::initialize(Steinberg::FUnknown* /*context*/)
 
 Steinberg::tresult PLUGIN_API SpatialEngineProcessor::terminate()
 {
+    // v0.5.1 Q1 — guarantee the heartbeat thread is joined before tear-down,
+    // even if setActive(false) was never called by the host.
+    stopHeartbeatTimer();
     if (active_) {
         engine_->releaseResources();
         active_ = false;
@@ -233,6 +246,11 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
             engine_->triggerBinauralProbe();
         }
 
+        // v0.5.1 Q1 — start the 1-Hz IO-thread heartbeat timer. NOT the
+        // audio thread; std::thread + sleep_for(1000ms) loop. Emits
+        // /sys/binaural_status via OSCBackend::sendReply() each tick.
+        startHeartbeatTimer();
+
 #ifdef SPATIAL_ENGINE_VST3_OSC
         if (!udp_io_) {
             // S4: build reverse-path lambda if controller is already connected.
@@ -255,6 +273,9 @@ SpatialEngineProcessor::setActive(Steinberg::TBool state)
         }
 #endif
     } else if (!state && active_) {
+        // Stop heartbeat BEFORE engine teardown so the IO thread can no
+        // longer reach into engine_ for the failure counter.
+        stopHeartbeatTimer();
         engine_->releaseResources();
         active_ = false;
 #ifdef SPATIAL_ENGINE_VST3_OSC
@@ -735,6 +756,22 @@ SpatialEngineProcessor::setupProcessing(Steinberg::Vst::ProcessSetup& setup)
     }
 
     engine_->prepareToPlay(sample_rate_, static_cast<int>(max_block_));
+
+    // v0.5.1 Q1 — arm the "no_sofa_loaded" warning latch. When the host
+    // restored a binaural-enabled state but no .speh was successfully
+    // loaded, the next process() pass surfaces this on the OSC reply
+    // channel exactly once per prepareToPlay() lifetime.
+    const bool no_sofa_fallback =
+        engine_ && engine_->binauralEnabled() && !engine_->binauralHasHrtf();
+    no_sofa_warning_emitted_.store(false, std::memory_order_relaxed);
+    no_sofa_warning_pending_.store(no_sofa_fallback, std::memory_order_release);
+
+    // v0.5.1 Q3 — arm the /sys/state snapshot latch. Always pending on each
+    // prepare; the first process() pass emits "fallback_mode=muted" when the
+    // active-path no-SOFA condition holds, else "fallback_mode=normal".
+    state_snapshot_is_muted_.store(no_sofa_fallback, std::memory_order_relaxed);
+    state_snapshot_pending_.store(true, std::memory_order_release);
+
     return Steinberg::kResultOk;
 }
 
@@ -748,6 +785,35 @@ Steinberg::tresult PLUGIN_API
 SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
 {
     using namespace Steinberg::Vst;
+
+    // v0.5.1 Q1 — drain the "no_sofa_loaded" warning latch on the first
+    // render pass after prepareToPlay(). Cheap atomic compare; the actual
+    // sendto() runs on OSCBackend's IO drain thread. NOT routed through
+    // SpatialEnginePluginUdp (which stays recv-only per ADR 0010 A2-α).
+    if (no_sofa_warning_pending_.load(std::memory_order_acquire)
+        && !no_sofa_warning_emitted_.load(std::memory_order_acquire)
+        && engine_)
+    {
+        engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                        "no_sofa_loaded");
+        no_sofa_warning_emitted_.store(true, std::memory_order_release);
+        no_sofa_warning_pending_.store(false, std::memory_order_release);
+    }
+
+    // v0.5.1 Q3 — drain the /sys/state snapshot latch. Emits exactly once
+    // per prepareToPlay() lifetime; payload encodes the active-path fallback
+    // policy as a single ,s string ("fallback_mode=muted" when active-path
+    // no-SOFA is engaged, else "fallback_mode=normal"). Stays inside the
+    // existing Q1 ,s wire surface (no encoder expansion needed).
+    if (state_snapshot_pending_.load(std::memory_order_acquire) && engine_)
+    {
+        const bool muted =
+            state_snapshot_is_muted_.load(std::memory_order_acquire);
+        engine_->oscBackend().sendReply("/sys/state", ",s",
+                                        muted ? "fallback_mode=muted"
+                                              : "fallback_mode=normal");
+        state_snapshot_pending_.store(false, std::memory_order_release);
+    }
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
     // --- S3: drain audio-path OSC command ring (UDP thread → audio thread) ---
@@ -905,8 +971,10 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
             }
             // Bus 1 (binaural) under bypass: emit -6 dB downmix of the dry
             // bus-0 channels so users still hear a recognisable signal.
+            // Q3: bypass intentionally keeps the audible diagnostic downmix —
+            // distinct from the active-path no-SOFA mute policy.
             if (data.outputs && data.numOutputs >= 2) {
-                writeBinauralPlaceholder(data);
+                writeBinauralPlaceholderBypass(data);
             }
         } else if (active_) {
             // Normal path — drive engine on bus 0 then route bus 1.
@@ -934,19 +1002,21 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
 // v0.5 P3: bus 1 routing.
 //   * If the engine has a loaded .speh and binaural is enabled, copy the
 //     engine's per-block binaural L/R into bus 1.
-//   * Otherwise, fall back to the v0.4 -6 dB speaker downmix placeholder
-//     (diagnostic intelligibility — see ADR A7).
+//   * Otherwise (active path, no SOFA / binaural disabled), Q3 mutes bus 1.
+//     The matching /sys/binaural_warning ,s "no_sofa_loaded" is emitted by
+//     Q1's latch (armed in prepareToPlay when binaural is enabled but no
+//     HRTF has loaded; drained on the first process() pass).
 void SpatialEngineProcessor::writeBinauralBus(
         Steinberg::Vst::ProcessData& data) noexcept
 {
     using namespace Steinberg::Vst;
-    if (!engine_) { writeBinauralPlaceholder(data); return; }
+    if (!engine_) { writeBinauralPlaceholderNoSofa(data); return; }
 
     const float* engL = engine_->binauralL();
     const float* engR = engine_->binauralR();
     const bool   enabled = engine_->binauralEnabled();
     if (!engL || !engR || !enabled) {
-        writeBinauralPlaceholder(data);
+        writeBinauralPlaceholderNoSofa(data);
         return;
     }
 
@@ -960,15 +1030,15 @@ void SpatialEngineProcessor::writeBinauralBus(
     std::memcpy(binR, engR, n * sizeof(float));
 }
 
-// v0.4 P1 A7: -6 dB speaker→binaural downmix placeholder.
-// Until v0.5 wires real BinauralMonitor::process(), bus 1 emits the mono
-// sum of bus 0 channels 0+1 (×0.5 = -6 dB). When binaural is disabled
-// OR no .speh has been loaded, this is what the user hears on bus 1.
+// v0.4 P1 A7 — bypass-path -6 dB speaker→binaural downmix placeholder.
+// Under bypass, bus 1 emits the mono sum of bus 0 channels 0+1 (×0.5 = -6 dB)
+// so users still hear a recognisable signal. NOT used on the active path —
+// see writeBinauralPlaceholderNoSofa() for the active-path mute policy.
 //
 // Lives in the VST3 processor (NOT in the engine) so v0.5 can replace
 // this branch with a one-line engine call without re-touching processor
 // state-machine code.
-void SpatialEngineProcessor::writeBinauralPlaceholder(
+void SpatialEngineProcessor::writeBinauralPlaceholderBypass(
         Steinberg::Vst::ProcessData& data) noexcept
 {
     using namespace Steinberg::Vst;
@@ -996,6 +1066,29 @@ void SpatialEngineProcessor::writeBinauralPlaceholder(
         binL[n] = mix;
         binR[n] = mix;
     }
+}
+
+// v0.5.1 Q3 — active-path no-SOFA mute. Zeroes bus 1 L/R when binaural is
+// enabled but no .speh has loaded yet (Q1 owns the /sys/binaural_warning ,s
+// "no_sofa_loaded" emission via prepareToPlay-armed latch + process() drain;
+// this function does NOT emit OSC). Some DAWs (Logic, Cubase) auto-collapse
+// silent stereo tracks — keep an OSC subscriber on /sys/binaural_warning to
+// surface the configuration error. Under bypass, the -6 dB downmix variant
+// is used instead.
+//
+// RT-safe: pure std::memset on bus 1 L/R, no allocation, no OSC.
+void SpatialEngineProcessor::writeBinauralPlaceholderNoSofa(
+        Steinberg::Vst::ProcessData& data) noexcept
+{
+    using namespace Steinberg::Vst;
+    AudioBusBuffers& bin = data.outputs[1];
+    if (bin.numChannels < 2 || !bin.channelBuffers32) return;
+    float* binL = bin.channelBuffers32[0];
+    float* binR = bin.channelBuffers32[1];
+    const std::size_t bytes =
+        static_cast<std::size_t>(data.numSamples) * sizeof(float);
+    if (binL) std::memset(binL, 0, bytes);
+    if (binR) std::memset(binR, 0, bytes);
 }
 
 Steinberg::uint32 PLUGIN_API SpatialEngineProcessor::getTailSamples()
@@ -1152,6 +1245,61 @@ SpatialEngineProcessor::notify(Steinberg::Vst::IMessage* /*message*/)
 {
     // IConnectionPoint::notify channel not used (AM-R3-10 decision).
     return Steinberg::kNotImplemented;
+}
+
+// ---------------------------------------------------------------------------
+// v0.5.1 Q1 — 1-Hz IO-thread heartbeat timer.
+// ---------------------------------------------------------------------------
+
+void SpatialEngineProcessor::startHeartbeatTimer()
+{
+    bool expected = false;
+    if (!heartbeat_running_.compare_exchange_strong(expected, true)) return;
+    heartbeat_thread_ = std::thread([this]() { heartbeatLoop(); });
+}
+
+void SpatialEngineProcessor::stopHeartbeatTimer()
+{
+    heartbeat_running_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(heartbeat_cv_mutex_);
+        // no payload — running_ already false; just need the wakeup
+    }
+    heartbeat_cv_.notify_all();
+    if (heartbeat_thread_.joinable()) heartbeat_thread_.join();
+}
+
+void SpatialEngineProcessor::heartbeatLoop() noexcept
+{
+    using namespace std::chrono_literals;
+    // Loop body: 1 s sleep + one status emission. Wakes promptly on stop
+    // because the sleep is a single 1 s sleep_for (not aggregated). Max
+    // shutdown latency is therefore ~1 s.
+    while (heartbeat_running_.load(std::memory_order_acquire)) {
+        {
+            std::unique_lock<std::mutex> lk(heartbeat_cv_mutex_);
+            heartbeat_cv_.wait_for(lk, 1000ms,
+                [this]{ return !heartbeat_running_.load(std::memory_order_acquire); });
+        }
+        if (!heartbeat_running_.load(std::memory_order_acquire)) break;
+        if (!engine_) continue;
+        // RT-safety: this is the IO thread, not the audio thread. We read a
+        // snapshot atomic produced by the engine. No allocation on this path
+        // beyond what sendReply()'s ring slot copy needs (all pre-allocated).
+        const std::int32_t failures =
+            static_cast<std::int32_t>(engine_->loadIntoFailuresCount() & 0x7FFFFFFFu);
+        engine_->oscBackend().sendReply("/sys/binaural_status", ",i", failures);
+
+        // v0.5.1 Q2 (A3 MAJOR 1-iter3): edge-triggered emission of
+        // /sys/binaural_warning ,s "xfade_truncated_cpu" exactly once per
+        // probe-clamped ramp event. The audio thread sets the pending flag
+        // via observeAndArmXfade() when arming a 1-block ramp due to
+        // probe_warning_set_; the heartbeat is the only consumer.
+        if (engine_->binauralDrainXfadeTruncatedPending()) {
+            engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                            "xfade_truncated_cpu");
+        }
+    }
 }
 
 } // namespace spe::vst3

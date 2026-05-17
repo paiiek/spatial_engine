@@ -162,6 +162,17 @@ SpatialEngine::SpatialEngine(int listen_port)
                                      : output::BinauralMode::Direct);
                 }
                 return;
+            case ipc::CommandTag::SysHandshake:
+                // v0.5.1 Q1 (WM-2) — when the client supplies an explicit
+                // reply_port, retarget our captured peer endpoint so future
+                // /sys/binaural_warning + /sys/binaural_status replies land
+                // there instead of the sender's ephemeral source port.
+                if (auto* p = std::get_if<ipc::PayloadSysHandshake>(&cmd.payload)) {
+                    if (p->reply_port != 0) {
+                        osc_backend_.overridePeerPort(p->reply_port);
+                    }
+                }
+                return;
             default:
                 return; // not queued
             }
@@ -652,80 +663,135 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                       binaural_r_buf_.begin() + block.num_frames, 0.f);
 
             if (binaural_.hasHrtf()) {
-                // C1 fix: snapshot effectiveMode() exactly once per block. A
-                // second read inside BinauralMonitor::processBlockB2 used to
-                // race with an OSC mode flip mid-block, producing a silent
-                // gap. The snapshot is the dispatch authority.
-                // TODO(A3, P4.2): B1↔B2 mode-transition crossfade. Today a
-                //   mode flip swaps the entire render branch at block
-                //   boundary; on user-driven OSC toggles this can produce
-                //   an audible click. Per plan §P4 A5, a 2-block ramp from
-                //   the outgoing path to the incoming path should be added
-                //   (run both, ramp old→0, new→0→1 over 2*block_size_).
-                //   Deferred to keep this hotfix surgical.
-                const bool b2_active = (binaural_.effectiveMode()
-                                        == output::BinauralMode::AmbiVS);
+                // C1 fix: snapshot effectiveMode() exactly once per block via
+                // BinauralMonitor's xfade arm path. A second read inside
+                // processBlockB2 used to race with an OSC mode flip mid-block,
+                // producing a silent gap. The snapshot is the dispatch
+                // authority.
+                //
+                // v0.5.1 Q2 (A3): observeAndArmXfade() returns the per-block
+                // ramp descriptor. When step.active, we render BOTH branches
+                // (outgoing + incoming) into their dedicated scratch buffers
+                // and envelope-mix into binaural_*_buf_. When !step.active,
+                // we render only step.steady's branch as before.
+                const auto step = binaural_.observeAndArmXfade();
 
-                if (b2_active) {
-                    // v0.5 P4: B2 AmbiVS path. Encode each active object into
-                    // 3rd-order ACN-ordered SH (16 channels), sum into
-                    // b2_sh_scratch_, then decode→24-VS→HRIR→L/R via
-                    // BinauralMonitor::processBlockB2().
-                    for (int k = 0; k < 16; ++k) {
-                        std::fill(b2_sh_scratch_[static_cast<std::size_t>(k)].begin(),
-                                  b2_sh_scratch_[static_cast<std::size_t>(k)].begin()
-                                  + block.num_frames, 0.f);
-                    }
-                    for (int i = 0; i < MAX_OBJECTS; ++i) {
-                        const auto& c = obj_cache_[static_cast<std::size_t>(i)];
-                        if (!c.active || c.gain_lin < 1e-6f) continue;
-                        const auto coeffs =
-                            spe::ambi::AmbisonicEncoder::encode_3rd_order(c.az, c.el);
-                        const float g = c.gain_lin * transport_gain;
-                        const float* dry =
-                            dry_scratch_[static_cast<std::size_t>(i)].data();
+                // Lambda: render one branch (Direct or AmbiVS) into dstL/dstR.
+                // No-alloc, audio-thread safe. Branch selection is by enum.
+                auto render_branch = [&](output::BinauralMode mode,
+                                         float* dstL, float* dstR) noexcept {
+                    if (mode == output::BinauralMode::AmbiVS) {
+                        // v0.5 P4: B2 AmbiVS path. Encode each active object
+                        // into 3rd-order ACN-ordered SH (16 channels), sum
+                        // into b2_sh_scratch_, then decode→24-VS→HRIR→L/R.
                         for (int k = 0; k < 16; ++k) {
-                            const float ck = coeffs[static_cast<std::size_t>(k)] * g;
-                            if (ck == 0.f) continue;
-                            float* sh = b2_sh_scratch_[static_cast<std::size_t>(k)].data();
+                            std::fill(b2_sh_scratch_[static_cast<std::size_t>(k)].begin(),
+                                      b2_sh_scratch_[static_cast<std::size_t>(k)].begin()
+                                      + block.num_frames, 0.f);
+                        }
+                        for (int i = 0; i < MAX_OBJECTS; ++i) {
+                            const auto& c = obj_cache_[static_cast<std::size_t>(i)];
+                            if (!c.active || c.gain_lin < 1e-6f) continue;
+                            const auto coeffs =
+                                spe::ambi::AmbisonicEncoder::encode_3rd_order(c.az, c.el);
+                            const float g = c.gain_lin * transport_gain;
+                            const float* dry =
+                                dry_scratch_[static_cast<std::size_t>(i)].data();
+                            for (int k = 0; k < 16; ++k) {
+                                const float ck = coeffs[static_cast<std::size_t>(k)] * g;
+                                if (ck == 0.f) continue;
+                                float* sh = b2_sh_scratch_[static_cast<std::size_t>(k)].data();
+                                for (int n = 0; n < block.num_frames; ++n) {
+                                    sh[n] += ck * dry[n];
+                                }
+                            }
+                        }
+                        binaural_.processBlockB2(b2_sh_ptrs_.data(),
+                                                 /*order=*/3,
+                                                 block.num_frames,
+                                                 dstL, dstR);
+                    } else {
+                        // B1 per-object HRTF sum.
+                        std::fill(dstL, dstL + block.num_frames, 0.f);
+                        std::fill(dstR, dstR + block.num_frames, 0.f);
+                        for (int i = 0; i < MAX_OBJECTS; ++i) {
+                            const auto& c = obj_cache_[static_cast<std::size_t>(i)];
+                            if (!c.active || c.gain_lin < 1e-6f) continue;
+
+                            // Update direction (RT-safe: KD-tree lookup +
+                            // loadInto + GainRamp setup; no alloc).
+                            binaural_.setDirection(i, c.az, c.el);
+
+                            // Convolve into the per-object scratch tmp_L/R.
+                            binaural_.processBlockForObject(
+                                i,
+                                dry_scratch_[static_cast<std::size_t>(i)].data(),
+                                block.num_frames,
+                                bin_tmp_L_.data(),
+                                bin_tmp_R_.data());
+
+                            // Sum with per-object gain.
+                            const float g = c.gain_lin * transport_gain;
                             for (int n = 0; n < block.num_frames; ++n) {
-                                sh[n] += ck * dry[n];
+                                dstL[n] += g * bin_tmp_L_[static_cast<std::size_t>(n)];
+                                dstR[n] += g * bin_tmp_R_[static_cast<std::size_t>(n)];
                             }
                         }
                     }
-                    binaural_.processBlockB2(b2_sh_ptrs_.data(),
-                                             /*order=*/3,
-                                             block.num_frames,
-                                             binaural_l_buf_.data(),
-                                             binaural_r_buf_.data());
-                } else {
-                    // Per-object HRTF sum (B1 primary path).
-                    for (int i = 0; i < MAX_OBJECTS; ++i) {
-                        const auto& c = obj_cache_[static_cast<std::size_t>(i)];
-                        if (!c.active || c.gain_lin < 1e-6f) continue;
+                };
 
-                        // Update direction (RT-safe: KD-tree lookup + loadInto +
-                        // GainRamp setup; no alloc).
-                        binaural_.setDirection(i, c.az, c.el);
+                if (step.active) {
+                    // Ramp in flight — render both branches into dedicated
+                    // scratch buffers, then envelope-mix into binaural_*_buf_.
+                    render_branch(step.outgoing,
+                                  bin_xfade_out_L_.data(),
+                                  bin_xfade_out_R_.data());
+                    render_branch(step.incoming,
+                                  bin_xfade_in_L_.data(),
+                                  bin_xfade_in_R_.data());
 
-                        // Convolve into the per-object scratch tmp_L/R.
-                        binaural_.processBlockForObject(
-                            i,
-                            dry_scratch_[static_cast<std::size_t>(i)].data(),
-                            block.num_frames,
-                            bin_tmp_L_.data(),
-                            bin_tmp_R_.data());
-
-                        // Sum with per-object gain.
-                        const float g = c.gain_lin * transport_gain;
+                    const float* env_in =
+                        binaural_.xfadeIncomingEnvelope(step.total_blocks);
+                    const float* env_out =
+                        binaural_.xfadeOutgoingEnvelope(step.total_blocks);
+                    if (env_in && env_out) {
+                        // Envelopes are sized per BinauralMonitor::block_size_
+                        // (set at initialize() time via Config.blockSize).
+                        // Index = block_index * monitor_block_size + sample.
+                        const int mon_bs = binaural_.blockSize();
+                        const int base   = step.block_index * mon_bs;
                         for (int n = 0; n < block.num_frames; ++n) {
-                            binaural_l_buf_[static_cast<std::size_t>(n)] +=
-                                g * bin_tmp_L_[static_cast<std::size_t>(n)];
-                            binaural_r_buf_[static_cast<std::size_t>(n)] +=
-                                g * bin_tmp_R_[static_cast<std::size_t>(n)];
+                            const float gi =
+                                env_in[static_cast<std::size_t>(base + n)];
+                            const float go =
+                                env_out[static_cast<std::size_t>(base + n)];
+                            binaural_l_buf_[static_cast<std::size_t>(n)] =
+                                gi * bin_xfade_in_L_[static_cast<std::size_t>(n)]
+                              + go * bin_xfade_out_L_[static_cast<std::size_t>(n)];
+                            binaural_r_buf_[static_cast<std::size_t>(n)] =
+                                gi * bin_xfade_in_R_[static_cast<std::size_t>(n)]
+                              + go * bin_xfade_out_R_[static_cast<std::size_t>(n)];
                         }
+                    } else {
+                        // Envelope unavailable — fall back to the incoming
+                        // branch directly (better than silence).
+                        std::copy(bin_xfade_in_L_.begin(),
+                                  bin_xfade_in_L_.begin() + block.num_frames,
+                                  binaural_l_buf_.begin());
+                        std::copy(bin_xfade_in_R_.begin(),
+                                  bin_xfade_in_R_.begin() + block.num_frames,
+                                  binaural_r_buf_.begin());
                     }
+                } else {
+                    // Steady state — render the single steady branch directly
+                    // into the bus buffer (no ramp mixing).
+                    render_branch(step.steady,
+                                  binaural_l_buf_.data(),
+                                  binaural_r_buf_.data());
                 }
+
+                // Decrement xfade counter for this block (no-op when steady).
+                binaural_.finalizeXfadeBlock();
 
                 // Apply per-channel limiter to prevent clipping under heavy load
                 // (shared by B1 and B2 since both paths write to binaural_*_buf_).
@@ -741,6 +807,25 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             // binaural_enabled_=0: zero the binaural buffers so downstream
             // readers (VST3 bus 1, legacy speaker-bus-tail) see silence
             // without paying for any DSP.
+            //
+            // v0.5.1 hotfix (code-reviewer MAJOR): keep the xfade monitor's
+            // prev_effective_mode_ advancing in lock-step even while binaural
+            // is disabled. Without this, a setRequestedMode() flip during the
+            // disabled span would cause the first re-enabled block to detect
+            // effective != prev_effective_mode_ and ARM an unwanted ramp —
+            // producing a brief dual-branch envelope artifact on re-enable
+            // even though nothing was actually being rendered while disabled.
+            // The per-block observeAndArmXfade + finalizeXfadeBlock pair
+            // discards its returned XfadeStep (no rendering occurs in this
+            // branch) and is virtually free; any ramp that "armed" while
+            // disabled completes within total_blocks consumed empty blocks,
+            // collapsing prev_effective_mode_ to the current effective mode
+            // before any audio actually flows again.
+            if (binaural_.hasHrtf()) {
+                (void)binaural_.observeAndArmXfade();
+                binaural_.finalizeXfadeBlock();
+            }
+
             std::fill(binaural_l_buf_.begin(),
                       binaural_l_buf_.begin() + block.num_frames, 0.f);
             std::fill(binaural_r_buf_.begin(),
@@ -773,6 +858,32 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     ev.payload_a    = static_cast<std::uint32_t>(block.num_frames);
     ev.payload_b    = static_cast<std::uint32_t>(block.output_channel_count);
     trace_.push(ev);
+}
+
+// v0.5 P4.1 (A6) / v0.5.1 Q1 — moved from header to avoid per-TU duplication.
+float SpatialEngine::triggerBinauralProbe()
+{
+    const float throughput = binaural_.runThroughputProbe();
+    const char* code = binaural_.probeWarningCode();
+    if (code && code[0] != '\0') {
+        osc_backend_.sendReply("/sys/binaural_warning", ",sf",
+                               code, throughput);
+    }
+    return throughput;
+}
+
+// v0.5.1 Q1 — moved from header to avoid per-TU duplication.
+void SpatialEngine::injectProbeThroughputAndEmit(float throughput_rt)
+{
+    // Make sure B2 is requested so the injected throughput maps to a
+    // real fallback decision in BinauralMonitor.
+    binaural_.setRequestedMode(output::BinauralMode::AmbiVS);
+    binaural_.injectProbeThroughputForTest(throughput_rt);
+    const char* code = binaural_.probeWarningCode();
+    if (code && code[0] != '\0') {
+        osc_backend_.sendReply("/sys/binaural_warning", ",sf",
+                               code, binaural_.probeThroughput());
+    }
 }
 
 }  // namespace spe::core

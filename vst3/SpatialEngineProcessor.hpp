@@ -13,7 +13,10 @@
 #include "pluginterfaces/vst/ivstmessage.h"  // IConnectionPoint
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 namespace spe::core { class SpatialEngine; }
 
@@ -154,14 +157,52 @@ private:
     // Dispatch a single normalized param change to the engine (Step 2.3/2.4)
     void dispatchParamChange(Steinberg::Vst::ParamID id, Steinberg::Vst::ParamValue norm) noexcept;
 
-    // v0.4 P1 A7: write -6 dB speaker→binaural downmix to bus 1.
-    // RT-safe: no allocations, no mutex.
-    void writeBinauralPlaceholder(Steinberg::Vst::ProcessData& data) noexcept;
+    // v0.4 P1 A7 / v0.5.1 Q3 — bus 1 placeholder writers.
+    //
+    // The bypass variant preserves the original v0.4 -6 dB speaker→binaural
+    // downmix so users still hear a recognisable signal under bypass.
+    // The no-SOFA variant zeroes bus 1 L/R — used on the ACTIVE path when no
+    // .speh is loaded (or binaural is disabled). The matching
+    // /sys/binaural_warning ,s "no_sofa_loaded" emission is owned by Q1's
+    // latch (armed in prepareToPlay, drained on first process()).
+    // Both variants are RT-safe: no allocations, no mutex.
+    void writeBinauralPlaceholderBypass(Steinberg::Vst::ProcessData& data) noexcept;
+    void writeBinauralPlaceholderNoSofa(Steinberg::Vst::ProcessData& data) noexcept;
 
     // v0.5 P3: write bus 1 by copying the engine's binaural buffer; falls
     // back to the v0.4 placeholder when no .speh is loaded or binaural
     // is disabled.
     void writeBinauralBus(Steinberg::Vst::ProcessData& data) noexcept;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // v0.5.1 Q1 — 1-Hz IO-thread heartbeat timer.
+    //
+    // Started from prepareToPlay(), stopped from setActive(false) and
+    // terminate(). Runs as a std::thread + sleep_for(1s) loop on a
+    // dedicated IO thread (NOT the audio thread). Emits the
+    //   /sys/binaural_status ,i <load_into_failures_count>
+    // telemetry packet via the engine's OSCBackend reply channel.
+    // ─────────────────────────────────────────────────────────────────────
+    std::atomic<bool>       heartbeat_running_{false};
+    std::thread             heartbeat_thread_;
+    std::mutex              heartbeat_cv_mutex_;
+    std::condition_variable heartbeat_cv_;
+    void heartbeatLoop() noexcept;
+    void startHeartbeatTimer();
+    void stopHeartbeatTimer();
+
+    // First-render-after-no-SOFA-fallback latch. Set true in prepareToPlay()
+    // when the engine reports no HRTF loaded yet binaural is enabled; the
+    // next process() pass emits the warning once and clears the flag.
+    std::atomic<bool> no_sofa_warning_pending_{false};
+    std::atomic<bool> no_sofa_warning_emitted_{false};
+
+    // v0.5.1 Q3 — /sys/state ,s "fallback_mode=<muted|normal>" snapshot
+    // latch. Armed in prepareToPlay() (mirrors the no-SOFA detection); the
+    // next process() pass emits the snapshot once and clears the flag. Lets
+    // OSC subscribers see the post-prepare fallback state without polling.
+    std::atomic<bool> state_snapshot_pending_{false};
+    std::atomic<bool> state_snapshot_is_muted_{false};
 };
 
 } // namespace spe::vst3

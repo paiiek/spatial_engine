@@ -27,9 +27,16 @@
 // JUCE binaural path is removed in v0.5 (architect decision, deferred to v0.6).
 //
 // Coordinate convention:
-//   Engine frame: az=+90 deg = LEFT  (AmbiX/B-format)
-//   SOFA frame:   az=+90 deg = LEFT  (AES69) — no sign flip needed.
-//   ITD: source at az_engine=+30 deg (left) → left ear first → ITD > 0.
+//   Engine/pipeline frame: az = atan2(x, z); x=right → az=+90 deg = RIGHT.
+//   .speh storage:         SOFA az values are pre-flipped to pipeline convention
+//                          (RIGHT=+az) during SOFA→SPEH conversion, so no sign
+//                          flip is needed at lookup time.
+//   lookupHrtfFromTree():  accepts engine az (RIGHT=+az) and passes it directly
+//                          to KdTree3D::nearest() — both sides use the same
+//                          azElToXYZ formula, so nearest-neighbor is correct.
+//   Worked example:        pt.x=+1, pt.z=0 → az=atan2(1,0)=+π/2 (RIGHT ear)
+//                          → KD-tree finds RIGHT-side HRIR. Correct.
+//   ITD: source at az_engine=+30 deg (right) → right ear first → ITD > 0.
 
 #pragma once
 
@@ -152,6 +159,69 @@ public:
     // else Direct} and returns the measured throughput in multiples of RT.
     // No-op (returns 0.f) when hasB2()==false.
     float runThroughputProbe();
+
+    // ─────────────────────────────────────────────────────────────────────
+    // v0.5.1 Q2 — A3 mode-transition crossfade.
+    //
+    // Threading model: the audio thread owns the crossfade state (all
+    // non-atomic ints). The control-thread setRequestedMode() path writes
+    // requested_mode_ + effective_mode_ atomics; the audio thread snapshots
+    // effective_mode_ once per block via observeAndArmXfade() and decides
+    // whether to arm a B1↔B2 ramp. While a ramp is in flight, a second
+    // mode flip is deferred until xfade_blocks_remaining_ reaches 0.
+    //
+    // Crossfade duration:
+    //   * Default kXfadeBlocks = 2 (two-block linear ramp).
+    //   * When probe_warning_set_ is true at arm time, kXfadeBlocks = 1
+    //     (CPU headroom safety on borderline hardware — trades residual
+    //     click for halving the dual-branch render cost). Emits the
+    //     /sys/binaural_warning ,s "xfade_truncated_cpu" one-shot via the
+    //     xfade_truncated_pending_ atomic, drained by the 1-Hz IO heartbeat.
+    // ─────────────────────────────────────────────────────────────────────
+    struct XfadeStep {
+        bool          active;            // true while a ramp is in flight (this block).
+        int           blocks_remaining; // value AFTER this block's decrement.
+        BinauralMode  outgoing;          // mode being faded out.
+        BinauralMode  incoming;          // mode being faded in (== effectiveMode()).
+        BinauralMode  steady;            // single mode to render when !active.
+        int           total_blocks;      // ramp length: 1 or kXfadeBlocksDefault.
+        int           block_index;       // 0-based index of this block within the ramp.
+    };
+
+    // Audio-thread: snapshot effectiveMode(), arm a new ramp if needed, return
+    // the step descriptor for this block (callers use it to decide whether to
+    // render one or both branches). Idempotent within a block.
+    XfadeStep observeAndArmXfade() noexcept;
+
+    // Audio-thread: complete a block under the ramp — decrements counter and
+    // promotes `incoming` to steady-state when the counter reaches zero.
+    // Must be called once per block AFTER observeAndArmXfade() (whether or not
+    // the step was active — the call is a no-op in steady state).
+    void finalizeXfadeBlock() noexcept;
+
+    // Pre-computed linear ramp envelopes for kXfadeBlocks ∈ {1, 2}. Sized
+    // [total_blocks * blockSize_]. Accessor returns nullptr when total_blocks
+    // is invalid. Index = (block_index * block_size_) + sample_index.
+    //   incoming envelope: 0 → 1 linearly over (total_blocks * block_size_)
+    //   outgoing envelope: 1 → 0 linearly (complement of incoming)
+    const float* xfadeIncomingEnvelope(int total_blocks) const noexcept;
+    const float* xfadeOutgoingEnvelope(int total_blocks) const noexcept;
+
+    // Audio-thread: true iff a ramp is currently in flight. Atomic mirror of
+    // xfade_blocks_remaining_ — provided for tests + heartbeat-loop sidecar.
+    bool xfadeActive() const noexcept {
+        return xfade_blocks_remaining_atomic_.load(std::memory_order_acquire) > 0;
+    }
+
+    // Q2 MAJOR 1-iter3: one-shot flag set by the audio thread when arming a
+    // ramp with kXfadeBlocks=1 (probe-clamped CPU truncation). Read+exchange
+    // by the 1-Hz IO heartbeat in vst3/SpatialEngineProcessor; on a true
+    // exchange, sends /sys/binaural_warning ,s "xfade_truncated_cpu".
+    // Returns true when a pending truncation event was observed and cleared.
+    bool drainXfadeTruncatedPending() noexcept {
+        return xfade_truncated_pending_.exchange(false,
+                                                 std::memory_order_acq_rel);
+    }
 
     // Test-only hook to inject a synthetic throughput value without running
     // the real probe (useful for slow-CPU fallback unit tests). Suffixed to
@@ -286,6 +356,45 @@ private:
     // Last throughput probe result + fallback flag for telemetry.
     std::atomic<float> probe_throughput_{0.f};
     std::atomic<bool>  probe_warning_set_{false};
+
+    // ──── v0.5.1 Q2 — A3 mode-transition crossfade state ────
+    // Audio-thread-local non-atomic ints (read+written only by the audio
+    // thread inside observeAndArmXfade() / finalizeXfadeBlock()).
+    int  prev_effective_mode_   = static_cast<int>(BinauralMode::Direct);
+    int  xfade_blocks_remaining_ = 0;
+    int  xfade_total_blocks_     = 0;
+    int  outgoing_mode_          = static_cast<int>(BinauralMode::Direct);
+    int  incoming_mode_          = static_cast<int>(BinauralMode::Direct);
+
+    // Atomic mirror of xfade_blocks_remaining_ for control-thread tests +
+    // heartbeat sidecar visibility. Written ONLY by the audio thread inside
+    // observeAndArmXfade() / finalizeXfadeBlock(). Strict relaxed semantics
+    // would suffice; we use release/acquire for ordering with the truncation
+    // pending flag below.
+    std::atomic<int>  xfade_blocks_remaining_atomic_{0};
+
+    // Q2 MAJOR 1-iter3: one-shot truncation flag. Set by the audio thread
+    // when a ramp is armed with total_blocks = 1 because probe_warning_set_
+    // was true at arm time. The IO-thread heartbeat exchanges this to false
+    // and emits /sys/binaural_warning ,s "xfade_truncated_cpu" exactly once
+    // per arm event (no per-block flood).
+    std::atomic<bool> xfade_truncated_pending_{false};
+
+    // Pre-computed linear envelopes for both supported ramp lengths. Sized
+    // [N * MAX_BLOCK] so callers can index by (block_index * block_size_ +
+    // sample_index). Recomputed in initialize() once block_size_ is known.
+    //   _1: kXfadeBlocks = 1 (probe-clamped truncation).
+    //   _2: kXfadeBlocks = 2 (default).
+    static constexpr int kXfadeBlocksDefault = 2;
+    std::array<float, MAX_BLOCK * 1>  xfade_inc_env_1_{};
+    std::array<float, MAX_BLOCK * 1>  xfade_out_env_1_{};
+    std::array<float, MAX_BLOCK * kXfadeBlocksDefault>  xfade_inc_env_2_{};
+    std::array<float, MAX_BLOCK * kXfadeBlocksDefault>  xfade_out_env_2_{};
+    bool xfade_envelopes_built_ = false;
+
+    // Helper — control thread; called from initialize() after block_size_
+    // is final. Fills xfade_inc_env_{1,2}_ + xfade_out_env_{1,2}_.
+    void buildXfadeEnvelopes() noexcept;
 
     // Build vs_layout_ from kTDesign24, prepare vs_decoder_, populate per-VS
     // HRIR cache via KD-tree lookup, prime 48 OlaConvolvers. Called once from

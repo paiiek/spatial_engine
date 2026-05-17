@@ -91,6 +91,64 @@ int main()
     }
 
     std::puts("PASS test_ola_convolver_loadinto_capacity_violation_release");
+
+    // -----------------------------------------------------------------------
+    // Case 2: ir_len > kOlaMaxIRLength — direct loadInto boundary guard.
+    //
+    // Defense-in-depth: unreachable from production today because
+    // BinauralMonitor.cpp:278 clamps ir_length via
+    // std::min(p.ir_length, hrtf::kOlaMaxIRLength) before calling loadInto.
+    // This test guards against a future regression where a caller forgets
+    // the clamp.
+    // -----------------------------------------------------------------------
+    {
+        constexpr int over_len = spe::hrtf::kOlaMaxIRLength + 1;
+
+        spe::hrtf::OlaConvolver conv2;
+        // Prime with full kOlaMaxIRLength capacity.
+        std::array<float, spe::hrtf::kOlaMaxIRLength> max_ir{};
+        max_ir[0] = 1.f;
+        conv2.prepare(max_ir.data(), spe::hrtf::kOlaMaxIRLength, blockSize);
+
+        // Run one block to give the convolver non-trivial overlap state.
+        std::vector<float> in2(blockSize, 0.f);
+        std::vector<float> out2(blockSize, 0.f);
+        in2[0] = 1.f;
+        conv2.process(in2.data(), blockSize, out2.data());
+
+        // Build a baseline for post-rejection comparison.
+        std::vector<float> baseline2(blockSize, 0.f);
+        {
+            spe::hrtf::OlaConvolver bl2;
+            bl2.prepare(max_ir.data(), spe::hrtf::kOlaMaxIRLength, blockSize);
+            bl2.process(in2.data(), blockSize, baseline2.data());
+        }
+
+        // Attempt load with ir_len == kOlaMaxIRLength + 1 — must be rejected.
+        std::vector<float> over_ir(over_len, 0.5f);
+        conv2.loadInto(over_ir.data(), over_len);
+
+        // (a) loadIntoFailures() must be exactly 1.
+        if (conv2.loadIntoFailures() != 1u) {
+            std::fprintf(stderr,
+                "FAIL case2: expected loadIntoFailures()==1, got %llu\n",
+                static_cast<unsigned long long>(conv2.loadIntoFailures()));
+            return 1;
+        }
+
+        // (b) Subsequent process() output must be bit-identical to pre-loadInto baseline.
+        std::vector<float> post2(blockSize, 0.f);
+        conv2.reset();
+        conv2.process(in2.data(), blockSize, post2.data());
+        if (std::memcmp(post2.data(), baseline2.data(),
+                        blockSize * sizeof(float)) != 0) {
+            std::fprintf(stderr,
+                "FAIL case2: rejected loadInto (over-max) mutated state\n");
+            return 1;
+        }
+    }
+
+    std::puts("PASS test_ola_convolver_loadinto_capacity_violation_release case2");
     return 0;
 #endif
 }

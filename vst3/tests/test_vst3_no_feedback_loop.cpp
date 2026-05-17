@@ -168,6 +168,18 @@ int main()
     // can ever be emitted by the plugin. This is verified by code inspection
     // (grep sendto vst3/SpatialEnginePluginUdp.cpp returns no results) and
     // by the socket count above (no second send socket was opened).
+    //
+    // v0.5.1 Q1 allowlist (cross-ref): the new /sys/binaural_warning and
+    // /sys/binaural_status outbound channels are emitted by the CORE
+    // OSCBackend (a separate object that lives inside SpatialEngine), NOT
+    // by SpatialEnginePluginUdp. This test only instantiates
+    // SpatialEnginePluginUdp (see line 102) — core OSCBackend is never
+    // created in this test process, so the socket count above continues to
+    // measure only the plugin's recv-only fd plus an optional registry IPC
+    // fd. sockets_opened stays in [1, 2] because core OSCBackend is not
+    // instantiated in this test process; bump to 3 only if a future change
+    // introduces an additional socket here and document the root cause
+    // inline. Do NOT pre-emptively bump.
     std::printf("[test_vst3_no_feedback_loop] PASS — recv-only architecture confirmed, "
                 "zero outbound OSC (A2-α forward-loop guard structurally satisfied)\n");
     return 0;
