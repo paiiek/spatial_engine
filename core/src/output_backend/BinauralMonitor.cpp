@@ -421,6 +421,65 @@ void BinauralMonitor::injectProbeThroughputForTest(float throughput_rt) noexcept
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// v0.6 #5 — runtime sticky-underrun auto-demote.
+// ─────────────────────────────────────────────────────────────────────────
+
+void BinauralMonitor::recordB2BlockTiming(int block_size,
+                                          float sample_rate,
+                                          long long elapsed_ns) noexcept
+{
+    if (block_size <= 0 || sample_rate <= 0.f) return;
+    // Already demoted — no further bookkeeping needed (avoid pointless
+    // atomic traffic on the audio thread once the decision is sticky).
+    if (runtime_demoted_.load(std::memory_order_acquire)) return;
+
+    // Block deadline in nanoseconds.
+    const long long deadline_ns = static_cast<long long>(
+        (static_cast<double>(block_size) /
+         static_cast<double>(sample_rate)) * 1e9);
+    const long long over_budget_ns = static_cast<long long>(
+        static_cast<double>(deadline_ns) *
+        static_cast<double>(kRuntimeDemoteBudgetFraction));
+
+    int strikes;
+    if (elapsed_ns >= over_budget_ns) {
+        strikes = runtime_demote_strikes_.fetch_add(1,
+            std::memory_order_acq_rel) + 1;
+    } else {
+        runtime_demote_strikes_.store(0, std::memory_order_release);
+        return;
+    }
+
+    if (strikes >= kRuntimeDemoteStrikes) {
+        // Sticky demote. Edge-trigger the warning latch via CAS so multiple
+        // entrants (audio thread plus theoretical test reseed) can race
+        // safely — only the first writer flips the latch.
+        bool expected = false;
+        if (runtime_demoted_.compare_exchange_strong(expected, true,
+                std::memory_order_acq_rel))
+        {
+            runtime_demote_warning_pending_.store(true,
+                std::memory_order_release);
+            effective_mode_.store(static_cast<int>(BinauralMode::Direct),
+                                  std::memory_order_release);
+        }
+    }
+}
+
+void BinauralMonitor::injectRuntimeUnderrunStrikesForTest() noexcept
+{
+    runtime_demote_strikes_.store(kRuntimeDemoteStrikes - 1,
+                                  std::memory_order_release);
+}
+
+void BinauralMonitor::clearRuntimeDemoteForTest() noexcept
+{
+    runtime_demote_strikes_.store(0, std::memory_order_release);
+    runtime_demoted_.store(false, std::memory_order_release);
+    runtime_demote_warning_pending_.store(false, std::memory_order_release);
+}
+
 int BinauralMonitor::b2HrirLength(int vs_idx) const noexcept
 {
     if (vs_idx < 0 || vs_idx >= kNumVirtualSpeakers || !b2_initialized_)

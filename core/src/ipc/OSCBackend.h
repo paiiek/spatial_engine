@@ -278,6 +278,13 @@ private:
                                       const char* s, bool have_f, float f,
                                       bool have_i, int32_t i) noexcept;
 
+    // v0.6 #8 — unified sendReply implementation. The 3 public overloads
+    // are now thin forwarders that pass have_s/have_f/have_i flags here.
+    // Saves ~70 LOC of near-identical bodies and removes drift risk.
+    bool sendReplyImpl(const char* addr, const char* types,
+                       const char* s, bool have_f, float f,
+                       bool have_i, int32_t i) noexcept;
+
     // IO-thread drain loop: blocks for a tiny interval, drains outbound_ring_
     // via sendto(). Runs while running_ is true.
     void outboundDrainLoop();

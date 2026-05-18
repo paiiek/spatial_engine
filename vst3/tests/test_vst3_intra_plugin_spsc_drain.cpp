@@ -39,7 +39,17 @@ int main()
 
     // -----------------------------------------------------------------------
     // Negative controls: confirm probe fires before main loop.
+    // v0.5.2 #2: under ASan the strong-symbol malloc override is skipped
+    // (incompatible with ASan interceptors — see rt_alloc_probe.hpp).
+    // Degrade these probes to SKIPPED-ASAN; the non-ASan ctest is the
+    // authoritative RT-alloc gate.
     // -----------------------------------------------------------------------
+#ifdef __SANITIZE_ADDRESS__
+    std::printf("PASS probe_observes_malloc (SKIPPED-ASAN)\n");
+    std::printf("PASS probe_observes_calloc (SKIPPED-ASAN)\n");
+    // This test uses a `failures` counter (CHECK macro); SKIPPED-ASAN
+    // is a no-op for the counter.
+#else
     {
         g_rt_guard_active = true;
         g_alloc_count     = 0;
@@ -56,6 +66,7 @@ int main()
         std::free(p);
         CHECK(g_alloc_count == 1, "probe_observes_calloc");
     }
+#endif
 
     // -----------------------------------------------------------------------
     // Test: 1000-iter SPSC drain, alloc == 0 on pop side.

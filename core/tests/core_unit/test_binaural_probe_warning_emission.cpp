@@ -103,44 +103,7 @@ int main() {
     engine.setBinauralEnabled(true);
     engine.prepareToPlay(48000.0, 64);
 
-    // 4. Direct BinauralMonitor handle — we override the probe result.
-    //    The engine's accessor surfaces probeWarningCode() but we also
-    //    need to call injectProbeThroughputForTest() to seed it.
-    //    Implementation note: SpatialEngine does not expose the monitor
-    //    publicly. We do the next-best thing — call setBinauralMode(1) to
-    //    flip requested to AmbiVS, then invoke triggerBinauralProbe()
-    //    repeatedly until the runThroughputProbe path produces the warning.
-    //    If runThroughputProbe on this host is >= 1.5x RT (likely), the
-    //    warning is NOT emitted and the test acceptance differs. We work
-    //    around that by NOT relying on the real probe at all: use the
-    //    setRequestedMode + injectProbeThroughputForTest sequence by
-    //    reaching the BinauralMonitor through a temporary private hack:
-    //    rebuild the engine state via a friend-style cast.
-    //
-    //    Simpler: this test exercises the OSC emission path with a real
-    //    throughput probe. On any healthy CI runner the probe is far above
-    //    1.5x RT, so the warning is NOT emitted. To force emission we
-    //    instead run the probe on a SECOND BinauralMonitor instance with
-    //    injectProbeThroughputForTest, then synthesise the OSC reply
-    //    directly through OSCBackend::sendReply — the same path the engine
-    //    uses internally.
-
-    spe::output::BinauralMonitor mon;
-    spe::output::BinauralMonitor::Config bcfg;
-    bcfg.sofaPath   = std::string(SPE_FIXTURES_DIR) + "/synthetic_min.speh";
-    bcfg.sampleRate = 48000.f;
-    bcfg.blockSize  = 64;
-    auto init_ok = mon.initialize(bcfg);
-    assert(init_ok == spe::output::BinauralMonitor::InitResult::Ok
-           && "BinauralMonitor init failed — check synthetic_min.speh fixture");
-    mon.setRequestedMode(spe::output::BinauralMode::AmbiVS);
-    mon.injectProbeThroughputForTest(0.5f); // < 1.5 → fallback
-    assert(mon.effectiveMode() == spe::output::BinauralMode::Direct);
-    const float synth_throughput = mon.probeThroughput();
-    const char* synth_code       = mon.probeWarningCode();
-    assert(std::strcmp(synth_code, "ambivs_disabled_cpu") == 0);
-
-    // 5. Client → engine handshake (captures the peer endpoint).
+    // 4. Client → engine handshake (captures the peer endpoint).
     auto pkt = buildHandshakePacket(1);
     struct sockaddr_in engine_addr{};
     engine_addr.sin_family      = AF_INET;
@@ -157,11 +120,22 @@ int main() {
     assert(engine.oscBackend().hasPeerEndpoint()
            && "engine never captured handshake peer");
 
-    // 6. Emit the warning via the SAME path triggerBinauralProbe() uses on
-    //    a real fallback. This exercises the OSC plumbing end-to-end.
-    const bool enq = engine.oscBackend().sendReply(
-        "/sys/binaural_warning", ",sf", synth_code, synth_throughput);
-    assert(enq && "sendReply enqueue failed");
+    // 5. Drive the PRODUCTION emit path via SpatialEngine's public test hook
+    //    injectProbeThroughputAndEmit(): it sets the engine's own
+    //    BinauralMonitor to AmbiVS, injects the synthetic throughput, reads
+    //    probeWarningCode()/probeThroughput() FROM the engine's monitor, and
+    //    calls osc_backend_.sendReply() — identical to the production
+    //    triggerBinauralProbe() path (SpatialEngine.cpp:864-873) minus the
+    //    runThroughputProbe() call (which on healthy CI runs at >= 1.5x RT
+    //    and would not produce the warning). This is the v0.5.2 #1
+    //    strengthening — earlier the test bypassed the engine entirely.
+    engine.injectProbeThroughputAndEmit(0.5f); // < 1.5 → fallback armed.
+    assert(engine.effectiveBinauralMode() ==
+           static_cast<int>(spe::output::BinauralMode::Direct)
+           && "engine did not clamp to Direct under low-throughput probe");
+    const char* engine_code = engine.binauralProbeWarningCode();
+    assert(std::strcmp(engine_code, "ambivs_disabled_cpu") == 0
+           && "engine warning code mismatch");
 
     // 7. Drain on the client side — must arrive within 200 ms.
     uint8_t rxbuf[256] = {0};
@@ -208,7 +182,7 @@ int main() {
 
     engine.releaseResources();
     ::close(client.fd);
-    std::printf("PASS test_binaural_probe_warning_emission (throughput=%.2f x RT)\n",
-                synth_throughput);
+    std::printf("PASS test_binaural_probe_warning_emission "
+                "(production injectProbeThroughputAndEmit path)\n");
     return 0;
 }

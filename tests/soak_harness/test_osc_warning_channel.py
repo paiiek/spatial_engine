@@ -113,20 +113,32 @@ def engine_binary():
     return bin_path
 
 
+EMIT_AFTER_MS = 500
+# Plan §Decision Driver #1: each emission must arrive within 200 ms of its
+# trigger. The standalone's emission loop has a 50 ms sleep upper bound, so
+# the wire-side budget is 200 ms (plan) - 50 ms (loop) = 150 ms for actual
+# UDP + IO drain. v0.5.2 #3 (this file) enforces the absolute per-emission
+# latency, not just inter-emission spread.
+PER_EMISSION_LATENCY_BUDGET_MS = 200
+# Inter-emission spread budget — both warnings are emitted in the same loop
+# iteration (~50 ms tight) so we expect them well under 100 ms apart even
+# under CI scheduler jitter.
+SPREAD_BUDGET_MS = 200
+
+
 @pytest.fixture
 def warning_capture(engine_binary):
     """
     Spawn engine with --force-probe + --emit-no-sofa-after-ms, open a
-    listener, send handshake, return the listener socket and the engine
-    process for the test to read replies from.
+    listener, send handshake, return the listener socket, engine process,
+    and the absolute spawn timestamp so the test can compute trigger→
+    emission latency.
     """
     osc_port = free_udp_port()
     client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     client.bind(("127.0.0.1", 0))
     client.settimeout(1.0)
 
-    # Test-only flags: emit both warnings 500 ms after start. The pytest
-    # body sleeps 300 ms before draining so the handshake lands first.
     cmd = [
         str(engine_binary),
         "--osc-port", str(osc_port),
@@ -140,8 +152,9 @@ def warning_capture(engine_binary):
         # `/sys/binaural_warning ,sf "ambivs_disabled_cpu" 0.5`
         # deterministically (production HW would pass the real probe).
         "--inject-probe-throughput", "0.5",
-        "--emit-no-sofa-after-ms", "500",
+        "--emit-no-sofa-after-ms", str(EMIT_AFTER_MS),
     ]
+    spawn_time = time.monotonic()
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -159,7 +172,7 @@ def warning_capture(engine_binary):
     # via recvfrom() before it emits.
     time.sleep(0.05)
 
-    yield (proc, client, osc_port)
+    yield (proc, client, osc_port, spawn_time)
 
     try:
         proc.terminate()
@@ -172,45 +185,67 @@ def warning_capture(engine_binary):
 
 
 class TestBothWarningCodesObserved:
-    def test_both_codes_within_500ms(self, warning_capture):
-        proc, client, _port = warning_capture
-        # Drain replies for up to 2 s (well within the 500 ms emit
-        # deadline + handshake settle). We stop early when both codes
-        # have been seen.
-        seen_ambivs = False
-        seen_no_sofa = False
-        deadline = time.monotonic() + 2.0
-        emit_observed_at = None
-        while time.monotonic() < deadline and not (seen_ambivs and seen_no_sofa):
+    def test_both_codes_within_200ms_of_trigger(self, warning_capture):
+        proc, client, _port, spawn_time = warning_capture
+        # v0.5.2 #3: enforce the plan's per-emission 200 ms gate, not just
+        # the inter-emission spread the v0.5.1 test was checking.
+        #
+        # The standalone's emit deadline is spawn_time + EMIT_AFTER_MS.
+        # Each warning must arrive at the client by
+        #   trigger_at + PER_EMISSION_LATENCY_BUDGET_MS
+        # where trigger_at = spawn_time + EMIT_AFTER_MS.
+        trigger_at = spawn_time + EMIT_AFTER_MS / 1000.0
+        absolute_deadline = trigger_at + PER_EMISSION_LATENCY_BUDGET_MS / 1000.0
+
+        ambivs_at: float | None = None
+        no_sofa_at: float | None = None
+        # Drain until both seen OR we pass the absolute deadline + a small
+        # cushion (so we don't false-fail on a single slow packet).
+        drain_deadline = absolute_deadline + 1.0
+        while time.monotonic() < drain_deadline and not (ambivs_at and no_sofa_at):
             try:
                 pkt, _src = client.recvfrom(1024)
             except socket.timeout:
                 continue
+            recv_at = time.monotonic()
             addr = parse_osc_address(pkt)
             if addr != "/sys/binaural_warning":
                 continue
             tag = parse_osc_type_tag(pkt)
-            if emit_observed_at is None:
-                emit_observed_at = time.monotonic()
-            if tag == ",sf" and b"ambivs_disabled_cpu" in pkt:
-                seen_ambivs = True
-            elif tag == ",s" and b"no_sofa_loaded" in pkt:
-                seen_no_sofa = True
+            if tag == ",sf" and b"ambivs_disabled_cpu" in pkt and ambivs_at is None:
+                ambivs_at = recv_at
+            elif tag == ",s" and b"no_sofa_loaded" in pkt and no_sofa_at is None:
+                no_sofa_at = recv_at
 
         # Surface stderr only on failure to keep healthy runs quiet.
-        if not (seen_ambivs and seen_no_sofa):
+        if not (ambivs_at and no_sofa_at):
             try:
                 stderr = proc.stderr.read1(8192).decode("utf-8", errors="replace")
             except Exception:
                 stderr = "<unreadable>"
             pytest.fail(
-                f"seen ambivs_disabled_cpu={seen_ambivs} "
-                f"no_sofa_loaded={seen_no_sofa}; engine stderr:\n{stderr}"
+                f"missed emission(s): "
+                f"ambivs_disabled_cpu={'OK' if ambivs_at else 'MISSING'} "
+                f"no_sofa_loaded={'OK' if no_sofa_at else 'MISSING'}; "
+                f"engine stderr:\n{stderr}"
             )
-        # All emissions must arrive within 500 ms once the first one
-        # appears (cheap defence against a runaway IO drain).
-        assert emit_observed_at is not None
-        elapsed_ms = (time.monotonic() - emit_observed_at) * 1000
-        assert elapsed_ms < 500, (
-            f"emissions spread over {elapsed_ms:.1f}ms — should be < 500ms"
+
+        # --- Plan §Decision Driver #1 enforcement: ≤ 200 ms trigger→arrival.
+        ambivs_lat_ms  = (ambivs_at  - trigger_at) * 1000.0
+        no_sofa_lat_ms = (no_sofa_at - trigger_at) * 1000.0
+        assert ambivs_lat_ms < PER_EMISSION_LATENCY_BUDGET_MS, (
+            f"ambivs_disabled_cpu arrived {ambivs_lat_ms:.1f} ms after trigger "
+            f"(budget {PER_EMISSION_LATENCY_BUDGET_MS} ms per plan §Decision Driver #1)"
+        )
+        assert no_sofa_lat_ms < PER_EMISSION_LATENCY_BUDGET_MS, (
+            f"no_sofa_loaded arrived {no_sofa_lat_ms:.1f} ms after trigger "
+            f"(budget {PER_EMISSION_LATENCY_BUDGET_MS} ms per plan §Decision Driver #1)"
+        )
+
+        # Cheap defence against a runaway IO drain — both arrive in the
+        # same one-shot loop iteration in the standalone.
+        spread_ms = abs(no_sofa_lat_ms - ambivs_lat_ms)
+        assert spread_ms < SPREAD_BUDGET_MS, (
+            f"emissions spread {spread_ms:.1f} ms apart "
+            f"(budget {SPREAD_BUDGET_MS} ms)"
         )

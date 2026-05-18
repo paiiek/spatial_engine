@@ -44,6 +44,15 @@ using TimePoint = Clock::time_point;
 // ---------------------------------------------------------------------------
 static void check_probe_fires()
 {
+    // v0.5.2 #2: under ASan the strong-symbol malloc override is skipped
+    // (see rt_alloc_probe.hpp). Probe assertions would always fail, so we
+    // degrade to a noisy SKIPPED-ASAN message and return early. Non-ASan
+    // ctest invocations remain the authoritative RT-alloc gate.
+#ifdef __SANITIZE_ADDRESS__
+    std::printf("[soak_vst3_console_flood] alloc probe: SKIPPED-ASAN "
+                "(strong-symbol override incompatible with AddressSanitizer)\n");
+    return;
+#else
     {
         g_rt_guard_active = true;
         g_alloc_count     = 0;
@@ -61,6 +70,7 @@ static void check_probe_fires()
         assert(g_alloc_count == 1 && "probe_observes_calloc");
     }
     std::printf("[soak_vst3_console_flood] alloc probe: verified\n");
+#endif
 }
 
 // ---------------------------------------------------------------------------

@@ -13,14 +13,21 @@
 // What this test enforces on the CI fixture:
 //   1. B1 and B2 both produce non-zero, finite output for a non-zero
 //      mono input.
-//   2. RMS energy ratio |20*log10(rms_b2 / rms_b1)| ≤ 12 dB (gross level
-//      equivalence — the AmbiVS sum-of-24 path doesn't blow up or collapse).
+//   2. RMS energy ratio |20*log10(rms_b2 / rms_b1)| ≤ 2 dB combined
+//      AND ≤ 3 dB per ear (gross level equivalence — the AmbiVS sum-of-24
+//      path must not deviate noticeably from B1's per-object panning even
+//      on the sparse synthetic fixture). v0.6 #6 tightening: the prior
+//      ±12 dB gate was 300x looser than the empirical ±0.04 dB delta
+//      observed on this fixture — any real coefficient regression would
+//      blow past ±2 dB easily. Per-ear ±3 dB catches asymmetric breakage
+//      (e.g. one of the 24 VS HRIRs flipped sign / mis-indexed).
 //   3. Both paths agree on lateral side: source at az=+π/2 (left) yields
 //      L-ear temporal centroid earlier than R-ear (ITD precedence — L
 //      leads R). With this ITD-only fixture L/R RMS are equal by
 //      construction; lateralisation lives in time of arrival, not level.
 // On a full HRTF table that adds ILD the time-centroid check still holds
-// while the RMS-magnitude gate (used in soak) tightens automatically.
+// while the RMS-magnitude gate (used in soak) tightens automatically to
+// the plan's -20 dBFS per-sample target.
 
 #include "ambi/AmbisonicEncoder.h"
 #include "output_backend/BinauralMonitor.h"
@@ -158,18 +165,38 @@ int main()
         return 1;
     }
 
-    // Gross energy equivalence: the combined L+R RMS should be within
-    // ±12 dB between the two paths (sparse fixture; tightens with real HRTF).
+    // v0.6 #6: gross energy equivalence — combined L+R RMS within ±2 dB
+    // AND per-ear within ±3 dB. Empirical reference on this fixture is
+    // ±0.04 dB; the 2/3 dB gates leave 50x margin while rejecting the
+    // kinds of regressions that a 12 dB gate would miss (coefficient
+    // mis-scaling, single-VS-channel sign flip, decoder normalisation
+    // drift). The plan's full -20 dBFS RMS per-sample gate remains soak-
+    // only because the synthetic fixture's 4-direction ITD-only HRIR
+    // table can't sustain a per-sample equivalence claim.
     const float e1 = std::sqrt(r1L * r1L + r1R * r1R);
     const float e2 = std::sqrt(r2L * r2L + r2R * r2R);
     const float dB = 20.f * std::log10(e2 / e1);
-    if (std::fabs(dB) > 12.f) {
+    if (std::fabs(dB) > 2.f) {
         std::fprintf(stderr,
-                     "FAIL: B2/B1 energy ratio = %.2f dB (|.|>12 dB on sparse "
+                     "FAIL: B2/B1 combined energy = %.2f dB (|.|>2 dB on sparse "
                      "fixture); B1 e=%.4f B2 e=%.4f\n",
                      static_cast<double>(dB),
                      static_cast<double>(e1),
                      static_cast<double>(e2));
+        return 1;
+    }
+    const float dB_L = 20.f * std::log10(r2L / r1L);
+    const float dB_R = 20.f * std::log10(r2R / r1R);
+    if (std::fabs(dB_L) > 3.f) {
+        std::fprintf(stderr,
+                     "FAIL: B2/B1 left-ear energy = %.2f dB (|.|>3 dB)\n",
+                     static_cast<double>(dB_L));
+        return 1;
+    }
+    if (std::fabs(dB_R) > 3.f) {
+        std::fprintf(stderr,
+                     "FAIL: B2/B1 right-ear energy = %.2f dB (|.|>3 dB)\n",
+                     static_cast<double>(dB_R));
         return 1;
     }
 

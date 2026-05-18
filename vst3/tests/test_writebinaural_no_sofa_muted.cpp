@@ -33,9 +33,11 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <span>
+#include <thread>
 #include <vector>
 
 using namespace Steinberg;
@@ -226,13 +228,28 @@ PrepResult runPrepareCycle(spe::vst3::SpatialEngineProcessor& proc,
     proc.setupProcessing(setup);
     proc.setActive(true);
 
-    // Render blocks; latch fires on first one.
+    // Render blocks; the audio thread no longer emits (v0.6 #4) — the
+    // heartbeat IO thread is the sole emitter.
     r.bus1_peak = renderAndPeakBus1(proc, blocks);
 
-    // Inspect the OSC outbound ring (no drain thread is running because
-    // engine_'s OSCBackend has listen_port_ == 0).
+    // v0.6 #4: emission moved from audio thread to the heartbeat IO
+    // thread. setActive(true) spawned the heartbeat; its first iteration
+    // drains the no_sofa + state latches BEFORE the wait_for(1s). The
+    // ring should fill within a few hundred microseconds of setActive().
+    // Poll for up to 200 ms (matching the plan's per-emission latency
+    // budget) before inspecting.
     auto& backend = proc.engine().oscBackend();
-    const std::size_t pending = backend.outboundPending();
+    const auto poll_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    std::size_t pending = 0;
+    while (std::chrono::steady_clock::now() < poll_deadline) {
+        pending = backend.outboundPending();
+        // Expect at least 3 packets per cycle: /sys/binaural_status,
+        // /sys/binaural_warning (no_sofa), /sys/state (fallback_mode).
+        if (pending >= 3) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
     for (std::size_t i = 0; i < pending; ++i) {
         std::size_t n = 0;
         const uint8_t* buf = backend.outboundPeek(i, n);

@@ -101,6 +101,36 @@ public:
         return binaural_.xfadeActive();
     }
 
+    // v0.6 #5 — engine-level forwarder for the runtime sticky-underrun
+    // auto-demote telemetry. Audio thread sets the flag in BinauralMonitor
+    // when B2's wall-clock cost exceeds the budget for kRuntimeDemoteStrikes
+    // consecutive blocks. The IO-thread heartbeat drains the flag and emits
+    // /sys/binaural_warning ,s "ambivs_demoted_runtime" exactly once per
+    // demote event (sticky for the BinauralMonitor's lifetime).
+    bool binauralDrainRuntimeDemotePending() noexcept {
+        return binaural_.drainRuntimeDemotePending();
+    }
+
+    // v0.6 #5 — true once the runtime auto-demote has fired. Sticky until
+    // a fresh prepareToPlay() re-initialises BinauralMonitor. Used by tests
+    // and (optionally) by /sys/state snapshots.
+    bool binauralIsRuntimeDemoted() const noexcept {
+        return binaural_.isRuntimeDemoted();
+    }
+
+    // v0.6 #5 — test-only hooks for deterministic auto-demote scenarios.
+    void injectBinauralRuntimeUnderrunStrikesForTest() noexcept {
+        binaural_.injectRuntimeUnderrunStrikesForTest();
+    }
+    void clearBinauralRuntimeDemoteForTest() noexcept {
+        binaural_.clearRuntimeDemoteForTest();
+    }
+    void recordBinauralB2BlockTimingForTest(int block_size,
+                                            float sample_rate,
+                                            long long elapsed_ns) noexcept {
+        binaural_.recordB2BlockTiming(block_size, sample_rate, elapsed_ns);
+    }
+
     // v0.5.1 Q1 — test-only hook: inject a synthetic probe throughput and
     // emit the matching /sys/binaural_warning if the injected value forces
     // a B2→B1 fallback. Used exclusively by the soak harness CLI flag

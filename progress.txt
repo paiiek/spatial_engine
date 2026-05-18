@@ -92,3 +92,98 @@ verify bypass button routes dry signal (not silence), verify 7 parameters visibl
 - chore(off-baseline): 8c0ca2d (로컬 hash 기반 re-pin — GHA와 불일치)
 - ci(off-baseline): 316f920 (step summary echo 추가 — public re-pin 경로 확보)
 - chore(off-baseline): GHA-canonical bytes 재re-pin (symbols 변동 없음)
+
+---
+
+# 주간 진행 노트 — 2026-05-11 ~ 2026-05-17
+
+## 한 줄 요약
+이번 주는 "엔진을 실제 음악 제작자(DAW 사용자)에게 넘길 수 있는 상태"로 끌어올린 한 주.
+WebGUI 마무리 → DAW 플러그인(VST3) 정비 → 바이노럴 모니터링(헤드폰 미리듣기) 상용
+수준 도달 → 출시 직전 핫픽스(v0.5.1) → 안정성 보강(v0.6 시작) 순으로 진행.
+
+## 1) WebGUI 완성 (5/11 ~ 5/12)
+- 브라우저에서 객체(소리)를 마우스로 끌면 엔진이 즉시 위치를 갱신하는 **원격 조작
+  화면**을 완성. 모바일 화면 비율, 60fps 부드러움, 동시 접속 2클라이언트, 장면
+  저장/불러오기까지 자동 테스트로 검증.
+- **48시간 무중단 운영 테스트(soak)** 하네스 추가 — 장시간 켜놔도 메모리 누수·
+  연결 끊김 없는지 자동 감시.
+- **왕복 지연(RTT) 3중 측정 경로**: 모의 → 실제 UDP → 종단간 와이어 SHA256 일치
+  검증으로 "브라우저가 보낸 그대로 엔진이 받았는가"를 바이트 단위로 보증.
+- 한국어 매뉴얼 Ch.6 (WebGUI 사용법) 작성.
+
+## 2) macOS / 원격 사용자 온보딩 (5/14)
+- Apple Silicon(arm64) 빌드 실패 수정 — x86 전용 SSE 명령을 가드해 M1/M2 Mac에서도
+  바로 빌드 가능.
+- **macOS 설치 가이드 + requirements.txt 정비**: tmux + Claude Code + 빌드/실행
+  스텝을 손에 잡히게 정리. 원격에서도 1시간 안에 환경 구축 가능한 수준으로 진입.
+
+## 3) 채널 매핑 정확성 핫픽스 — v0.3.1 (5/15)
+- YAML 스피커 레이아웃에서 채널 번호 → 출력 인덱스 매핑이 부정확했던 버그 수정.
+  예: "5.1 레이아웃에서 LFE만 음량 줄이기" 같은 OSC 명령이 잘못된 채널에 적용되던
+  문제 해결. 중복 채널 번호도 더 이상 조용히 통과하지 않고 거부.
+
+## 4) DAW 플러그인(VST3) 정비 — v0.4 (5/15)
+- **출력 버스 2개 분리**: 1번 버스는 스피커, 2번 버스는 바이노럴(헤드폰). DAW
+  쪽에서 한 트랙으로 두 출력을 동시에 받아 라우팅 가능.
+- **상태 저장 포맷 v4**: DAW 프로젝트 파일에 플러그인 설정이 더 견고하게 저장됨.
+  과거 v3 세션과 바이트 단위 호환성 유지 (기존 프로젝트 깨지지 않음).
+- **레이아웃 YAML 경로 / .speh 바이노럴 활성화 플래그**를 플러그인 파라미터로
+  주입할 수 있게 배선.
+
+## 5) 상용 수준 바이노럴 디코더 — v0.5 (5/15)
+헤드폰으로 듣는 3D 음향(HRTF 컨볼루션)을 "데모 수준" → "상용 수준"으로 격상.
+- **B1 — 객체별 HRTF 합산**: 각 음원의 정확한 방향에 대응하는 머리전달함수를
+  실시간으로 검색해서 합산. 64개 객체까지 RT 안전 검증.
+- **B2 — 24점 t-design 가상 스피커 체인**: 고차 앰비소닉(3차)에서 24개의 가상
+  스피커 방향으로 분배한 뒤 HRTF로 합치는 고품질 경로. CPU 부담이 큰 환경에서는
+  자동으로 B1로 폴백.
+- **KdTree3D 최근접 탐색**: O(N) 삼각함수 무차별 비교 → O(log N) 트리 검색으로
+  HRTF 룩업 가속.
+- **이중 버퍼 슬롯 스왑 + 2블록 크로스페이드**: SOFA 파일 교체 시 RT 스레드를
+  멈추지 않고 부드럽게 IR 전환.
+
+## 6) 출시 직전 핫픽스 — v0.5.1 (5/17, 오늘)
+v0.5 출시 후 DAW 통합 담당자에게 넘기기 직전 발견된 4개 갭을 메운 릴리즈.
+- **Q1: OSC 송신 채널 신설** — 엔진이 "B2가 CPU 한계로 클램프됨", "SOFA 파일이
+  없어서 폴백 중" 같은 상태를 호스트(DAW)에 적극 통보. 그동안은 엔진이 알고
+  있어도 외부로 알릴 수단이 없었음.
+- **Q2: B1 ↔ B2 모드 전환 크로스페이드** — 사용자가 모드를 바꿀 때 발생하던 클릭
+  잡음 제거 (오디오 스레드에서 2블록 선형 램프).
+- **Q3: SOFA 미로딩 시 바이노럴 출력 강제 뮤트** — HRTF가 없는 상태에서 "비슷한
+  소리"를 흘려보내 사용자를 속이는 동작을 차단. 무성으로 끊고 OSC로 명확히 통보.
+- **Q4: 테스트 인프라 보강** — Steinberg 정적 소멸자에서 ASan이 죽던 문제, soak
+  하네스 포트 충돌 플레이크 해결.
+
+## 7) v0.6 안정성 보강 land (2026-05-18, 본 커밋)
+DAW에서 장시간 라이브 사용 시 오디오 스레드 RT 안전성을 한 단계 더 끌어올리는
+4 항목. v0.5.1 plan §Q5 에서 "v0.6 로 deferred" 명시했던 항목들.
+- **#4: 오디오 스레드에서 OSC 송신 완전 분리** — `no_sofa_loaded`, `fallback_mode`
+  같은 1회성 통보를 오디오 콜백이 아니라 1Hz 하트비트 IO 스레드가 끌어가도록 이전.
+  오디오 콜백은 이제 sendReply 호출 자체가 없음. drain-first-then-wait 패턴으로
+  첫 tick 즉시 emit (200 ms latency budget 내).
+- **#5: 런타임 누적 언더런 자동 디모트** — B2 처리 시간이 블록 마감의 90%를 8블록
+  연속으로 넘으면 자동으로 B1로 영구 강등(스티키) + 호스트에 1회 통보
+  (`/sys/binaural_warning ,s "ambivs_demoted_runtime"`). std::chrono::steady_clock
+  vDSO (~30 ns, no syscall) 로 RT 안전. 스티키 결정 — 일시 spike 가 mode flap 못
+  하게. 신규 ctest `b2_runtime_underrun_auto_demote`.
+- **#8: sendReply 3 overload → sendReplyImpl 통합** — 거의 동일한 ~70 LOC 본체 3
+  개를 `sendReplyImpl(have_f, f, have_i, i)` 단일 구현으로 합쳐 drift 위험 제거.
+- **#9: Outbound ring slot ready clear release-store 강화** — 약-순서 하드웨어
+  (ARM/Apple Silicon/ppc) 에서 wrap-producer 의 ready=true 가 stale relaxed-false
+  에 덮이는 corner case 차단.
+- **검증 상태**: ctest 85/85 PASS (시작 81 → +4 신규), pytest 47/47 PASS, 본 세션
+  resume 시 재확인.
+- **플랜 doc**: `.omc/plans/spatial-engine-v0.6-stability.md` (post-hoc).
+- **주간 리포트**: `docs/weekly_progress_report_2026-05-18.md`.
+
+## 이번 주 릴리즈/태그
+- v0.3.1 (채널 매핑 정확성)
+- v0.4 (VST3 2버스 + 상태 v4 + .speh 배선)
+- v0.5 (상용 바이노럴 디코더)
+- v0.5.1 (바이노럴 핫픽스 4종)
+
+## 핵심 의의
+"엔지니어가 데모하는 도구" → "음악 제작자가 DAW에서 일상적으로 돌리는 플러그인"
+경계선을 이번 주에 넘어섰음. 다음 단계는 외부 베타 테스터(Reaper/Bitwig 사용자)
+실제 핸즈온 피드백 수집.

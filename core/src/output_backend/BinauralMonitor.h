@@ -223,6 +223,58 @@ public:
                                                  std::memory_order_acq_rel);
     }
 
+    // ──── v0.6 #5 — runtime sticky-underrun auto-demote ────
+    //
+    // When the B2 fan-out's actual wall-clock processing time exceeds
+    // (kDemoteBudgetFraction × block deadline) for kDemoteStrikes
+    // consecutive blocks, BinauralMonitor auto-demotes the effective mode
+    // to Direct (B1) and arms a one-shot warning latch for the IO drain.
+    // The demote is sticky for the lifetime of the BinauralMonitor (it is
+    // cleared by initialize()), so transient spikes won't flap the mode.
+    //
+    // The plan (v0.5.1 §Q5, deferred to v0.6) explicitly preferred option
+    // (a): a wall-clock detector inside BinauralMonitor — because the VST3
+    // plugin process has no XrunCounter feed (only the standalone Null/
+    // Dante backends do). We measure via std::chrono::steady_clock; on
+    // modern Linux this is a vDSO call (~30 ns, no syscall, no alloc).
+    //
+    // Tuning:
+    //   kDemoteStrikes        = 8 consecutive blocks (≈ 21 ms at 48 kHz/128)
+    //   kDemoteBudgetFraction = 0.9  (90% of deadline)
+    static constexpr int   kRuntimeDemoteStrikes        = 8;
+    static constexpr float kRuntimeDemoteBudgetFraction = 0.9f;
+
+    // True when runtime auto-demote has fired (sticky until next initialize()).
+    bool isRuntimeDemoted() const noexcept {
+        return runtime_demoted_.load(std::memory_order_acquire);
+    }
+
+    // IO-thread drain: returns true once per demote event. Heartbeat emits
+    // /sys/binaural_warning ,s "ambivs_demoted_runtime" on a true result.
+    bool drainRuntimeDemotePending() noexcept {
+        return runtime_demote_warning_pending_.exchange(
+            false, std::memory_order_acq_rel);
+    }
+
+    // Audio-thread entry: report the wall-clock duration of a just-finished
+    // B2 block. Bumps the strike counter when over budget, resets to 0
+    // otherwise. When strikes reach kRuntimeDemoteStrikes for the first
+    // time, sets runtime_demoted_, clamps effective_mode_ to Direct, and
+    // arms the warning latch. Subsequent calls are no-ops once demoted.
+    // Safe to call with block_size <= 0 or sample_rate <= 0 (no-op).
+    void recordB2BlockTiming(int block_size, float sample_rate,
+                             long long elapsed_ns) noexcept;
+
+    // Test-only hook: drive the strike counter to (kRuntimeDemoteStrikes - 1)
+    // so the next over-budget recordB2BlockTiming() call triggers the demote
+    // deterministically. Use with care; do NOT invoke from production code.
+    void injectRuntimeUnderrunStrikesForTest() noexcept;
+
+    // Test-only hook: clear the runtime demote state. The strike counter,
+    // demoted flag, and warning latch all reset to fresh-start values.
+    // Useful for re-running scenarios in a single test process.
+    void clearRuntimeDemoteForTest() noexcept;
+
     // Test-only hook to inject a synthetic throughput value without running
     // the real probe (useful for slow-CPU fallback unit tests). Suffixed to
     // discourage production callers; do NOT invoke from VST3/UI code.
@@ -379,6 +431,17 @@ private:
     // and emits /sys/binaural_warning ,s "xfade_truncated_cpu" exactly once
     // per arm event (no per-block flood).
     std::atomic<bool> xfade_truncated_pending_{false};
+
+    // v0.6 #5 — runtime sticky-underrun auto-demote state.
+    // strikes      — audio-thread consecutive over-budget counter (resets on
+    //                a good block; saturates at kRuntimeDemoteStrikes).
+    // demoted      — sticky atomic; once true the B2 dispatch path clamps
+    //                effective_mode_ to Direct. Cleared only by initialize().
+    // warning_pending — IO-thread one-shot drain (exchange-to-false), gates
+    //                /sys/binaural_warning ,s "ambivs_demoted_runtime" emission.
+    std::atomic<int>  runtime_demote_strikes_{0};
+    std::atomic<bool> runtime_demoted_{false};
+    std::atomic<bool> runtime_demote_warning_pending_{false};
 
     // Pre-computed linear envelopes for both supported ramp lengths. Sized
     // [N * MAX_BLOCK] so callers can index by (block_index * block_size_ +

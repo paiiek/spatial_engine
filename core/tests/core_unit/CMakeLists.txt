@@ -492,6 +492,15 @@ target_compile_definitions(test_b2_ambivs_equivalent_to_b1_at_order3 PRIVATE
 add_test(NAME b2_ambivs_equivalent_to_b1_at_order3
     COMMAND test_b2_ambivs_equivalent_to_b1_at_order3)
 
+# v0.6 #5 — runtime sticky-underrun auto-demote (B2 wall-clock detector).
+add_executable(test_b2_runtime_underrun_auto_demote
+    test_b2_runtime_underrun_auto_demote.cpp)
+target_link_libraries(test_b2_runtime_underrun_auto_demote PRIVATE spe_core)
+target_compile_definitions(test_b2_runtime_underrun_auto_demote PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_runtime_underrun_auto_demote
+    COMMAND test_b2_runtime_underrun_auto_demote)
+
 # ─────────────────────────────────────────────────────────────────────────
 # v0.5.1 Q2 (A3) — B1↔B2 mode-transition crossfade tests.
 # ─────────────────────────────────────────────────────────────────────────

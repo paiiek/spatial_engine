@@ -786,34 +786,16 @@ SpatialEngineProcessor::process(Steinberg::Vst::ProcessData& data)
 {
     using namespace Steinberg::Vst;
 
-    // v0.5.1 Q1 — drain the "no_sofa_loaded" warning latch on the first
-    // render pass after prepareToPlay(). Cheap atomic compare; the actual
-    // sendto() runs on OSCBackend's IO drain thread. NOT routed through
-    // SpatialEnginePluginUdp (which stays recv-only per ADR 0010 A2-α).
-    if (no_sofa_warning_pending_.load(std::memory_order_acquire)
-        && !no_sofa_warning_emitted_.load(std::memory_order_acquire)
-        && engine_)
-    {
-        engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
-                                        "no_sofa_loaded");
-        no_sofa_warning_emitted_.store(true, std::memory_order_release);
-        no_sofa_warning_pending_.store(false, std::memory_order_release);
-    }
-
-    // v0.5.1 Q3 — drain the /sys/state snapshot latch. Emits exactly once
-    // per prepareToPlay() lifetime; payload encodes the active-path fallback
-    // policy as a single ,s string ("fallback_mode=muted" when active-path
-    // no-SOFA is engaged, else "fallback_mode=normal"). Stays inside the
-    // existing Q1 ,s wire surface (no encoder expansion needed).
-    if (state_snapshot_pending_.load(std::memory_order_acquire) && engine_)
-    {
-        const bool muted =
-            state_snapshot_is_muted_.load(std::memory_order_acquire);
-        engine_->oscBackend().sendReply("/sys/state", ",s",
-                                        muted ? "fallback_mode=muted"
-                                              : "fallback_mode=normal");
-        state_snapshot_pending_.store(false, std::memory_order_release);
-    }
+    // v0.6 #4 — audio thread no longer emits OSC. The no_sofa_loaded
+    // and /sys/state fallback_mode latches are armed by setupProcessing()
+    // (control thread) and DRAINED by the heartbeat IO thread inside
+    // heartbeatLoop(). This removes the audio-thread sendReply() call
+    // (which internally called std::condition_variable::notify_one() —
+    // not strictly RT-safe per the plan's principle #2). The heartbeat
+    // is woken on its first iteration via the existing wait_for() with
+    // immediate-drain-then-wait pattern, so the worst-case latency is
+    // bounded by setActive(true)→heartbeat thread spawn (~µs) plus the
+    // notify path (~µs).
 
 #ifdef SPATIAL_ENGINE_VST3_OSC
     // --- S3: drain audio-path OSC command ring (UDP thread → audio thread) ---
@@ -1272,33 +1254,81 @@ void SpatialEngineProcessor::stopHeartbeatTimer()
 void SpatialEngineProcessor::heartbeatLoop() noexcept
 {
     using namespace std::chrono_literals;
-    // Loop body: 1 s sleep + one status emission. Wakes promptly on stop
-    // because the sleep is a single 1 s sleep_for (not aggregated). Max
-    // shutdown latency is therefore ~1 s.
+    // v0.6 #4 — drain-first-then-wait pattern. Each iteration:
+    //   1. Snapshot binaural_status (1 Hz cadence).
+    //   2. Edge-triggered drain of xfade_truncated_cpu pending flag.
+    //   3. v0.6 #4 NEW: drain no_sofa_loaded latch (armed by setupProcessing).
+    //   4. v0.6 #4 NEW: drain /sys/state fallback_mode latch.
+    //   5. Wait up to 1 s OR notify (stop signal).
+    //
+    // Putting the drain BEFORE the wait ensures the very first thread tick
+    // emits any pending latches immediately on setActive(true). That keeps
+    // the no_sofa_loaded emission well within the plan's 200 ms
+    // trigger→client latency budget without an audio-thread sendReply.
     while (heartbeat_running_.load(std::memory_order_acquire)) {
+        if (engine_) {
+            // RT-safety: this is the IO thread, not the audio thread. We
+            // read snapshot atomics produced by the engine. No allocation
+            // beyond what sendReply()'s pre-allocated ring slot copy needs.
+            const std::int32_t failures =
+                static_cast<std::int32_t>(engine_->loadIntoFailuresCount() & 0x7FFFFFFFu);
+            engine_->oscBackend().sendReply("/sys/binaural_status", ",i", failures);
+
+            // v0.5.1 Q2 (A3 MAJOR 1-iter3): edge-triggered emission of
+            // /sys/binaural_warning ,s "xfade_truncated_cpu" exactly once
+            // per probe-clamped ramp event. Audio thread sets the pending
+            // flag via observeAndArmXfade(); heartbeat is the only consumer.
+            if (engine_->binauralDrainXfadeTruncatedPending()) {
+                engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                                "xfade_truncated_cpu");
+            }
+
+            // v0.6 #5: edge-triggered emission of
+            // /sys/binaural_warning ,s "ambivs_demoted_runtime" exactly once
+            // per runtime sticky-underrun event. The B2 audio path sets the
+            // pending flag from recordB2BlockTiming() when strikes reach
+            // kRuntimeDemoteStrikes; heartbeat is the only consumer.
+            if (engine_->binauralDrainRuntimeDemotePending()) {
+                engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                                "ambivs_demoted_runtime");
+            }
+
+            // v0.6 #4: drain the no_sofa_loaded latch that setupProcessing
+            // armed on the control thread. We only mark "emitted" when
+            // sendReply succeeds (peer captured + ring not full), so if
+            // the host hasn't completed a handshake yet, we retry on the
+            // next 1 Hz tick.
+            if (no_sofa_warning_pending_.load(std::memory_order_acquire)
+                && !no_sofa_warning_emitted_.load(std::memory_order_acquire))
+            {
+                if (engine_->oscBackend().sendReply("/sys/binaural_warning",
+                                                    ",s", "no_sofa_loaded"))
+                {
+                    no_sofa_warning_emitted_.store(true, std::memory_order_release);
+                    no_sofa_warning_pending_.store(false, std::memory_order_release);
+                }
+            }
+
+            // v0.6 #4: drain the /sys/state fallback_mode snapshot latch.
+            // Same retry semantics as no_sofa above.
+            if (state_snapshot_pending_.load(std::memory_order_acquire)) {
+                const bool muted =
+                    state_snapshot_is_muted_.load(std::memory_order_acquire);
+                if (engine_->oscBackend().sendReply("/sys/state", ",s",
+                        muted ? "fallback_mode=muted"
+                              : "fallback_mode=normal"))
+                {
+                    state_snapshot_pending_.store(false, std::memory_order_release);
+                }
+            }
+        }
+
         {
             std::unique_lock<std::mutex> lk(heartbeat_cv_mutex_);
             heartbeat_cv_.wait_for(lk, 1000ms,
                 [this]{ return !heartbeat_running_.load(std::memory_order_acquire); });
         }
         if (!heartbeat_running_.load(std::memory_order_acquire)) break;
-        if (!engine_) continue;
-        // RT-safety: this is the IO thread, not the audio thread. We read a
-        // snapshot atomic produced by the engine. No allocation on this path
-        // beyond what sendReply()'s ring slot copy needs (all pre-allocated).
-        const std::int32_t failures =
-            static_cast<std::int32_t>(engine_->loadIntoFailuresCount() & 0x7FFFFFFFu);
-        engine_->oscBackend().sendReply("/sys/binaural_status", ",i", failures);
-
-        // v0.5.1 Q2 (A3 MAJOR 1-iter3): edge-triggered emission of
-        // /sys/binaural_warning ,s "xfade_truncated_cpu" exactly once per
-        // probe-clamped ramp event. The audio thread sets the pending flag
-        // via observeAndArmXfade() when arming a 1-block ramp due to
-        // probe_warning_set_; the heartbeat is the only consumer.
-        if (engine_->binauralDrainXfadeTruncatedPending()) {
-            engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
-                                            "xfade_truncated_cpu");
-        }
     }
 }
 

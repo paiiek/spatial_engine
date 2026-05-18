@@ -706,10 +706,22 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                                 }
                             }
                         }
+                        // v0.6 #5 — measure wall-clock B2 processing time
+                        // for the runtime sticky-underrun auto-demote detector.
+                        // steady_clock::now() is a vDSO call on modern Linux
+                        // (~30 ns, no syscall, no alloc — RT-safe).
+                        const auto _b2_t0 = std::chrono::steady_clock::now();
                         binaural_.processBlockB2(b2_sh_ptrs_.data(),
                                                  /*order=*/3,
                                                  block.num_frames,
                                                  dstL, dstR);
+                        const auto _b2_t1 = std::chrono::steady_clock::now();
+                        const long long _b2_ns =
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                _b2_t1 - _b2_t0).count();
+                        binaural_.recordB2BlockTiming(
+                            block.num_frames,
+                            static_cast<float>(sample_rate_), _b2_ns);
                     } else {
                         // B1 per-object HRTF sum.
                         std::fill(dstL, dstL + block.num_frames, 0.f);

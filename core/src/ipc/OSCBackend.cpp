@@ -431,8 +431,11 @@ std::size_t claimSlotCAS(std::atomic<std::size_t>& head,
 
 } // namespace
 
-bool OSCBackend::sendReply(const char* addr, const char* types,
-                            const char* s) noexcept
+// v0.6 #8 — single source of truth for outbound enqueue. The 3 public
+// sendReply() overloads are 3-line forwarders below.
+bool OSCBackend::sendReplyImpl(const char* addr, const char* types,
+                               const char* s, bool have_f, float f,
+                               bool have_i, int32_t i) noexcept
 {
     if (last_peer_len_.load(std::memory_order_acquire) == 0) {
         outbound_drops_.fetch_add(1, std::memory_order_relaxed);
@@ -446,7 +449,8 @@ bool OSCBackend::sendReply(const char* addr, const char* types,
     }
     auto& slot = outbound_ring_[idx];
     const std::size_t n = encodeOscReply(slot.buf.data(), slot.buf.size(),
-                                          addr, types, s, false, 0.f, false, 0);
+                                          addr, types, s, have_f, f,
+                                          have_i, i);
     if (n == 0) {
         // Slot was reserved but payload encode failed — publish an empty
         // ready slot so the consumer can drain past it (a hole in the ring
@@ -471,68 +475,21 @@ bool OSCBackend::sendReply(const char* addr, const char* types,
 }
 
 bool OSCBackend::sendReply(const char* addr, const char* types,
+                            const char* s) noexcept
+{
+    return sendReplyImpl(addr, types, s, false, 0.f, false, 0);
+}
+
+bool OSCBackend::sendReply(const char* addr, const char* types,
                             const char* s, float f) noexcept
 {
-    if (last_peer_len_.load(std::memory_order_acquire) == 0) {
-        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    const std::size_t idx =
-        claimSlotCAS(out_head_, out_tail_, kOutboundRingCap);
-    if (idx == static_cast<std::size_t>(-1)) {
-        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    auto& slot = outbound_ring_[idx];
-    const std::size_t n = encodeOscReply(slot.buf.data(), slot.buf.size(),
-                                          addr, types, s, true, f, false, 0);
-    if (n == 0) {
-        slot.len      = 0;
-        slot.dest_len = 0;
-        slot.ready.store(true, std::memory_order_release);
-        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
-        out_cv_.notify_one();
-        return false;
-    }
-    slot.len      = static_cast<uint16_t>(n);
-    slot.dest_len = last_peer_len_.load(std::memory_order_acquire);
-    std::memcpy(&slot.dest, &last_peer_endpoint_, slot.dest_len);
-    slot.ready.store(true, std::memory_order_release);
-    out_cv_.notify_one();
-    return true;
+    return sendReplyImpl(addr, types, s, true, f, false, 0);
 }
 
 bool OSCBackend::sendReply(const char* addr, const char* types,
                             int32_t i) noexcept
 {
-    if (last_peer_len_.load(std::memory_order_acquire) == 0) {
-        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    const std::size_t idx =
-        claimSlotCAS(out_head_, out_tail_, kOutboundRingCap);
-    if (idx == static_cast<std::size_t>(-1)) {
-        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    auto& slot = outbound_ring_[idx];
-    const std::size_t n = encodeOscReply(slot.buf.data(), slot.buf.size(),
-                                          addr, types, nullptr, false, 0.f,
-                                          true, i);
-    if (n == 0) {
-        slot.len      = 0;
-        slot.dest_len = 0;
-        slot.ready.store(true, std::memory_order_release);
-        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
-        out_cv_.notify_one();
-        return false;
-    }
-    slot.len      = static_cast<uint16_t>(n);
-    slot.dest_len = last_peer_len_.load(std::memory_order_acquire);
-    std::memcpy(&slot.dest, &last_peer_endpoint_, slot.dest_len);
-    slot.ready.store(true, std::memory_order_release);
-    out_cv_.notify_one();
-    return true;
+    return sendReplyImpl(addr, types, nullptr, false, 0.f, true, i);
 }
 
 // ---------------------------------------------------------------------------
@@ -620,9 +577,20 @@ void OSCBackend::outboundDrainLoop() {
             } else {
                 outbound_drops_.fetch_add(1, std::memory_order_relaxed);
             }
-            // Clear ready BEFORE advancing tail so the ring slot can be
-            // reused safely on the next producer wrap.
-            slot.ready.store(false, std::memory_order_relaxed);
+            // v0.6 #9 — tighten the ready/tail ordering for weakly-ordered
+            // hardware (ARM/ppc). The clear MUST be release so that:
+            //   (a) by the time the wrap-producer CAS-claims this slot and
+            //       writes its own ready=true (release), our clear has
+            //       fully propagated — no stale ready=false store can later
+            //       overwrite the producer's published true.
+            //   (b) the consumer's subsequent acquire-load on ready (next
+            //       iteration when the slot is republished) sees the
+            //       producer's data writes happens-before the producer's
+            //       ready=true, not our stale slot contents.
+            // The tail release-store still serializes the prior reads of
+            // slot.{buf,dest_len} so the wrap-producer's CAS-acquire on
+            // tail observes the consumer's drain complete.
+            slot.ready.store(false, std::memory_order_release);
             out_tail_.store((t + 1) % kOutboundRingCap,
                              std::memory_order_release);
         }

@@ -38,6 +38,27 @@ static thread_local bool   g_rt_guard_active = false;
 static thread_local size_t g_alloc_count     = 0;
 
 // ---------------------------------------------------------------------------
+// v0.5.2 #2 — ASan compatibility guard.
+//
+// The strong-symbol malloc/free overrides below are FUNDAMENTALLY incompatible
+// with AddressSanitizer: ASan also installs interceptors on malloc/free, and
+// any new-thread startup path (e.g. ASan's pthread_getattr_np during
+// asan_thread_start) calls free() on an ASan-tagged buffer. Our override
+// routes that free to __libc_free, which sees an unknown size class and
+// aborts with "free(): invalid size".
+//
+// This surfaced in v0.5.1 when the VST3 plugin started spawning a heartbeat
+// std::thread inside setActive(true) — previously only the main thread ran
+// and ASan never needed to spawn a new thread on the probed binaries.
+//
+// Under __SANITIZE_ADDRESS__: skip the overrides entirely. ASan owns malloc/
+// free; the alloc counter stays at 0 (the RT-alloc gate becomes a no-op).
+// The non-ASan ctest run remains the authoritative RT-alloc enforcement
+// surface; the ASan run verifies behavioral correctness without RT counting.
+// ---------------------------------------------------------------------------
+#ifndef __SANITIZE_ADDRESS__
+
+// ---------------------------------------------------------------------------
 // glibc internal symbols — direct declaration, no <dlfcn.h>, no dlsym.
 // Stable exported symbols since glibc 2.30 (GLIBC_PRIVATE / standard internal
 // ABI). Verified present via readelf on ubuntu-24.04 glibc 2.39.
@@ -91,3 +112,5 @@ void operator delete(void* p) noexcept              { __libc_free(p); }
 void operator delete[](void* p) noexcept             { __libc_free(p); }
 void operator delete(void* p, std::size_t) noexcept  { __libc_free(p); }
 void operator delete[](void* p, std::size_t) noexcept { __libc_free(p); }
+
+#endif // __SANITIZE_ADDRESS__
