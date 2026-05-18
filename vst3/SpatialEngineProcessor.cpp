@@ -1254,25 +1254,37 @@ void SpatialEngineProcessor::stopHeartbeatTimer()
 void SpatialEngineProcessor::heartbeatLoop() noexcept
 {
     using namespace std::chrono_literals;
-    // v0.6 #4 — drain-first-then-wait pattern. Each iteration:
-    //   1. Snapshot binaural_status (1 Hz cadence).
-    //   2. Edge-triggered drain of xfade_truncated_cpu pending flag.
-    //   3. v0.6 #4 NEW: drain no_sofa_loaded latch (armed by setupProcessing).
-    //   4. v0.6 #4 NEW: drain /sys/state fallback_mode latch.
-    //   5. Wait up to 1 s OR notify (stop signal).
+    // v0.6 #4 + D-M4 — drain-first-then-wait at 100 ms tick (10 Hz) with a
+    // sub-tick counter that keeps /sys/binaural_status at 1 Hz (every 10
+    // ticks). Each iteration:
+    //   1. (every tick) Edge-triggered drain of all latches.
+    //   2. (every 10 ticks = 1 Hz) Snapshot binaural_status.
+    //   3. Wait up to 100 ms OR notify (stop signal).
     //
-    // Putting the drain BEFORE the wait ensures the very first thread tick
-    // emits any pending latches immediately on setActive(true). That keeps
-    // the no_sofa_loaded emission well within the plan's 200 ms
-    // trigger→client latency budget without an audio-thread sendReply.
+    // Pre-D-M4 the loop ran at 1 Hz which meant a latch armed *just after*
+    // a tick had a worst-case 1 s emission latency. The plan's stated
+    // 200 ms budget was silently violated under a host that lazy-binds the
+    // OSC channel (architect retro §A.1 edge cases 1+2). After D-M4 the
+    // worst-case latency is 100 ms; the status cadence is unchanged so
+    // DAW automation that reads /sys/binaural_status at 1 Hz sees no
+    // additional traffic. Idle thread wake at 10 Hz costs a few µs/tick
+    // (IO thread, not RT audio).
+    constexpr int kTicksPerStatusEmit = 10;  // 100 ms × 10 = 1 s.
+    int status_tick_count = 0;
     while (heartbeat_running_.load(std::memory_order_acquire)) {
         if (engine_) {
             // RT-safety: this is the IO thread, not the audio thread. We
             // read snapshot atomics produced by the engine. No allocation
             // beyond what sendReply()'s pre-allocated ring slot copy needs.
-            const std::int32_t failures =
-                static_cast<std::int32_t>(engine_->loadIntoFailuresCount() & 0x7FFFFFFFu);
-            engine_->oscBackend().sendReply("/sys/binaural_status", ",i", failures);
+
+            // ── 1 Hz cadence — /sys/binaural_status snapshot. ──
+            if (status_tick_count == 0) {
+                const std::int32_t failures =
+                    static_cast<std::int32_t>(engine_->loadIntoFailuresCount() & 0x7FFFFFFFu);
+                engine_->oscBackend().sendReply("/sys/binaural_status", ",i", failures);
+            }
+
+            // ── 10 Hz cadence (every tick) — edge-triggered latch drains. ──
 
             // v0.5.1 Q2 (A3 MAJOR 1-iter3): edge-triggered emission of
             // /sys/binaural_warning ,s "xfade_truncated_cpu" exactly once
@@ -1293,11 +1305,26 @@ void SpatialEngineProcessor::heartbeatLoop() noexcept
                                                 "ambivs_demoted_runtime");
             }
 
+            // v0.6 D-M2: edge-triggered emission of
+            // /sys/binaural_warning ,s "rt_timing_unavailable" exactly once
+            // per BinauralMonitor lifetime when the initialize()-time
+            // steady_clock probe finds the platform too slow to bracket B2
+            // blocks. Sticky for the lifetime; re-armed by the next
+            // initialize() if (and only if) the new probe is also slow.
+            // Lets the host know runtime auto-demote detection has been
+            // silently disabled on this platform — B2 still runs, but the
+            // /sys/binaural_warning ,s "ambivs_demoted_runtime" path will
+            // never fire here regardless of CPU load.
+            if (engine_->binauralDrainRtTimingUnavailablePending()) {
+                engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                                "rt_timing_unavailable");
+            }
+
             // v0.6 #4: drain the no_sofa_loaded latch that setupProcessing
             // armed on the control thread. We only mark "emitted" when
             // sendReply succeeds (peer captured + ring not full), so if
             // the host hasn't completed a handshake yet, we retry on the
-            // next 1 Hz tick.
+            // next 100 ms tick (post-D-M4).
             if (no_sofa_warning_pending_.load(std::memory_order_acquire)
                 && !no_sofa_warning_emitted_.load(std::memory_order_acquire))
             {
@@ -1323,9 +1350,12 @@ void SpatialEngineProcessor::heartbeatLoop() noexcept
             }
         }
 
+        // Advance the sub-tick counter (rolls over at kTicksPerStatusEmit).
+        status_tick_count = (status_tick_count + 1) % kTicksPerStatusEmit;
+
         {
             std::unique_lock<std::mutex> lk(heartbeat_cv_mutex_);
-            heartbeat_cv_.wait_for(lk, 1000ms,
+            heartbeat_cv_.wait_for(lk, 100ms,
                 [this]{ return !heartbeat_running_.load(std::memory_order_acquire); });
         }
         if (!heartbeat_running_.load(std::memory_order_acquire)) break;

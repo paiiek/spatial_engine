@@ -157,6 +157,7 @@ OSC 채널** 로 상태를 통보합니다. 모두 **IO 스레드** (audio threa
 | `no_sofa_loaded` | binaural enable=1 인데 SOFA 가 없어 강제 뮤트 중 | binaural 가 켜진 후 SOFA 가 한 번도 로드된 적 없음 | v0.5.1 |
 | `xfade_truncated_cpu` | 모드 전환 / 슬롯 스왑 크로스페이드 ramp 가 CPU probe 의 클램프로 1 블록으로 잘림 | 모드 전환 시 매 회 발생 가능 | v0.5.1 |
 | `ambivs_demoted_runtime` | B2 의 wall-clock 처리 시간이 deadline 의 90% 를 8 블록 연속 초과 → B1 으로 영구 강등 (sticky, 다음 `prepareToPlay()` 까지) | 런타임 한 번 fire 후 reset 전까지 침묵 | **v0.6.0** |
+| `rt_timing_unavailable` | 이 머신에서 `std::chrono::steady_clock` 가 vDSO 가 아닌 syscall 로 떨어져 (avg/call ≥ 200ns) — runtime 자동 디모트 detector 가 silently 비활성화됨. B2 는 정상 동작하나 `ambivs_demoted_runtime` 가 영원히 fire 하지 않음. 보통 오래된 ARM Linux 커널 또는 일부 Intel macOS 에서 발생. | `prepareToPlay()` 시점의 probe 결과 slow 인 경우. 1 회 통보 후 다음 `prepareToPlay()` 까지 침묵. | **v0.6.1** |
 
 - 모든 코드는 **edge-trigger** — 같은 코드가 1 회 통보 후 같은 latch 가 다시
   arm 되기 전까지 침묵합니다.

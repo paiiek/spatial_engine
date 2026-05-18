@@ -711,16 +711,31 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                         // steady_clock::now() is a vDSO call on modern Linux
                         // (~30 ns, no syscall, no alloc — RT-safe).
                         //
-                        // v0.6 P1-4 kill-switch: once the sticky demote has
-                        // fired, processBlockB2() may still run briefly while
-                        // the crossfade unwinds toward Direct, but there is no
+                        // v0.6 P1-4 kill-switch + D-M2 vDSO gate.
+                        //
+                        // P1-4: once the sticky demote has fired,
+                        // processBlockB2() may still run briefly while the
+                        // crossfade unwinds toward Direct, but there is no
                         // value in measuring or reporting the cost further
                         // (recordB2BlockTiming early-returns on the demoted
-                        // flag anyway). Skip the wall-clock brackets entirely
-                        // so the steady-state cost on a demoted host returns
-                        // to zero — relevant on macOS where steady_clock can
-                        // fall back to a syscall.
-                        if (!binaural_.isRuntimeDemoted()) {
+                        // flag anyway).
+                        //
+                        // D-M2: on a platform where the initialize()-time
+                        // probe found steady_clock::now() slow (i.e., it
+                        // falls back to a syscall on this host), the
+                        // brackets themselves would be the dominant cost
+                        // and would push every B2 block over budget — a
+                        // self-fulfilling demote prophecy. The heartbeat
+                        // IO thread has already emitted
+                        // /sys/binaural_warning ,s "rt_timing_unavailable"
+                        // by the time the audio loop runs, so the host
+                        // knows demote detection is disabled.
+                        //
+                        // Both gates collapse to a no-op-if-not-needed
+                        // pattern: B2 still renders, just without runtime
+                        // self-monitoring.
+                        if (!binaural_.isRuntimeDemoted()
+                            && binaural_.isSteadyClockFast()) {
                             const auto _b2_t0 = std::chrono::steady_clock::now();
                             binaural_.processBlockB2(b2_sh_ptrs_.data(),
                                                      /*order=*/3,

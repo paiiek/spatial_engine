@@ -196,6 +196,41 @@ int initializeResetsDemoteScenario()
     return 0;
 }
 
+// v0.6 D-M2 — steady_clock vDSO probe + rt_timing_unavailable latch.
+// On a fast CI runner the real probe in initialize() returns "fast", so
+// we use injectSteadyClockSlowForTest() to drive the slow path
+// deterministically. The contract: after the inject, isSteadyClockFast()
+// is false, drainRtTimingUnavailablePending() returns true exactly once,
+// and a subsequent initialize() re-probe must restore the fast path
+// (since the CI machine actually IS fast).
+int steadyClockSlowPathScenario(spe::output::BinauralMonitor& mon)
+{
+    // The first initialize() in main() ran the real probe on a fast CI
+    // runner, so we start from the fast state.
+    REQUIRE(mon.isSteadyClockFast());
+    REQUIRE(!mon.drainRtTimingUnavailablePending());
+
+    // Force the slow path.
+    mon.injectSteadyClockSlowForTest();
+    REQUIRE(!mon.isSteadyClockFast());
+    REQUIRE(mon.drainRtTimingUnavailablePending());
+    REQUIRE(!mon.drainRtTimingUnavailablePending());  // single-fire
+
+    // Re-initialize. On a fast CI runner the real probe restores the
+    // fast path. The latch must NOT be re-armed because the probe
+    // succeeded (the latch is only set on slow result).
+    spe::output::BinauralMonitor::Config cfg;
+    cfg.sofaPath   = std::string(SPE_FIXTURES_DIR) + "/synthetic_min.speh";
+    cfg.sampleRate = kSampleRate;
+    cfg.blockSize  = kBlock;
+    REQUIRE(mon.initialize(cfg) == spe::output::BinauralMonitor::InitResult::Ok);
+    REQUIRE(mon.isSteadyClockFast());          // re-probe restored fast
+    REQUIRE(!mon.drainRtTimingUnavailablePending());  // latch not re-armed
+
+    std::puts("PASS steadyClockSlowPathScenario (D-M2 vDSO probe + latch)");
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -207,11 +242,12 @@ int main()
     cfg.blockSize  = kBlock;
     REQUIRE(mon.initialize(cfg) == spe::output::BinauralMonitor::InitResult::Ok);
 
-    if (basicDemoteScenario(mon)        != 0) return 1;
-    if (resetStrikesScenario(mon)       != 0) return 1;
-    if (injectionFastPathScenario(mon)  != 0) return 1;
-    if (invalidArgsScenario(mon)        != 0) return 1;
+    if (basicDemoteScenario(mon)         != 0) return 1;
+    if (resetStrikesScenario(mon)        != 0) return 1;
+    if (injectionFastPathScenario(mon)   != 0) return 1;
+    if (invalidArgsScenario(mon)         != 0) return 1;
     if (initializeResetsDemoteScenario() != 0) return 1;
+    if (steadyClockSlowPathScenario(mon) != 0) return 1;
 
     std::puts("PASS test_b2_runtime_underrun_auto_demote");
     return 0;

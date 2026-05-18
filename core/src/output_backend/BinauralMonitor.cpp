@@ -48,6 +48,16 @@ BinauralMonitor::InitResult BinauralMonitor::initialize(const Config& cfg)
     runtime_demoted_.store(false, std::memory_order_release);
     runtime_demote_warning_pending_.store(false, std::memory_order_release);
 
+    // v0.6 D-M2 — re-probe steady_clock::now() vDSO availability on every
+    // initialize() so platform/kernel changes between prepareToPlay calls
+    // are picked up. The probe writes both steady_clock_fast_ and (on slow
+    // result) rt_timing_unavailable_pending_. Reset both atomics to fresh-
+    // start values first so a previously slow probe doesn't leak into a
+    // fast re-init.
+    steady_clock_fast_.store(true, std::memory_order_release);
+    rt_timing_unavailable_pending_.store(false, std::memory_order_release);
+    probeSteadyClockSpeed();
+
     if (cfg.sofaPath.empty()) {
         // Pass-through mode: do NOT prime per-object slots. processBlockForObject
         // becomes a no-op writer for unprimed slots, processBlock falls back to
@@ -497,6 +507,49 @@ void BinauralMonitor::clearRuntimeDemoteForTest() noexcept
     runtime_demote_strikes_.store(0, std::memory_order_release);
     runtime_demoted_.store(false, std::memory_order_release);
     runtime_demote_warning_pending_.store(false, std::memory_order_release);
+}
+
+// v0.6 D-M2 — time kSteadyClockProbeSamples calls to steady_clock::now()
+// and demote the platform to "slow" if the average per-call exceeds
+// kSteadyClockFastThresholdNs. Called from initialize() on the control
+// thread; the probe itself is not RT-safe (the whole point is to find out
+// whether RT-safety holds on this platform).
+//
+// Sample rationale: 10 000 calls × ~30 ns = 300 µs on a fast vDSO host;
+// 10 000 × ~500 ns = 5 ms on a syscall-fallback host. Both are negligible
+// at prepareToPlay time. The 200 ns threshold sits roughly halfway between
+// known vDSO ranges (20-60 ns on Linux x86_64, 60-120 ns on macOS arm64
+// commpage) and known syscall costs (500-5000 ns), so it's stable against
+// micro-variations on either side.
+void BinauralMonitor::probeSteadyClockSpeed() noexcept
+{
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    // We deliberately throw away the per-call result to prevent the
+    // compiler from optimising the loop body away. The sink atomic
+    // forces a release-acquire pair on every iteration.
+    static std::atomic<long long> sink{0};
+    for (int i = 0; i < kSteadyClockProbeSamples; ++i) {
+        const auto sample = clock::now().time_since_epoch().count();
+        sink.store(sample, std::memory_order_relaxed);
+    }
+    const auto t1 = clock::now();
+    const long long total_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    const long long avg_ns = total_ns / kSteadyClockProbeSamples;
+    const bool fast = (avg_ns < kSteadyClockFastThresholdNs);
+    steady_clock_fast_.store(fast, std::memory_order_release);
+    if (!fast) {
+        // Arm the one-shot warning latch so the IO thread emits
+        // /sys/binaural_warning ,s "rt_timing_unavailable" exactly once.
+        rt_timing_unavailable_pending_.store(true, std::memory_order_release);
+    }
+}
+
+void BinauralMonitor::injectSteadyClockSlowForTest() noexcept
+{
+    steady_clock_fast_.store(false, std::memory_order_release);
+    rt_timing_unavailable_pending_.store(true, std::memory_order_release);
 }
 
 int BinauralMonitor::b2HrirLength(int vs_idx) const noexcept

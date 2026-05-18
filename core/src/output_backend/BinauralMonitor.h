@@ -275,6 +275,57 @@ public:
     // Useful for re-running scenarios in a single test process.
     void clearRuntimeDemoteForTest() noexcept;
 
+    // ──── v0.6 D-M2 — steady_clock vDSO availability probe ────
+    //
+    // On platforms where std::chrono::steady_clock::now() falls back to
+    // a syscall (old Linux kernels without the arch_timer vDSO, some
+    // older macOS Intel hosts, exotic non-arch-timer ARM SoCs), the
+    // per-block wall-clock brackets added in v0.6 #5 at
+    // SpatialEngine.cpp:709-741 would burn several µs per audio block
+    // on actual syscalls and become RT-unsafe themselves — exactly the
+    // kind of self-fulfilling demote prophecy the Architect retroactive
+    // review §A.2 called out.
+    //
+    // initialize() now times kSteadyClockProbeSamples calls to
+    // steady_clock::now(); if the average exceeds kSteadyClockFastThresholdNs,
+    // we declare the platform "slow" and:
+    //   (a) SpatialEngine.cpp gates the wall-clock brackets behind
+    //       isSteadyClockFast() so the demote detector silently
+    //       no-ops on a slow host (B2 will still run, just without
+    //       runtime self-monitoring).
+    //   (b) the heartbeat IO thread drains drainRtTimingUnavailablePending()
+    //       and emits /sys/binaural_warning ,s "rt_timing_unavailable"
+    //       exactly once per BinauralMonitor lifetime so the host
+    //       knows demote detection is disabled.
+    //
+    // The probe cost is bounded — at the threshold (200 ns/call ×
+    // 10 000 samples) the worst-case is ~2 ms on a slow host, paid
+    // once per prepareToPlay on the control thread.
+    static constexpr long long kSteadyClockFastThresholdNs = 200;
+    static constexpr int       kSteadyClockProbeSamples    = 10000;
+
+    // True iff the most recent initialize() probe found steady_clock::now()
+    // fast enough to bracket every B2 block. Sticky for the BinauralMonitor
+    // lifetime (re-probed on the next initialize()).
+    bool isSteadyClockFast() const noexcept {
+        return steady_clock_fast_.load(std::memory_order_acquire);
+    }
+
+    // IO-thread drain: returns true once per slow-probe event. Heartbeat
+    // emits /sys/binaural_warning ,s "rt_timing_unavailable" on a true
+    // result. Single-fire — subsequent calls return false until the next
+    // initialize() re-arms the latch (assuming the next platform is also
+    // slow; on a re-probe that returns fast the latch stays unarmed).
+    bool drainRtTimingUnavailablePending() noexcept {
+        return rt_timing_unavailable_pending_.exchange(
+            false, std::memory_order_acq_rel);
+    }
+
+    // Test-only hook: force the slow-clock path so the warning drain and
+    // the SpatialEngine.cpp gate are both exercised even on a fast CI
+    // runner. Marks the platform "slow" and arms the warning latch.
+    void injectSteadyClockSlowForTest() noexcept;
+
     // Test-only hook to inject a synthetic throughput value without running
     // the real probe (useful for slow-CPU fallback unit tests). Suffixed to
     // discourage production callers; do NOT invoke from VST3/UI code.
@@ -442,6 +493,22 @@ private:
     std::atomic<int>  runtime_demote_strikes_{0};
     std::atomic<bool> runtime_demoted_{false};
     std::atomic<bool> runtime_demote_warning_pending_{false};
+
+    // v0.6 D-M2 — steady_clock::now() vDSO availability flag, set by
+    // initialize() based on a 10 000-sample timing probe. When false,
+    // SpatialEngine.cpp's wall-clock brackets are skipped (the demote
+    // detector silently no-ops), and the heartbeat IO thread emits
+    // /sys/binaural_warning ,s "rt_timing_unavailable" exactly once.
+    // Default true (assume fast); the probe demotes to false only on
+    // measurably-slow platforms.
+    std::atomic<bool> steady_clock_fast_{true};
+    std::atomic<bool> rt_timing_unavailable_pending_{false};
+
+    // v0.6 D-M2 — internal helper that times kSteadyClockProbeSamples
+    // calls to steady_clock::now() and writes the result to
+    // steady_clock_fast_ (and arms rt_timing_unavailable_pending_ on
+    // slow result). Called from initialize() only; not RT-safe.
+    void probeSteadyClockSpeed() noexcept;
 
     // Pre-computed linear envelopes for both supported ramp lengths. Sized
     // [N * MAX_BLOCK] so callers can index by (block_index * block_size_ +

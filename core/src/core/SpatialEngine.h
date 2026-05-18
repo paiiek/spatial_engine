@@ -131,6 +131,26 @@ public:
         binaural_.recordB2BlockTiming(block_size, sample_rate, elapsed_ns);
     }
 
+    // v0.6 D-M2 — engine-level forwarders for the steady_clock vDSO
+    // probe results. Audio thread reads isSteadyClockFast() through the
+    // forwarder to gate the wall-clock brackets in audioBlock(); IO
+    // thread heartbeat drains drainRtTimingUnavailablePending() to emit
+    // /sys/binaural_warning ,s "rt_timing_unavailable" exactly once
+    // per BinauralMonitor lifetime when the probe finds the platform
+    // slow.
+    bool binauralIsSteadyClockFast() const noexcept {
+        return binaural_.isSteadyClockFast();
+    }
+    bool binauralDrainRtTimingUnavailablePending() noexcept {
+        return binaural_.drainRtTimingUnavailablePending();
+    }
+
+    // Test-only forwarder — drives the slow path for deterministic
+    // verification on fast CI runners.
+    void injectBinauralSteadyClockSlowForTest() noexcept {
+        binaural_.injectSteadyClockSlowForTest();
+    }
+
     // v0.5.1 Q1 — test-only hook: inject a synthetic probe throughput and
     // emit the matching /sys/binaural_warning if the injected value forces
     // a B2→B1 fallback. Used exclusively by the soak harness CLI flag

@@ -225,3 +225,99 @@ checklist in `docs/release/v0.3.0/daw-handson-log.md`):
   list naming this ADR as P0-2.
 - GPL-3 source: `core/JUCE/LICENSE.md` (when JUCE submodule is
   initialised); canonical text <https://www.gnu.org/licenses/gpl-3.0.txt>.
+- `.omc/plans/critic-r-v0.6-retro.md` §A.3 + §D MEDIUM-3 — Critic
+  retroactive review that drove Appendix A below.
+
+---
+
+## Appendix A — GPL-3 §6 obligation mapping per band
+
+Added 2026-05-18 in response to the v0.6 critic retroactive review §A.3
+finding that the original ADR enumerated four distribution bands without
+spelling out which subsection of GPL-3 §6 ("Conveying Non-Source
+Forms") applies to each. The omission was real but bounded — no Band-1
+or Band-2 handoff has occurred during the v0.x cycle — so the mapping
+below is *expressed forward* rather than retroactive.
+
+**GPL-3 §6 recap** (paraphrased; the canonical text is at
+<https://www.gnu.org/licenses/gpl-3.0.txt>): when you *convey* a covered
+work in non-source (binary) form, you must accompany it with the
+corresponding source under one of the following options:
+
+- **§6.a** — convey the source on a physical medium with the binary.
+- **§6.b** — convey the binary on a physical medium *and* accompany it
+  with a **written offer, valid for at least three years**, to provide
+  source to any third party for no more than the cost of physically
+  performing the source conveyance.
+- **§6.c** — accompany the binary with the §6.b written offer (only
+  available for noncommercial conveyance and only if you received the
+  binary with such an offer).
+- **§6.d** — convey the binary by offering access from a *designated
+  place* (e.g., a network server) *with equivalent access* to the
+  source from the same or a different designated place at no further
+  charge. The source-server URL must remain accessible **for as long
+  as you are offering the binary**.
+- **§6.e** — peer-to-peer conveyance accompanied by §6.d-style
+  information about where peers can get the source.
+
+### Per-band §6 election (this project's choice)
+
+| Band | Distribution mechanism | §6 election | Why this election | Audit-log entry required |
+|------|------------------------|-------------|-------------------|--------------------------|
+| **Band 0** — internal lab | No conveyance occurs. The binary stays on machines owned/operated by SNU MARG. | **N/A** — §6 only triggers on *conveyance* to a third party. | Internal use does not engage GPL-3 §6 at all. | No. |
+| **Band 1** — named research collaborator (≤5, written ack) | Direct binary handoff (email attachment, USB stick, cloud storage link). Recipient identity is known + recorded. | **§6.d** — the public git repository (e.g., `git@github.com:paiiek/spatial_engine.git`) is the "designated place" + the recipient is told the exact tag commit SHA so they can fetch the corresponding source. The repo URL is the equivalent-access source location. | Direct conveyance to a known recipient with a stable source URL is the cleanest mapping. §6.b (3-year written offer) is an admissible fallback if the repo URL becomes inaccessible; we do not pre-issue the §6.b offer because the repo is the source of truth. | Yes — record tag commit SHA, repo URL, recipient identity, ack timestamp in `docs/license_procurement_plan.md §Audit log`. |
+| **Band 2** — public download | Public-URL binary distribution (e.g., GitHub Releases attachment, lab website). Recipients individually unknown. | **§6.d** — the GitHub Releases page itself is the "designated place"; the corresponding source is at the same tag in the public repo. The release page must explicitly link the corresponding source tag. | Same rationale as Band 1, scaled. §6.b is undesirable here because it shifts a recurring 3-year obligation onto the project for each release. §6.d's "equivalent access" via the same repo is much easier to maintain. | Yes — append release-page URL + corresponding source tag to the audit log. |
+| **Band 3** — commercial / paid / productized | Commercial product, paid pilot, exhibition install. | **N/A under GPL-3** — Band 3 is gated on JUCE commercial license procurement (see `docs/license_procurement_plan.md`) before any conveyance. Once JUCE commercial is procured, the project is no longer constrained to GPL-3 for distribution; the license terms shift to the JUCE commercial terms + whatever the project chooses for its own code. | The point of Band 3 is precisely to exit the GPL-3 obligation regime by paying for the commercial license. | N/A — JUCE procurement record replaces the GPL audit log for Band 3 binaries. |
+
+### The §6.b "written offer for 3 years" option — when to use
+
+The project does **not pre-issue** §6.b written offers because §6.d
+satisfies the obligation more cleanly via the public repo. However, a
+§6.b offer becomes the safer election in any of these scenarios:
+
+- The repository visibility changes (private → public is irrelevant;
+  public → private would force §6.b on all prior Band 1/2 recipients).
+- The repository is taken down or migrated to a non-equivalent host.
+- A specific recipient asks for the §6.b form explicitly (e.g., their
+  organization's compliance team requires a written offer artifact).
+
+If a §6.b election ever becomes necessary, the template is short
+(roughly 6 sentences). A draft is **not currently in this ADR** — it
+should be drafted at the trigger moment with the legal review pass
+described below.
+
+---
+
+## Limitations & legal review status
+
+This ADR was authored by the project lead (without legal counsel) in a
+doc-tightening pass during the v0.6 cycle. The §Decision and Appendix A
+above represent **the project's own interpretation** of GPL-3 §6 as
+applied to four specific distribution patterns. They are **not a
+substitute for legal review** and have not been reviewed by a lawyer or
+the Software Freedom Law Center.
+
+**Hard rule:** before the **first** Band-1 conveyance to a non-SNU-MARG
+recipient (and unconditionally before any Band-2 or Band-3 conveyance),
+the project lead should:
+
+1. Have this ADR (Decision + Appendix A) reviewed by an attorney
+   familiar with FOSS licensing (e.g., SNU's tech transfer office, or
+   an external counsel familiar with GPL-3). Cost: a few hours of
+   counsel time; not gating for SNU-internal research collaborators
+   under Band 0 / 1 where audit-trail discipline is the primary risk
+   control.
+2. Adjust the §Decision bands or Appendix A based on the review.
+3. Append a `### Legal review status` block to this ADR noting the
+   reviewer, date, and any amendments. Mark this ADR as Status:
+   "Accepted (legal-reviewed YYYY-MM-DD)" once complete.
+
+Until that review happens, this ADR is the project's **operational
+policy** for staying inside the lab (Band 0) and onboarding a small
+number of named research collaborators (Band 1, ≤5, written ack), but
+it is **not a defense** that would survive an FSF enforcement letter or
+a Software Freedom Conservancy compliance inquiry without on-the-spot
+counsel engagement. The audit-log discipline at
+`docs/license_procurement_plan.md §Audit log` exists precisely to make
+that counsel engagement (if ever needed) fast and cheap by giving
+counsel a complete record of *what was conveyed to whom and when*.
