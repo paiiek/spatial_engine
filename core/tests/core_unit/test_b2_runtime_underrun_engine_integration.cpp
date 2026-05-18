@@ -29,6 +29,28 @@
 //      here as either a spurious `drainRuntimeDemotePending()==true` on a
 //      later block (the latch must remain single-fire) or as an audible-
 //      mode regression from Direct back to AmbiVS.
+//
+// What this test EXPLICITLY DOES NOT cover (called out per the v0.6
+// critic retroactive review §A.4 / D MEDIUM-1):
+//
+//   - The B2 AmbiVS dispatch lambda is NOT guaranteed to execute. The
+//     startup CPU probe may clamp effective_mode_ back to Direct on slow
+//     CI runners — the assertions below do NOT depend on AmbiVS being
+//     entered, only on the forwarder API being wired correctly.
+//   - The real wall-clock measurement vs atomic-store race (steady_clock
+//     now() in one thread, recordB2BlockTiming atomics in same thread —
+//     no cross-thread race here, but a future audio-thread split could
+//     introduce one) is not exercised.
+//   - End-to-end heartbeat sendReply → wire OSC packet round-trip is in
+//     test_writebinaural_no_sofa_muted and the soak harness's
+//     test_osc_warning_channel.py, not here.
+//   - True weak-memory-order verification of the v0.6 #9 ring release-
+//     store change is deferred to a future relacy-race-detector test
+//     (P2-7 / D-S4 in docs/weekly_progress_report_2026-05-18.md §5.3).
+//
+// In short: this is a *forwarder + sticky-semantics integration* test,
+// not a full end-to-end audio path test. The narrower scope is a real
+// limitation of the CI runner's speed, not a design flaw.
 
 #include "core/SpatialEngine.h"
 #include "geometry/SpeakerLayout.h"

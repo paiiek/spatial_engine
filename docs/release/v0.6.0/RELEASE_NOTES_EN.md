@@ -91,13 +91,35 @@ regression gate is deferred to a future CI matrix expansion (P2 in
 
 ## Release validation (re-confirmed 2026-05-18 at session resume)
 
-- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **85/85 PASS**
-  (v0.5.1 81 → +4 NEW: `b2_runtime_underrun_auto_demote`,
-  `b1_b2_mode_transition_smooth`,
+- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **86/86 PASS**
+  (v0.5.1 81 → +5 NEW: `b2_runtime_underrun_auto_demote`,
+  `b2_runtime_underrun_engine_integration` (added in follow-up commit
+  `bd56a74`), `b1_b2_mode_transition_smooth`,
   `b1_b2_mode_transition_probe_clamped`,
   `b1_b2_mode_transition_disable_reenable`).
 - `pytest tests/`: **47 passed, 0 failed**.
-- Total ctest time: 3.45 s (no regression vs v0.5.1).
+- Total ctest time: 3.55 s (no regression vs v0.5.1).
+
+### Coverage gaps (intentional, surfaced for honesty)
+
+- **ARM / Apple Silicon CI matrix** is deferred to **P2-1** (see
+  `docs/weekly_progress_report_2026-05-18.md` §5.3). Structural workflow
+  is filed at `.github/workflows/cross-platform.yml` and runs as
+  `continue-on-error: true` during the v0.6 cycle (signal-only, not
+  blocking merge). Promotion to a required gate is a v0.6.x admin task.
+- **macOS arm64 manual verify** is **PENDING** — see
+  `docs/release/v0.6.0/macos-arm64-verify.md` checklist sections A–E,
+  user-queued. The v0.5 SSE-guard and v0.6 #9 release-store have **zero
+  hardware verification** until the checklist is run.
+- **DAW host hands-on validation** (Reaper / Bitwig / Logic / Cubase) is
+  deferred to the ADR 0016 §Band-1 workflow (≤5 named beta testers,
+  written acknowledgement, audit-log discipline). Hands-on log template
+  at `docs/release/v0.3.0/daw-handson-log.md`.
+
+These three deferrals do not invalidate the green ctest+pytest signals
+but they DO limit what those signals prove: ctest+pytest validate
+correctness on the x86_64 Linux dev host only. Treat any v0.6 claim of
+"DAW-ready" as conditional on these gates being closed.
 
 ## Process note — post-hoc plan cadence
 

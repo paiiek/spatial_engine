@@ -53,13 +53,27 @@ described below. Tracks `.omc/plans/spatial-engine-v0.5.1-binaural-hotfix.md`
   `docs/weekly_progress_report_2026-05-18.md` §5).
 
 ### Release validation (P0 re-confirm at 2026-05-18 session resume)
-- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **85/85 PASS**
-  (v0.5.1 81 → +4 NEW: `b2_runtime_underrun_auto_demote`,
+- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **86/86 PASS**
+  (v0.5.1 81 → +5 NEW: `b2_runtime_underrun_auto_demote`,
+  `b2_runtime_underrun_engine_integration` (follow-up commit `bd56a74`),
   `b1_b2_mode_transition_smooth`,
   `b1_b2_mode_transition_probe_clamped`,
   `b1_b2_mode_transition_disable_reenable`).
 - `python3 -m pytest tests/`: **47 passed, 0 failed**.
-- Total ctest time: 3.45 s (no regression vs v0.5.1).
+- Total ctest time: 3.55 s (no regression vs v0.5.1).
+
+### Coverage gaps (intentional, surfaced for honesty)
+- **ARM / Apple Silicon CI matrix** deferred to P2-1 (`docs/weekly_progress_report_2026-05-18.md` §5.3). Structural workflow filed as
+  `.github/workflows/cross-platform.yml` (signal-only `continue-on-error`
+  during v0.6 cycle; promotion to required gate is v0.6.x admin task).
+- **macOS arm64 manual verify** is PENDING — see
+  `docs/release/v0.6.0/macos-arm64-verify.md` checklist (sections A–E
+  user-queued; v0.5 SSE-guard + v0.6 #9 release-store have zero hardware
+  verification until the checklist is run).
+- **DAW host hands-on validation** (Reaper / Bitwig / Logic / Cubase)
+  deferred to the ADR 0016 §Band-1 workflow (≤5 named beta testers,
+  written acknowledgement, audit-log discipline). Hands-on log template
+  at `docs/release/v0.3.0/daw-handson-log.md`.
 
 ### Notes for users
 - The new `ambivs_demoted_runtime` warning is a one-shot signal that

@@ -215,7 +215,28 @@ OSC 채널** 로 상태를 통보합니다. 모두 **IO 스레드** (audio threa
   B2 로 다시 보내려면 프로젝트를 닫고 다시 열거나 `/sys/binaural_mode ,i 1`
   을 다시 보내야 합니다.
 
-### 7.5.5 macOS 에서 들리지 않아요
+### 7.5.5 "디모트 된 상태로 프로젝트를 저장했는데, 다시 열면 B2 가 다시 동작해요"
+
+**예상된 동작입니다.** v0.6 의 sticky 자동 디모트는 **`prepareToPlay()` lifetime
+범위 내에서만 sticky** 입니다 — 프로젝트를 저장/종료/재오픈 하면 새 `prepareToPlay`
+가 호출되고, 그 시점에 `BinauralMonitor::initialize()` 가 디모트 상태를 reset
+합니다 (v0.6.1 D-M1 fix).
+
+순서:
+
+1. 디모트 발생 → `/sys/binaural_warning ,s "ambivs_demoted_runtime"` 통보 → 효과
+   모드 B1 클램프.
+2. 프로젝트 저장 → state v4 에 `requested_mode = AmbiVS (B2)` 가 저장됨 (사용자
+   의도 보존). `effective_mode` byte 는 telemetry 라 reload 시 무시.
+3. 프로젝트 재오픈 → `prepareToPlay` → `initialize()` → 디모트 atomics reset → B2 재시도.
+4. CPU 환경이 동일하다면 → 다시 디모트 가능 (또 다른 `ambivs_demoted_runtime`
+   통보). 환경이 개선됐다면 → B2 정상 동작.
+
+**즉 v0.6 의 디모트는 사용자 의도를 "잊지" 않습니다.** 매번 새 세션마다 *"이번엔
+B2 로 갈 수 있는지"* 평가합니다. 한 머신에서 디모트가 계속 발생한다면 그것이
+실제 그 머신의 한계 신호 — B1 을 명시적으로 `requested_mode` 로 저장 (`/sys/binaural_mode ,i 0`) 하는 것이 안정적입니다.
+
+### 7.5.6 macOS 에서 들리지 않아요
 
 - v0.6 시점에는 macOS 에 **CoreAudio 백엔드가 미구현** 입니다 (`docs/SETUP_MACOS.md` §빌드 후 노트 참고). 빌드 자체는 통과해도 standalone 의 실시간 출력은 무음입니다.
 - VST3 로 macOS DAW (Logic, Cubase) 에서 사용하는 경로는 호스트가 오디오 IO 를 담당하므로 들립니다 — 이 경로의 macOS 검증은 P2 작업으로 진행 예정 (`docs/weekly_progress_report_2026-05-18.md` §5.1 P2-1).
