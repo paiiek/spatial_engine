@@ -29,6 +29,25 @@ BinauralMonitor::InitResult BinauralMonitor::initialize(const Config& cfg)
     xfade_blocks_remaining_atomic_.store(0, std::memory_order_release);
     xfade_truncated_pending_.store(false, std::memory_order_release);
 
+    // v0.6 D-M1 — Architect retroactive review caught a silent contract
+    // violation: the v0.6 #5 sticky-demote state (strikes + demoted + warning
+    // latch) was documented as "cleared by initialize()" in the plan, the
+    // commit message, the CHANGELOG, and CH7_BINAURAL.md §7.5.4, but
+    // initialize() did not actually clear it. The bug was invisible to ctest
+    // because the unit test used clearRuntimeDemoteForTest() (the test-only
+    // hook), never the production initialize() reset path.
+    //
+    // The 3 stores below restore the documented "sticky until next
+    // prepareToPlay" contract. After this reset, a host that experienced a
+    // demote in the previous prepareToPlay lifecycle starts fresh on the
+    // next prepareToPlay and may re-attempt B2 — which may or may not
+    // re-demote depending on the host's actual sustained budget. That
+    // re-evaluation cycle is the design intent (CH7 §7.5.4 — to be added in
+    // the same v0.6.1 doc-tightening commit).
+    runtime_demote_strikes_.store(0, std::memory_order_release);
+    runtime_demoted_.store(false, std::memory_order_release);
+    runtime_demote_warning_pending_.store(false, std::memory_order_release);
+
     if (cfg.sofaPath.empty()) {
         // Pass-through mode: do NOT prime per-object slots. processBlockForObject
         // becomes a no-op writer for unprimed slots, processBlock falls back to

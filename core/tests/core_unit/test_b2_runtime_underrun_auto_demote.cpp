@@ -143,6 +143,59 @@ int invalidArgsScenario(spe::output::BinauralMonitor& mon)
     return 0;
 }
 
+// v0.6 D-M1 — regression gate for the silent bug the Architect retroactive
+// review caught: initialize() (= the production "next prepareToPlay" reset
+// path) must clear runtime_demote_strikes_, runtime_demoted_, and
+// runtime_demote_warning_pending_. Pre-fix, the documented sticky-until-
+// next-prepareToPlay contract was silently violated because the test-only
+// clearRuntimeDemoteForTest() was the only path that actually cleared the
+// state.
+//
+// Test approach: drive a deterministic demote via injectRuntimeUnderrunStrikesForTest
+// + one over-budget block, then re-initialize() the monitor and verify the
+// 3 atomics are all reset to fresh-start values. The post-init state must
+// match the post-clearRuntimeDemoteForTest() state byte-for-byte (modulo
+// effective_mode_ which initialize() does not own).
+int initializeResetsDemoteScenario()
+{
+    // Use a fresh monitor so we exercise initialize() in its primary role
+    // (first-time setup) and then again in its secondary role (re-init
+    // after demote — the documented prepareToPlay sticky-reset path).
+    spe::output::BinauralMonitor mon;
+    spe::output::BinauralMonitor::Config cfg;
+    cfg.sofaPath   = std::string(SPE_FIXTURES_DIR) + "/synthetic_min.speh";
+    cfg.sampleRate = kSampleRate;
+    cfg.blockSize  = kBlock;
+    REQUIRE(mon.initialize(cfg) == spe::output::BinauralMonitor::InitResult::Ok);
+    REQUIRE(!mon.isRuntimeDemoted());
+
+    // Drive a demote.
+    mon.injectRuntimeUnderrunStrikesForTest();
+    mon.recordB2BlockTiming(kBlock, kSampleRate, overBudgetNs());
+    REQUIRE(mon.isRuntimeDemoted());
+    // Note: we deliberately do NOT drain the warning latch here. Pre-D-M1
+    // initialize() would have left the latch armed too — a second silent
+    // contract violation. Post-fix initialize() must clear the latch
+    // alongside the demoted flag.
+
+    // Re-initialize() — the production "next prepareToPlay" path.
+    REQUIRE(mon.initialize(cfg) == spe::output::BinauralMonitor::InitResult::Ok);
+
+    // All three atomics must be at fresh-start values.
+    REQUIRE(!mon.isRuntimeDemoted());
+    REQUIRE(!mon.drainRuntimeDemotePending());   // latch reset, not stuck-armed
+
+    // After reset, the demote progression must be repeatable from scratch.
+    // (Belt-and-suspenders: confirm the strike counter is at 0, not at
+    // some lingering non-zero state that would let a single over-budget
+    // call re-trigger the demote.)
+    mon.recordB2BlockTiming(kBlock, kSampleRate, overBudgetNs());
+    REQUIRE(!mon.isRuntimeDemoted());  // one strike of one is not a demote
+
+    std::puts("PASS initializeResetsDemoteScenario (D-M1 regression gate)");
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -158,6 +211,7 @@ int main()
     if (resetStrikesScenario(mon)       != 0) return 1;
     if (injectionFastPathScenario(mon)  != 0) return 1;
     if (invalidArgsScenario(mon)        != 0) return 1;
+    if (initializeResetsDemoteScenario() != 0) return 1;
 
     std::puts("PASS test_b2_runtime_underrun_auto_demote");
     return 0;

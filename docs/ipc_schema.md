@@ -192,6 +192,90 @@ Warning type codes (v0):
 
 ---
 
+## Binaural Telemetry (v0.5.1+ outbound)
+
+Added by `chore(release): v0.5.1 — binaural hotfix` (Q1 OSC outbound) and
+extended by `feat(rt-safety): v0.6` (#5 runtime auto-demote). These three
+addresses are emitted by the **heartbeat IO thread** (audio thread does
+not call `sendReply` for any of these — see v0.6 #4 RT-safety hard-wall).
+None of them carry a `schema_version` int prefix; they were added with a
+**version-implicit** wire format because they ship in advance of any
+breaking-change cycle. When schema_version bumps to 2 the contract may
+re-evaluate this decision.
+
+### `/sys/binaural_status`
+
+1 Hz heartbeat carrying the cumulative `OlaConvolver::loadInto` failure
+count. Expected steady-state value is 0; any monotonic increase signals a
+control-thread reload that violated the no-allocation contract.
+
+```
+/sys/binaural_status  ,i  <failures>
+```
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `failures` | i | Cumulative count of `loadInto` capacity-violation events since the BinauralMonitor was initialised. |
+
+Drained at 1 Hz from `vst3/SpatialEngineProcessor.cpp::heartbeatLoop()`.
+A DAW automation lane watching this address should treat any rising-edge
+transition from 0 → ≥1 as a soft alarm.
+
+### `/sys/binaural_warning`
+
+Edge-triggered event channel. Each code fires **at most once** between
+arm-conditions; the audio thread sets an atomic latch and the heartbeat
+IO thread drains.
+
+```
+/sys/binaural_warning  ,s  <code>
+```
+
+Code table:
+
+| Code (string) | Meaning | Armed by | First shipped |
+|---------------|---------|----------|---------------|
+| `no_sofa_loaded` | Binaural enabled but no SOFA available → output is forced-muted to avoid passing through a placeholder signal that would mislead the user into believing SOFA is loaded. | Control thread on `prepareToPlay` when `binaural.enable==1 && hrtf_loaded==false`. | v0.5.1 |
+| `xfade_truncated_cpu` | The 2-block mode-transition / slot-swap crossfade was probe-clamped to 1 block due to insufficient CPU headroom. The transition still completed without click; this is a quality-of-service signal, not an error. | Audio thread via `observeAndArmXfade()` when arming a 1-block ramp because `probe_warning_set_` is true. | v0.5.1 |
+| `ambivs_demoted_runtime` | B2 wall-clock cost exceeded 90 % of the block deadline for 8 consecutive blocks. Effective mode auto-demoted to B1 (Direct) for the remainder of the current `prepareToPlay` lifetime. | Audio thread via `recordB2BlockTiming()` when strikes reach `kRuntimeDemoteStrikes`. Sticky until next `prepareToPlay` (see v0.6 D-M1 fix). | v0.6.0 |
+
+Future codes will be appended here; consumers must treat unknown
+codes as "log + ignore" rather than error.
+
+### `/sys/state` — fallback_mode snapshot (v0.5.1 additive)
+
+**Dual-tag with the v0 `/sys/state ,i` bitmask** described above. The
+binaural fallback snapshot uses a **string typetag** to disambiguate
+from the bitmask form. Both messages may coexist on the same UDP socket;
+a consumer dispatches on the typetag.
+
+```
+/sys/state  ,s  "fallback_mode=normal" | "fallback_mode=muted"
+```
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `<payload>` | s | `"fallback_mode=normal"` when binaural output is live, `"fallback_mode=muted"` when binaural is enabled but no SOFA → forced silence. |
+
+Emitted **once per `prepareToPlay` lifetime** (not periodic). Drained at
+1 Hz from the heartbeat IO thread with retry-on-no-peer (the latch
+stays armed until a successful sendto). The v0 `/sys/state ,i` bitmask
+form remains the canonical engine-state heartbeat at 10 Hz; the new
+`,s` form is a per-lifecycle snapshot for the binaural fallback path
+only.
+
+**Schema-version note.** This dual-tag is *additive* (a v0-only consumer
+that filters by typetag `,i` will not see the new `,s` packets, and a
+v0.5.1+ consumer that filters by typetag `,s` will not see the bitmask
+heartbeats). It is therefore backward-compatible by the typetag-dispatch
+contract that OSC inherently provides. The `schema_version` int prefix
+that the v0 `,i` form carries is **omitted** from the `,s` form because
+the recipient already disambiguates on typetag — and adding the prefix
+would have broken the wire-format simplicity goal of the v0.5.1 Q1
+hotfix.
+
+---
+
 ## Sequence Number Semantics
 
 - Each object has an independent monotonic sequence counter, starting at 0.

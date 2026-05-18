@@ -177,6 +177,50 @@ DAW에서 장시간 라이브 사용 시 오디오 스레드 RT 안전성을 한
 - **플랜 doc**: `.omc/plans/spatial-engine-v0.6-stability.md` (post-hoc).
 - **주간 리포트**: `docs/weekly_progress_report_2026-05-18.md`.
 
+## 2026-05-18 — v0.6 follow-up bundle (P0/P1/P2 doc + code 정리)
+
+본 세션 진행 사항 (DAW 핸즈온/Mac 실측 제외, 자율 처리 가능 항목 일괄):
+
+### Commits
+- `bcb2fed` docs(v0.6): release notes v0.3.1~v0.6 + ADR 0016 distribution policy + CH7 binaural manual + macOS arm64 verify
+- `bd56a74` feat(rt-safety): v0.6 follow-up — P1-3 engine integration ctest + P1-4 steady_clock kill-switch
+- `aa8ecca` ci(cross-platform): v0.6 P2 — Apple Silicon + Linux ARM core build + ctest matrix
+- `(pending — this commit)` retro-ralplan (architect/critic) + D-M1 silent-bug fix + HIGH-1 ipc_schema + HIGH-2 P-tag
+
+### P0/P1/P2 완료 항목 매핑
+- **P0-2** JUCE GPL viral trigger → `docs/adr/0016-external-distribution-policy.md` (Band 0~3 분류, ≤5 베타 cap)
+- **P0-3** release notes/CHANGELOG honesty → CHANGELOG v0.5.1+v0.6 추가, `docs/release/v0.3.1`/`v0.4.0`/`v0.5.0`/`v0.5.1`/`v0.6.0` RELEASE_NOTES_EN.md 5건
+- **P1-1** 바이노럴 한국어 매뉴얼 → `docs/manual_kr/CH7_BINAURAL.md` (~750줄, OSC outbound 채널 + B1/B2 선택 + troubleshooting + SOFA 가이드)
+- **P1-2** v0.6 retroactive ralplan → `architect-r-v0.6-retro.md` (APPROVE WITH RECOMMENDATIONS) + `critic-r-v0.6-retro.md` (ACCEPT-WITH-RESERVATIONS). 둘 다 silent bug D-M1 등 후속 항목 도출.
+- **P1-3** runtime_underrun 통합 ctest → `test_b2_runtime_underrun_engine_integration.cpp` (ctest 85→86)
+- **P1-4** B2 timing wrapper kill-switch → `SpatialEngine.cpp:723-741` `isRuntimeDemoted()` guard
+- **P1-5 (D-M1)** `BinauralMonitor::initialize()` 가 runtime_demote_* 3 atomic reset → Architect 발견 silent bug, fix + `initializeResetsDemoteScenario` 회귀 게이트 (ctest 86 동일, scenarios 4→5)
+- **P1-6 (HIGH-1)** `docs/ipc_schema.md` 에 v0.5.1+ outbound 채널 + `/sys/state` dual-tag 명시
+- **P1-7 (HIGH-2)** weekly_progress_report §5 의 P-tag 명시 (5+ cross-reference 깨짐 해결) + §6.1 "동일 파이프라인" 표현 정정
+- **P2-1** GHA arm64+macOS matrix → `.github/workflows/cross-platform.yml` (signal-only, continue-on-error)
+
+### 남은 P1 (v0.6.x patch 사이클)
+- **P1-8 (D-M2)** `steady_clock` vDSO availability probe + fallback
+- **P1-9 (D-M3)** CH7 §7.5.4 "save during demote → reload re-attempts B2" 단락
+- **P1-10 (D-M4)** Heartbeat 1000 ms → 100 ms (또는 sub-tick 스케줄러)
+- **P1-11 (MEDIUM-2)** release notes "Release validation" 섹션 prominence 보강
+- **P1-12 (MEDIUM-3)** ADR 0016 Appendix A — GPL §6 obligation mapping + 법률 review status disclose
+- **P1-13 (MEDIUM-1)** P1-3 integration ctest rename 또는 한 줄 disclaimer
+
+### 백그라운드 진행 중
+- 24h WebGUI soak: PID 89276 detached, 2026-05-19 10:31 종료 예상. `soak_reports/soak_webgui_day1_20260518_103113.json`
+
+### 사용자 핸즈온 대기 (auto 불가)
+- P0-1 DAW (Reaper/Bitwig) 실측 — Mac 핸즈온
+- macOS arm64 verify — `docs/release/v0.6.0/macos-arm64-verify.md` 체크리스트
+- 24h soak 결과 sentinels 분석 + commit (내일)
+
+### 미해결 (next session 후보)
+- P3-1 MUSHRA / ABX 청취 평가
+- P3-2 HUTUBS / SADIE / ARI 회귀 게이트
+- P3-3 macOS CoreAudio backend 구현
+- P3-4 AU / AAX 포팅
+
 ## 이번 주 릴리즈/태그
 - v0.3.1 (채널 매핑 정확성)
 - v0.4 (VST3 2버스 + 상태 v4 + .speh 배선)
