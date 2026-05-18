@@ -501,6 +501,17 @@ target_compile_definitions(test_b2_runtime_underrun_auto_demote PRIVATE
 add_test(NAME b2_runtime_underrun_auto_demote
     COMMAND test_b2_runtime_underrun_auto_demote)
 
+# v0.6 P1-3 — engine-level integration of #5 forwarders + P1-4 kill-switch.
+# Bridges audioBlock() through the SpatialEngine API rather than direct
+# BinauralMonitor poking so a stub/no-op forwarder cannot slip past CI.
+add_executable(test_b2_runtime_underrun_engine_integration
+    test_b2_runtime_underrun_engine_integration.cpp)
+target_link_libraries(test_b2_runtime_underrun_engine_integration PRIVATE spe_core)
+target_compile_definitions(test_b2_runtime_underrun_engine_integration PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_runtime_underrun_engine_integration
+    COMMAND test_b2_runtime_underrun_engine_integration)
+
 # ─────────────────────────────────────────────────────────────────────────
 # v0.5.1 Q2 (A3) — B1↔B2 mode-transition crossfade tests.
 # ─────────────────────────────────────────────────────────────────────────
