@@ -5,6 +5,159 @@ All notable changes to the Spatial Engine project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-18
+
+RT-safety hardening bundle on already-shipped surfaces. No user-visible
+behavior changes other than the new `ambivs_demoted_runtime` notification
+described below. Tracks `.omc/plans/spatial-engine-v0.5.1-binaural-hotfix.md`
+§Q5 deferred items (#4, #5, #8, #9).
+
+### Added
+- **Runtime sticky-underrun auto-demote (#5).** `BinauralMonitor` now
+  measures wall-clock B2 block timing via `std::chrono::steady_clock` (vDSO
+  on modern Linux, RT-safe). When B2 exceeds 90% of the block deadline for
+  8 consecutive blocks (≈21 ms at 48 kHz / 128), the effective mode is
+  sticky-demoted to B1 (Direct) and a one-shot warning latch is armed.
+  The heartbeat IO thread drains the latch and emits
+  `/sys/binaural_warning ,s "ambivs_demoted_runtime"` exactly once per
+  demote event. Sticky decision persists until the next `prepareToPlay()`
+  so transient spikes cannot flap the mode. New ctest:
+  `b2_runtime_underrun_auto_demote` (deterministic injection via
+  test-only `injectRuntimeUnderrunStrikesForTest()` hook).
+- **`SpatialEngine::binauralIsRuntimeDemoted()` /
+  `binauralDrainRuntimeDemotePending()`.** Engine-level forwarders so VST3
+  doesn't reach into `BinauralMonitor` directly.
+
+### Changed
+- **Audio thread `sendReply` hard-wall (#4).** `SpatialEngineProcessor::
+  process()` no longer drains the `no_sofa_loaded` or `/sys/state
+  fallback_mode` latches via `engine_->oscBackend().sendReply(...)`.
+  Both drains moved into `heartbeatLoop()` 1 Hz IO thread. Rationale:
+  `sendReply` internally calls `std::condition_variable::notify_one()`
+  which is not strictly RT-safe under all libc implementations. The
+  heartbeat now uses a drain-first-then-wait pattern so the very first
+  tick after `setActive(true)` emits any pending latches immediately
+  (well within the 200 ms target). Retry-on-no-peer semantics: if the
+  host hasn't completed peer handshake yet, `sendReply` returns false
+  and the latch stays armed for the next 1 Hz tick.
+- **`OSCBackend::sendReply` consolidation (#8).** Three near-identical
+  ~70 LOC overload bodies collapsed into a single private
+  `sendReplyImpl(addr, types, s, have_f, f, have_i, i)`. Public overloads
+  are 3-line forwarders. Future outbound channels touch one place.
+- **Outbound ring `slot.ready.store` upgrade (#9).** Promoted from
+  `memory_order_relaxed` to `memory_order_release` to close a weak-memory-
+  order corner case (ARM, Apple Silicon, ppc) where a wrap-producer's
+  release-true could be reordered behind a consumer's stale relaxed-false
+  and silently dropped. x86_64 unaffected; ARM-side regression gate is
+  deferred to a future CI matrix expansion (P2 in
+  `docs/weekly_progress_report_2026-05-18.md` §5).
+
+### Release validation (P0 re-confirm at 2026-05-18 session resume)
+- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **85/85 PASS**
+  (v0.5.1 81 → +4 NEW: `b2_runtime_underrun_auto_demote`,
+  `b1_b2_mode_transition_smooth`,
+  `b1_b2_mode_transition_probe_clamped`,
+  `b1_b2_mode_transition_disable_reenable`).
+- `python3 -m pytest tests/`: **47 passed, 0 failed**.
+- Total ctest time: 3.45 s (no regression vs v0.5.1).
+
+### Notes for users
+- The new `ambivs_demoted_runtime` warning is a one-shot signal that
+  surfaces a real performance ceiling for the current host machine; once
+  it fires you should treat it as authoritative ("your CPU + plug-in
+  chain cannot sustain B2 right now") rather than a transient alert.
+  The decision will reset on the next `prepareToPlay()` (e.g., sample-
+  rate change, project reload).
+- No state-format change: state v4 schema and v3 byte-equal merge gate
+  preserved.
+- Public OSC schema unchanged. `/sys/binaural_warning ,s` adds one new
+  string code; existing codes (`xfade_truncated_cpu`, `no_sofa_loaded`)
+  unchanged.
+
+### Plan
+- `.omc/plans/spatial-engine-v0.6-stability.md` (post-hoc; documents
+  trail from v0.5.1 §Q5 deferred items). The post-hoc cadence is itself
+  a process gap and is itemised as a P1 in
+  `docs/weekly_progress_report_2026-05-18.md` §5.
+
+---
+
+## [0.5.1] — 2026-05-17 (binaural release hotfix)
+
+Four-item release-blocker hotfix on top of v0.5.0. All Q-items below
+were discovered during release validation after v0.5.0 tagging but
+before DAW-handoff distribution. Tracks
+`.omc/plans/spatial-engine-v0.5.1-binaural-hotfix.md`.
+
+### Added
+- **Outbound OSC notification channel (Q1).** Three new outbound
+  addresses, all RT-safe (audio thread sets atomic flags; IO drain
+  thread sends):
+  - `/sys/binaural_status ,i <failures_count>` — 1 Hz heartbeat carrying
+    the cumulative `OlaConvolver::loadInto` failure count (control-
+    thread reload contract violations; expected 0).
+  - `/sys/binaural_warning ,s <code>` — event-triggered. Codes shipped
+    in v0.5.1: `xfade_truncated_cpu` (probe-clamped 1-block ramp armed),
+    `no_sofa_loaded` (binaural enabled but no SOFA available).
+  - `/sys/state ,s "fallback_mode=muted"|"fallback_mode=normal"` — one
+    snapshot per `prepareToPlay()` lifetime.
+- **B1 ↔ B2 mode-transition crossfade (Q2).** Two-block linear ramp
+  bridges effective-mode changes (e.g. user toggles requested_mode while
+  audio is live). The ramp reuses the existing xfade helper and is
+  edge-triggered: probe clamps, disable→re-enable cycles, and explicit
+  user-driven switches all participate. New ctest:
+  `b1_b2_mode_transition_smooth`.
+- **SOFA-absent forced mute (Q3).** When binaural is enabled but no SOFA
+  is loaded, `BinauralMonitor` returns digital silence on the binaural
+  bus rather than letting the upstream placeholder leak through. The
+  forced mute is observable via `/sys/binaural_warning ,s "no_sofa_loaded"`
+  (single fire per session) and `/sys/state ,s "fallback_mode=muted"`.
+  New ctest: `test_writebinaural_no_sofa_muted`.
+- **`test_osc_warning_channel.py`** — pytest soak harness assertion
+  that the warning channel survives end-to-end through the OSC IPC
+  layer.
+
+### Fixed
+- **Steinberg SDK static-destructor ASan crash (Q4).** `soak_vst3_console_flood`
+  ASan run was failing on `munmap_chunk(): invalid pointer` during
+  process teardown (Steinberg static-destruction order racing ASan-tracked
+  socket close). Mitigated via `_exit(0)` after the soak assertions
+  succeed, bypassing dtor ordering. The defense is documented in
+  `docs/CI_QUARANTINE.md`.
+- **Soak harness port-reuse flake (Q4).** Multiple soak runs in quick
+  succession could trip `EADDRINUSE`; the port-reuse pattern was
+  tightened.
+- **P4.1 binaural mode-race + probe accuracy + A6 wiring carry-over.**
+  Already shipped in v0.5.0 line (commit `7cdcee8`); listed here for the
+  v0.5 → v0.5.1 audit trail.
+
+### Deferred to v0.6
+- **#4** Audio-thread `sendReply` hard-wall (latch drain moved to IO thread).
+- **#5** Runtime sticky-underrun auto-demote (B2 wall-clock detector).
+- **#8** `sendReply` 3-overload consolidation.
+- **#9** Outbound ring slot ready-clear release-store hardening.
+
+All four deferred items landed in v0.6.0 (see above).
+
+### Release validation
+- `ctest --output-on-failure -j$(nproc)` (NO_JUCE build): **81/81 PASS**
+  (v0.5.0 75 → +6 NEW: 3 mode-transition variants +
+  `test_writebinaural_no_sofa_muted` + 2 outbound-OSC tests).
+- `python3 -m pytest tests/`: **47 passed** (incl. new
+  `test_osc_warning_channel`).
+
+### Notes for users
+- DAW automation that reads `/sys/binaural_status` should treat any
+  monotonic increase in the `,i` payload as a soft alarm — the
+  underlying `loadInto` contract violation indicates a control-thread
+  reload that bypassed the no-alloc guarantee. Expected steady-state
+  value is 0.
+- `no_sofa_loaded` is a state of *deliberate* silence, not a bug; load
+  a valid SOFA via `/sys/binaural_sofa ,s <path>` (or VST3 parameter) to
+  restore binaural audio.
+
+---
+
 ## [0.5.0] — 2026-05-15
 
 ### Added
