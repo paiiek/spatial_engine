@@ -78,6 +78,21 @@ std::size_t OSCBackend::encodeOscReply(uint8_t*, std::size_t, const char*,
                                        bool, int32_t) noexcept {
     return 0;
 }
+std::size_t OSCBackend::encodeOscReplyIIF(uint8_t*, std::size_t, const char*,
+                                          const char*, int32_t, int32_t,
+                                          float) noexcept {
+    return 0;
+}
+bool OSCBackend::sendReplyImplIIF(const char*, const char*,
+                                   int32_t, int32_t, float) noexcept {
+    outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+bool OSCBackend::sendReply(const char*, const char*,
+                            int32_t, int32_t, float) noexcept {
+    outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
 void OSCBackend::outboundDrainLoop() {}
 
 } // namespace spe::ipc
@@ -132,6 +147,10 @@ void OSCBackend::start() {
         return;
     }
     udp_fd_ = fd;
+
+    // M5.1 — open the echo plane outbound socket now that the inbound socket
+    // is bound. The echo plane reuses udp_fd_ for sendto() via udpFdForEcho().
+    echo_plane_.open();
 
     // Record the post-bind address+port for test/telemetry consumers.
     {
@@ -212,6 +231,8 @@ void OSCBackend::stop() {
         bound_addr_.clear();
         bound_port_ = 0;
     }
+    // M5.1 — evict all echo subscribers on stop.
+    echo_plane_.close();
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +511,85 @@ bool OSCBackend::sendReply(const char* addr, const char* types,
                             int32_t i) noexcept
 {
     return sendReplyImpl(addr, types, nullptr, false, 0.f, true, i);
+}
+
+// v0.7 D-S3 — dedicated ,iif encoder.
+//
+// // v0.7 D-S3 — intentional duplication of sendReplyImpl. See ADR 0017 §B
+// for rejection of flag-extension option (a). Mixed-type ,iif packets are a
+// different shape from the ,s/,sf/,i forms that sendReplyImpl(v0.6 #8) handles.
+// Forcing them through the same 7-param flag interface would require 3 extra
+// false/0 arguments at every call site, violating the thin-forwarder invariant
+// and coupling unrelated packet shapes through a single impl.
+std::size_t OSCBackend::encodeOscReplyIIF(uint8_t* dst, std::size_t cap,
+                                           const char* addr, const char* types,
+                                           int32_t i1, int32_t i2,
+                                           float f1) noexcept
+{
+    if (!dst || !addr || !types) return 0;
+    std::size_t off = 0;
+
+    std::size_t n = writeOscString(dst + off, cap - off, addr);
+    if (n == 0) return 0;
+    off += n;
+
+    if (types[0] != ',') return 0;
+    n = writeOscString(dst + off, cap - off, types);
+    if (n == 0) return 0;
+    off += n;
+
+    // Arguments in wire order per OSC 1.0 type tag: i1, i2, f1.
+    n = writeBeI32(dst + off, cap - off, i1);
+    if (n == 0) return 0;
+    off += n;
+
+    n = writeBeI32(dst + off, cap - off, i2);
+    if (n == 0) return 0;
+    off += n;
+
+    n = writeBeFloat(dst + off, cap - off, f1);
+    if (n == 0) return 0;
+    off += n;
+
+    return off;
+}
+
+bool OSCBackend::sendReplyImplIIF(const char* addr, const char* types,
+                                   int32_t i1, int32_t i2, float f1) noexcept
+{
+    if (last_peer_len_.load(std::memory_order_acquire) == 0) {
+        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    const std::size_t idx =
+        claimSlotCAS(out_head_, out_tail_, kOutboundRingCap);
+    if (idx == static_cast<std::size_t>(-1)) {
+        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    auto& slot = outbound_ring_[idx];
+    const std::size_t n = encodeOscReplyIIF(slot.buf.data(), slot.buf.size(),
+                                             addr, types, i1, i2, f1);
+    if (n == 0) {
+        slot.len      = 0;
+        slot.dest_len = 0;
+        slot.ready.store(true, std::memory_order_release);
+        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        out_cv_.notify_one();
+        return false;
+    }
+    slot.len      = static_cast<uint16_t>(n);
+    slot.dest_len = last_peer_len_.load(std::memory_order_acquire);
+    std::memcpy(&slot.dest, &last_peer_endpoint_, slot.dest_len);
+    slot.ready.store(true, std::memory_order_release);
+    out_cv_.notify_one();
+    return true;
+}
+
+bool OSCBackend::sendReply(const char* addr, const char* types,
+                            int32_t i1, int32_t i2, float f1) noexcept
+{
+    return sendReplyImplIIF(addr, types, i1, i2, f1);
 }
 
 // ---------------------------------------------------------------------------

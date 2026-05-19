@@ -105,6 +105,7 @@ set(SPE_CORE_SOURCES
     src/ipc/HeartbeatPublisher.cpp
     src/ipc/HeartbeatMonitor.cpp
     src/ipc/OSCBackend.cpp
+    src/ipc/EchoSubscriber.cpp
     src/ipc/VST3ControlStub.cpp
     # US-001: Scene snapshot serialisation + controller
     src/ipc/SceneSnapshot.cpp

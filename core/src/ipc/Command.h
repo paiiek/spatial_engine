@@ -48,6 +48,7 @@ enum class CommandTag : uint8_t {
     SysBinauralSofa    = 0x17, // /sys/binaural_sofa ,s "<.speh-path>" — store binaural SOFA path
     SysBinauralEnable  = 0x18, // /sys/binaural_enable ,i {0|1} — enable binaural bus 1 rendering
     SysBinauralMode    = 0x19, // /sys/binaural_mode ,i {0|1} — 0 = B1 Direct, 1 = B2 AmbiVS (v0.5 P4)
+    SysBinauralResetDemote = 0x1A, // /sys/binaural_reset_demote ,i {0|1} — v0.7 D-S1 user hatch
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -111,6 +112,11 @@ struct PayloadSysHandshake {
     // recvfrom()). Additive — old clients ship reply_port=0 and still
     // receive replies via the source-port fallback.
     uint16_t reply_port = 0;
+    // M5.1: optional subscriber tag string. When set to
+    // "echo_subscriber=adm_object_stream" (and reply_port > 0), the engine
+    // adds the peer to the echo subscriber registry (port 9102 by convention).
+    // 64 bytes (63 + null), same idiom as PayloadSceneSave.
+    char     subscriber_tag[64] = {};
 };
 
 struct PayloadSysAlgoSwap {
@@ -243,6 +249,12 @@ struct PayloadSysBinauralMode {
     uint8_t mode = 0;
 };
 
+// v0.7 D-S1: /sys/binaural_reset_demote ,i {0|1}
+// enable != 0 triggers reset attempt; enable == 0 is a no-op (future reserve).
+struct PayloadSysBinauralResetDemote {
+    bool enable = false;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -281,6 +293,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralSofa,
     PayloadSysBinauralEnable,
     PayloadSysBinauralMode,
+    PayloadSysBinauralResetDemote,
     PayloadUnknown
 >;
 

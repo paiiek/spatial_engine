@@ -7,6 +7,7 @@
 #pragma once
 #include "ExternalControl.h"
 #include "CommandDecoder.h"
+#include "EchoSubscriber.h"
 
 #include <sys/socket.h>      // sockaddr_storage, socklen_t (POSIX only — JUCE
                              // path uses the same struct as an opaque blob).
@@ -121,6 +122,12 @@ public:
                    const char* s, float f) noexcept;
     bool sendReply(const char* addr, const char* types, int32_t i) noexcept;
 
+    // v0.7 D-S3 — mixed-type ,iif packet (block_size, sample_rate, ratio).
+    // Dedicated overload per AM-3 option (b): NOT an extension of v0.6 #8
+    // sendReplyImpl. See ADR 0017 §B for rejection of option (a).
+    bool sendReply(const char* addr, const char* types,
+                   int32_t i1, int32_t i2, float f1) noexcept;
+
     // Test-only accessor — returns true iff a peer endpoint has been captured
     // (either via recvfrom() or injectPacket(packet, peer, len)).
     bool hasPeerEndpoint() const noexcept {
@@ -209,6 +216,22 @@ public:
         return bound_port_;
     }
 
+    // M5.1 — echo plane accessor. SpatialEngine calls this to mark dirty bits
+    // and flush echoes on the control thread.
+    EchoPlane& echoPlane() noexcept { return echo_plane_; }
+    const EchoPlane& echoPlane() const noexcept { return echo_plane_; }
+
+    // M5.1 — read the last captured peer endpoint (network byte order).
+    // IO-thread-writes / control-thread-reads; caller must gate on
+    // hasPeerEndpoint() first. Returns a const ref to the internal storage.
+    const struct sockaddr_storage& lastPeerEndpoint() const noexcept {
+        return last_peer_endpoint_;
+    }
+
+    // Expose the UDP fd so EchoPlane::flush() can reuse it for sendto().
+    // Returns -1 when the backend is not running (no socket open).
+    int udpFdForEcho() const noexcept { return udp_fd_; }
+
 private:
     CommandSink    sink_;
     CommandDecoder decoder_;
@@ -268,8 +291,12 @@ private:
     // with a condvar wake-up driven by sendReply() (and stop()). 1-second
     // timeout is the safety belt against missed wake-ups; under producer
     // load the cv is notified per enqueue so latency stays in the µs band.
-    mutable std::mutex      out_cv_mutex_;
+    mutable std::mutex out_cv_mutex_;
     std::condition_variable out_cv_;
+
+    // M5.1 — echo plane (port 9102). Owned by OSCBackend; all access is
+    // control-thread only via SpatialEngine's tick/drain path.
+    EchoPlane echo_plane_;
 
     // Build an OSC packet (address + types + args) into dst. Returns bytes
     // written, or 0 on overflow. Shared by all sendReply() overloads.
@@ -284,6 +311,15 @@ private:
     bool sendReplyImpl(const char* addr, const char* types,
                        const char* s, bool have_f, float f,
                        bool have_i, int32_t i) noexcept;
+
+    // v0.7 D-S3 — dedicated ,iif encoder. See ADR 0017 §B for why this is
+    // a parallel impl rather than extending sendReplyImpl with more flags.
+    static std::size_t encodeOscReplyIIF(uint8_t* dst, std::size_t cap,
+                                         const char* addr, const char* types,
+                                         int32_t i1, int32_t i2,
+                                         float f1) noexcept;
+    bool sendReplyImplIIF(const char* addr, const char* types,
+                          int32_t i1, int32_t i2, float f1) noexcept;
 
     // IO-thread drain loop: blocks for a tiny interval, drains outbound_ring_
     // via sendto(). Runs while running_ is true.

@@ -27,12 +27,22 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.el_rad = p->el_rad;
                     qc.dist_m = p->dist_m;
                     qc.active = true;
+                    // M5.1 echo: ObjMove originates from /adm/obj/N/aed.
+                    static constexpr float kRad2Deg =
+                        180.f / 3.14159265358979323846f;
+                    static constexpr float kMaxDist = 20.f;
+                    osc_backend_.echoPlane().markAed(
+                        p->obj_id, p->az_rad * kRad2Deg,
+                        p->el_rad * kRad2Deg,
+                        kMaxDist > 0.f ? p->dist_m / kMaxDist : 0.f);
                 }
                 break;
             case ipc::CommandTag::ObjGain:
                 if (auto* p = std::get_if<ipc::PayloadObjGain>(&cmd.payload)) {
                     qc.obj_id = p->obj_id;
                     qc.gain   = p->gain;
+                    // M5.1 echo.
+                    osc_backend_.echoPlane().markGain(p->obj_id, p->gain);
                 }
                 break;
             case ipc::CommandTag::ObjActive:
@@ -60,8 +70,11 @@ SpatialEngine::SpatialEngine(int listen_port)
                 }
                 break;
             case ipc::CommandTag::TransportPlay:
+                // M5.1 — echo transport events.
+                osc_backend_.echoPlane().markTransportPlay();
+                break;
             case ipc::CommandTag::TransportStop:
-                // No payload; tag alone decides action
+                osc_backend_.echoPlane().markTransportStop();
                 break;
             case ipc::CommandTag::ObjDsp:
                 if (auto* p = std::get_if<ipc::PayloadObjDsp>(&cmd.payload)) {
@@ -108,7 +121,10 @@ SpatialEngine::SpatialEngine(int listen_port)
             case ipc::CommandTag::ObjMute:
                 if (auto* p = std::get_if<ipc::PayloadObjMute>(&cmd.payload)) {
                     qc.obj_id = p->obj_id;
-                    qc.active = !p->muted; // mute=true → active=false
+                    qc.active = !p->muted;  // mute=true → active=false
+                    // M5.1 echo.
+                    osc_backend_.echoPlane().markMute(p->obj_id,
+                                                      p->muted ? 1 : 0);
                 }
                 break;
             case ipc::CommandTag::ObjXYZ:
@@ -117,24 +133,34 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.xyz_x  = p->x;
                     qc.xyz_y  = p->y;
                     qc.xyz_z  = p->z;
+                    // M5.1 echo.
+                    osc_backend_.echoPlane().markXyz(p->obj_id, p->x, p->y,
+                                                     p->z);
                 }
                 break;
             case ipc::CommandTag::ObjActiveAdm:
                 if (auto* p = std::get_if<ipc::PayloadObjActiveAdm>(&cmd.payload)) {
                     qc.obj_id = p->obj_id;
                     qc.active = p->active;
+                    // M5.1 echo.
+                    osc_backend_.echoPlane().markActive(p->obj_id,
+                                                        p->active ? 1 : 0);
                 }
                 break;
             case ipc::CommandTag::ObjWidth:
                 if (auto* p = std::get_if<ipc::PayloadObjWidth>(&cmd.payload)) {
                     qc.obj_id    = p->obj_id;
                     qc.width_rad = p->width_rad;
+                    // M5.1 echo.
+                    osc_backend_.echoPlane().markWidth(p->obj_id, p->width_rad);
                 }
                 break;
             case ipc::CommandTag::ObjName:
                 if (auto* p = std::get_if<ipc::PayloadObjName>(&cmd.payload)) {
                     qc.obj_id = p->obj_id;
                     std::memcpy(qc.obj_name, p->name, 32);
+                    // M5.1 echo.
+                    osc_backend_.echoPlane().markName(p->obj_id, p->name);
                 }
                 break;
             // v0.4 — runtime path injection. Strings are NOT queueable through
@@ -162,6 +188,21 @@ SpatialEngine::SpatialEngine(int listen_port)
                                      : output::BinauralMode::Direct);
                 }
                 return;
+            case ipc::CommandTag::SysBinauralResetDemote:
+                // v0.7 D-S1 — user-controlled reset hatch. Runs on the OSC IO
+                // thread; delegates entirely to BinauralMonitor. The result
+                // (Accepted / CooldownActive / NotDemoted) arms the appropriate
+                // warning latch; the heartbeat drain emits the OSC reply.
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralResetDemote>(&cmd.payload)) {
+                    if (p->enable) {
+                        using clock = std::chrono::steady_clock;
+                        const int64_t now_ns =
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                clock::now().time_since_epoch()).count();
+                        binaural_.resetRuntimeDemoteFromUser(now_ns);
+                    }
+                }
+                return;
             case ipc::CommandTag::SysHandshake:
                 // v0.5.1 Q1 (WM-2) — when the client supplies an explicit
                 // reply_port, retarget our captured peer endpoint so future
@@ -171,12 +212,62 @@ SpatialEngine::SpatialEngine(int listen_port)
                     if (p->reply_port != 0) {
                         osc_backend_.overridePeerPort(p->reply_port);
                     }
+                    // M5.1 — register echo subscriber when tag matches.
+                    if (p->reply_port > 0 &&
+                        std::strcmp(p->subscriber_tag,
+                                    ipc::EchoPlane::kEchoSubscriberTag) == 0) {
+                        using clock = std::chrono::steady_clock;
+                        const int64_t now_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                clock::now().time_since_epoch())
+                                .count();
+                        // Peer IP is in last_peer_endpoint_ (IPv4 network order).
+                        // Access via the captured sockaddr in OSCBackend — we use
+                        // the reply_port the client advertised as the echo port.
+                        const auto& ep = osc_backend_.lastPeerEndpoint();
+                        if (ep.ss_family == AF_INET) {
+                            const auto* sa4 =
+                                reinterpret_cast<const struct sockaddr_in*>(&ep);
+                            osc_backend_.echoPlane().addSubscriber(
+                                sa4->sin_addr.s_addr, p->reply_port,
+                                p->subscriber_tag, now_ms);
+                        }
+                    }
+                }
+                return;
+            case ipc::CommandTag::HbPing:
+                // M5.1 — refresh TTL for any echo subscriber from this peer.
+                if (osc_backend_.echoPlane().hasSubscribers()) {
+                    const auto& ep = osc_backend_.lastPeerEndpoint();
+                    if (ep.ss_family == AF_INET) {
+                        using clock = std::chrono::steady_clock;
+                        const int64_t now_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                clock::now().time_since_epoch())
+                                .count();
+                        const auto* sa4 =
+                            reinterpret_cast<const struct sockaddr_in*>(&ep);
+                        osc_backend_.echoPlane().touchSubscriberHb(
+                            sa4->sin_addr.s_addr, now_ms);
+                        osc_backend_.echoPlane().evictStale(now_ms);
+                    }
                 }
                 return;
             default:
-                return; // not queued
+                return;  // not queued
             }
             cmd_fifo_.push(qc);
+            // M5.1 — flush echo dirty bits to registered subscribers.
+            // Called on the OSC IO thread once per inbound packet.
+            if (osc_backend_.echoPlane().hasSubscribers()) {
+                using clock = std::chrono::steady_clock;
+                const int64_t now_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        clock::now().time_since_epoch())
+                        .count();
+                osc_backend_.echoPlane().flush(now_ms,
+                                               osc_backend_.udpFdForEcho());
+            }
         },
         listen_port)
 {}
