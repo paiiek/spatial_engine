@@ -31,6 +31,12 @@ find_package(Threads REQUIRED)
 # do not require JUCE; only DanteBackend does.
 option(SPATIAL_ENGINE_NO_JUCE "Force JUCE-free build (skip DanteBackend, juce::* link)" OFF)
 option(SPATIAL_ENGINE_VST3    "Build optional VST3 plugin scaffold (Phase C will integrate Steinberg vst3sdk)" OFF)
+# D-S4: relacy race-detector dev-dep (header-only). Default OFF.
+# When ON, builds test_osc_outbound_relacy (ctest +1) using third_party/relacy.
+# Production code never includes relacy headers — include path is isolated to
+# the new ctest target. Use build_relacy/ as a dedicated build dir:
+#   mkdir build_relacy && cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON -DSPATIAL_ENGINE_BUILD_RELACY_TESTS=ON
+option(SPATIAL_ENGINE_BUILD_RELACY_TESTS "Build optional relacy race-detector ctest (dev-dep, header-only)" OFF)
 
 if(SPATIAL_ENGINE_NO_JUCE)
     set(SPE_HAVE_JUCE OFF)
@@ -130,6 +136,8 @@ set(SPE_CORE_SOURCES
     # F2: Ambisonics 1st-order encoder + M2 decoder
     src/ambi/AmbisonicEncoder.cpp
     src/ambi/AmbiDecoder.cpp
+    # ADR 0019 PR1: POSIX shm region (Linux + macOS only)
+    $<$<BOOL:${UNIX}>:src/audio_io/shm/SharedMemoryRegion.cpp>
     # M2-HOA: 4 new decoder algorithms (HOA Decoder Diversification sprint)
     src/ambi/MaxREDecoder.cpp
     src/ambi/InPhaseDecoder.cpp
@@ -140,6 +148,10 @@ set(SPE_CORE_SOURCES
 
 add_library(spe_core STATIC ${SPE_CORE_SOURCES})
 target_link_libraries(spe_core PUBLIC spe_util yaml-cpp::yaml-cpp)
+# shm_open / shm_unlink live in librt on Linux; nothing extra needed on macOS.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(spe_core PUBLIC rt)
+endif()
 
 if(SPE_HAVE_JUCE)
     target_link_libraries(spe_core PUBLIC
@@ -174,3 +186,21 @@ target_link_libraries(spatial_engine_core PRIVATE spe_core)
 # --- CTest scaffold ------------------------------------------------------
 add_subdirectory(tests/core_unit)
 add_subdirectory(tests/perf)
+
+# --- relacy race-detector ctest (optional, D-S4) -------------------------
+# Isolated behind SPATIAL_ENGINE_BUILD_RELACY_TESTS to avoid polluting the
+# default build with relacy's instrumented std::atomic replacements.
+if(SPATIAL_ENGINE_BUILD_RELACY_TESTS)
+    add_executable(test_osc_outbound_relacy
+        tests/relacy/test_osc_outbound_relacy.cpp)
+    target_include_directories(test_osc_outbound_relacy PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/relacy")
+    target_compile_options(test_osc_outbound_relacy PRIVATE
+        -UNDEBUG
+        -std=c++20)
+    # relacy headers use POSIX threading internally
+    target_link_libraries(test_osc_outbound_relacy PRIVATE Threads::Threads)
+    add_test(NAME osc_outbound_relacy COMMAND test_osc_outbound_relacy)
+    message(STATUS "spatial_engine: SPATIAL_ENGINE_BUILD_RELACY_TESTS=ON — "
+                   "test_osc_outbound_relacy registered as ctest.")
+endif()
