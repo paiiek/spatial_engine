@@ -19,11 +19,12 @@ struct OscArgs {
     // Decoded values (union-style, positional):
     // We store up to 8 slots of each type for simplicity.
     static constexpr int MAX_ARGS = 8;
-    int32_t  ints  [MAX_ARGS]{};
-    float    floats[MAX_ARGS]{};
-    uint64_t u64s  [MAX_ARGS]{};
+    int32_t  ints   [MAX_ARGS]{};
+    float    floats [MAX_ARGS]{};
+    uint64_t u64s   [MAX_ARGS]{};
+    double   doubles[MAX_ARGS]{};
     std::string strings[MAX_ARGS];
-    int n_int = 0, n_float = 0, n_u64 = 0, n_str = 0;
+    int n_int = 0, n_float = 0, n_u64 = 0, n_str = 0, n_double = 0;
 };
 
 // Wire dialect for encode() — default is Legacy to preserve all existing tests.

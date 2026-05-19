@@ -31,6 +31,12 @@ static inline float readF32(const uint8_t* p) noexcept {
     return f;
 }
 
+static inline double readF64(const uint8_t* p) noexcept {
+    uint64_t u = readU64(p);
+    double d; std::memcpy(&d, &u, 8);
+    return d;
+}
+
 static inline void writeU32(uint8_t* p, uint32_t v) noexcept {
     p[0] = uint8_t(v >> 24); p[1] = uint8_t(v >> 16);
     p[2] = uint8_t(v >> 8);  p[3] = uint8_t(v);
@@ -81,7 +87,7 @@ bool CommandDecoder::parseOscPacket(std::span<const uint8_t> data, OscArgs& out)
     p += tt_padded;
 
     // 3. Arguments.
-    out.n_int = out.n_float = out.n_u64 = out.n_str = 0;
+    out.n_int = out.n_float = out.n_u64 = out.n_str = out.n_double = 0;
     for (char c : out.type_tags) {
         if (p + 4 > end && c != 's') return false;
         switch (c) {
@@ -97,7 +103,15 @@ bool CommandDecoder::parseOscPacket(std::span<const uint8_t> data, OscArgs& out)
             break;
         case 'h': // int64
             if (p + 8 > end) return false;
-            p += 8; // skip (not used currently)
+            if (out.n_u64 < OscArgs::MAX_ARGS)
+                out.u64s[out.n_u64++] = readU64(p);
+            p += 8;
+            break;
+        case 'd': // float64
+            if (p + 8 > end) return false;
+            if (out.n_double < OscArgs::MAX_ARGS)
+                out.doubles[out.n_double++] = readF64(p);
+            p += 8;
             break;
         case 't': // timetag
             if (p + 8 > end) return false;
@@ -141,6 +155,22 @@ static inline Algorithm algoFromInt(int v) noexcept {
 // Copy an OSC string into a fixed 64-byte name buffer (truncates to 63 + null).
 static inline void copySceneName(char (&dst)[64], const std::string& src) noexcept {
     const std::size_t n = src.size() < 63 ? src.size() : 63;
+    std::memcpy(dst, src.c_str(), n);
+    dst[n] = '\0';
+}
+
+// M5.1: copy a subscriber tag string into a fixed 64-byte buffer.
+// Non-printable characters are rejected (tag set to empty string on detection).
+static inline void copySubscriberTag(char (&dst)[64], const std::string& src) noexcept {
+    const std::size_t n = src.size() < 63 ? src.size() : 63;
+    for (std::size_t i = 0; i < n; ++i) {
+        const unsigned char c = static_cast<unsigned char>(src[i]);
+        if (c < 0x20 || c > 0x7E) {
+            // Non-printable character found — reject the entire tag.
+            dst[0] = '\0';
+            return;
+        }
+    }
     std::memcpy(dst, src.c_str(), n);
     dst[n] = '\0';
 }
@@ -326,6 +356,12 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         if (rp > 0 && rp <= 65535) {
             p.reply_port = static_cast<uint16_t>(rp);
         }
+        // M5.1 — optional subscriber tag string (,iis variant).
+        if (args.n_str > 0) {
+            copySubscriberTag(p.subscriber_tag, args.strings[0]);
+        } else {
+            p.subscriber_tag[0] = '\0';
+        }
         cmd.payload = p;
     } else if (addr == "/sys/algo_swap") {
         cmd.tag = CommandTag::SysAlgoSwap;
@@ -390,10 +426,27 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         const int32_t v = getInt(0);
         p.mode = (v == 1) ? 1u : 0u;
         cmd.payload = p;
+    } else if (addr == "/sys/binaural_reset_demote") {
+        // v0.7 D-S1: ,i {0|1} — user-controlled runtime demote reset hatch.
+        // Peer-validation is enforced upstream by OSCBackend (same path as all
+        // other /sys/ verbs); osc_security_peer_validation ctest covers this.
+        cmd.tag = CommandTag::SysBinauralResetDemote;
+        PayloadSysBinauralResetDemote p;
+        p.enable = (getInt(0) != 0);
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;
-        p.timestamp_ms = (args.n_u64 > 0) ? args.u64s[0] : 0;
+        if (args.n_u64 > 0) {
+            // ,h or ,t path (engine-internal HeartbeatPublisher — value already in ms)
+            p.timestamp_ms = args.u64s[0];
+        } else if (args.n_double > 0) {
+            // ,d seconds → ms (Phase B, adm_player M3 path); clamp negatives to 0
+            const double s = args.doubles[0];
+            p.timestamp_ms = (s > 0.0) ? static_cast<uint64_t>(s * 1000.0) : 0;
+        } else {
+            p.timestamp_ms = 0;
+        }
         cmd.payload = p;
     } else if (addr == "/hb/pong") {
         cmd.tag = CommandTag::HbPong;

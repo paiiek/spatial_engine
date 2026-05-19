@@ -501,6 +501,25 @@ target_compile_definitions(test_b2_runtime_underrun_auto_demote PRIVATE
 add_test(NAME b2_runtime_underrun_auto_demote
     COMMAND test_b2_runtime_underrun_auto_demote)
 
+# v0.7 D-S1 — user-controlled reset hatch (60 s cooldown, 8-atomic AM-1 reset).
+add_executable(test_b2_runtime_underrun_user_reset
+    test_b2_runtime_underrun_user_reset.cpp)
+target_link_libraries(test_b2_runtime_underrun_user_reset PRIVATE spe_core)
+target_compile_definitions(test_b2_runtime_underrun_user_reset PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_runtime_underrun_user_reset
+    COMMAND test_b2_runtime_underrun_user_reset)
+
+# v0.7 D-S1 — concurrent-safety: audio-thread demote vs IO-thread reset
+# (Scenario A) + initialize() vs OSC reset (Scenario B, Critic §D.8).
+add_executable(test_b2_runtime_underrun_user_reset_concurrent
+    test_b2_runtime_underrun_user_reset_concurrent.cpp)
+target_link_libraries(test_b2_runtime_underrun_user_reset_concurrent PRIVATE spe_core)
+target_compile_definitions(test_b2_runtime_underrun_user_reset_concurrent PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME b2_runtime_underrun_user_reset_concurrent
+    COMMAND test_b2_runtime_underrun_user_reset_concurrent)
+
 # v0.6 P1-3 — engine-level integration of #5 forwarders + P1-4 kill-switch.
 # Bridges audioBlock() through the SpatialEngine API rather than direct
 # BinauralMonitor poking so a stub/no-op forwarder cannot slip past CI.
@@ -565,6 +584,11 @@ target_link_libraries(test_osc_outbound_multi_producer
 add_test(NAME osc_outbound_multi_producer
     COMMAND test_osc_outbound_multi_producer)
 
+# ADR 0018 PR1 — OSC type-tag parser: ',d' and ',h' coverage (P1-P4).
+add_executable(test_osc_type_tag_parser test_osc_type_tag_parser.cpp)
+target_link_libraries(test_osc_type_tag_parser PRIVATE spe_core)
+add_test(NAME osc_type_tag_parser COMMAND test_osc_type_tag_parser)
+
 # v0.5.1 final polish (Sec H2): default OSC bind is loopback (127.0.0.1).
 # Asserts: (a) no setBindAddr() call leaves the listener on 127.0.0.1,
 # (b) explicit "0.0.0.0" still binds the wildcard, (c) invalid bind strings
@@ -575,3 +599,17 @@ target_link_libraries(test_osc_bind_loopback_default
     PRIVATE spe_core Threads::Threads)
 add_test(NAME osc_bind_loopback_default
     COMMAND test_osc_bind_loopback_default)
+
+# ─────────────────────────────────────────────────────────────────────────
+# ADR 0019 PR1 — POSIX shared-memory ring: header layout + region tests.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Header-layout tests: no system deps, compile-time static_assert + runtime.
+add_executable(test_shm_ring_header test_shm_ring_header.cpp)
+target_link_libraries(test_shm_ring_header PRIVATE spe_core)
+add_test(NAME shm_ring_header COMMAND test_shm_ring_header)
+
+# Region tests: require /dev/shm (Linux) or POSIX shm (macOS).
+add_executable(test_shared_memory_region test_shared_memory_region.cpp)
+target_link_libraries(test_shared_memory_region PRIVATE spe_core)
+add_test(NAME shared_memory_region COMMAND test_shared_memory_region)
