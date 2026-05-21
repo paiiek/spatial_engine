@@ -1,0 +1,56 @@
+# .github/workflows/relacy.yml — D-S4 relacy race-detector CI job
+#
+# Promotion order (Critic §C.4):
+#   P0 — Linux ARM64 (cross-platform.yml) promotes FIRST.
+#   P1 — this job promotes SECOND, after ARM64 stable AND 5 consecutive
+#        green runs of this job.
+#
+# 5-green promotion criterion (Critic §B.7):
+#   When 5 consecutive green runs are recorded on main AND Linux ARM64 has
+#   already been promoted (P0 done), remove `continue-on-error: true` here
+#   and add `osc_outbound_relacy` to branch-protection required status checks.
+#   See docs/release/v0.7.0/relacy-promotion-gate.md for the full procedure.
+#
+# For v0.7: continue-on-error: true — signal-only, does not block merge.
+
+name: relacy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  relacy:
+    name: relacy race-detector
+    runs-on: ubuntu-22.04
+    continue-on-error: true   # P1 — remove after 5-green soak + ARM64 P0 stable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false   # relacy is vendored, no submodule needed
+
+      - name: Configure (relacy ON)
+        run: |
+          cmake -B build_relacy \
+            -DSPATIAL_ENGINE_NO_JUCE=ON \
+            -DSPATIAL_ENGINE_BUILD_RELACY_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build all + test_osc_outbound_relacy
+        run: cmake --build build_relacy --parallel $(nproc)
+
+      - name: Run test_osc_outbound_relacy
+        run: |
+          cd build_relacy
+          ctest -R osc_outbound_relacy --output-on-failure
+
+      - name: Upload relacy log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relacy-log
+          path: build_relacy/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

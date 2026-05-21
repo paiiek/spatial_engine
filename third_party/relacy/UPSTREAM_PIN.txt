@@ -1,0 +1,6 @@
+URL=https://github.com/dvyukov/relacy
+SHA=599c788cab890b1d18507a87827f5f2fc729512a
+DATE=2026-05-19T00:00:00Z
+LICENSE=BSD-3-Clause
+NOTES=v0.7 relacy race detector — header-only dev-dep. Vendored for D-S4 test_osc_outbound_relacy. Production code never includes these headers. Include path is isolated to the SPATIAL_ENGINE_BUILD_RELACY_TESTS=ON ctest target only.
+COMMIT_VERIFIED_VIA=git ls-remote https://github.com/dvyukov/relacy refs/heads/master
