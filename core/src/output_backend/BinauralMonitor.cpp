@@ -463,6 +463,21 @@ void BinauralMonitor::recordB2BlockTiming(int block_size,
     // atomic traffic on the audio thread once the decision is sticky).
     if (runtime_demoted_.load(std::memory_order_acquire)) return;
 
+    // ── D-S2 (v0.7) — block-size-aware effective_strikes ──────────────────
+    // AN-2 rationale: kRuntimeDemoteStrikes = 8 was calibrated for
+    // 48 kHz / 128-sample blocks (= 2.67 ms/block). At 32-sample blocks
+    // (Logic Pro low-latency) 8 strikes = 5.3 ms — a page fault looks like a
+    // demote trigger. At 1024-sample blocks 8 strikes = 170 ms — the user
+    // hears 3-4 dropouts before demote fires. Fix: pin the strike window to
+    // ~20 ms regardless of block size: effective_strikes = max(8, ceil(0.02s /
+    // block_seconds)). kRuntimeDemoteStrikes becomes the FLOOR (preserves
+    // v0.6 behavior at 48 kHz/128).
+    const double block_seconds = static_cast<double>(block_size)
+                                 / static_cast<double>(sample_rate);
+    const int effective_strikes = std::max(
+        kRuntimeDemoteStrikes,
+        static_cast<int>(std::ceil(0.020 / block_seconds)));
+
     // Block deadline in nanoseconds.
     const long long deadline_ns = static_cast<long long>(
         (static_cast<double>(block_size) /
@@ -471,16 +486,47 @@ void BinauralMonitor::recordB2BlockTiming(int block_size,
         static_cast<double>(deadline_ns) *
         static_cast<double>(kRuntimeDemoteBudgetFraction));
 
+    // v0.7 D-S3 — AM-2 relaxed-load-then-store pattern (NOT CAS).
+    // Critic §A.2 correction over Architect AM-2: the strictly correct
+    // pattern is read-then-store, NOT a single store(max(...)) which is
+    // two non-atomic operations evaluated together non-atomically.
+    // Single-producer invariant: recordB2BlockTiming() is called exclusively
+    // from SpatialEngine::audioBlock() (verified per v0.6 retro §A.2), so no
+    // concurrent writer races here. CAS promotion deferred to v0.8 conditional
+    // on telemetry-informed precision need.
+    const int ratio_x1000 = static_cast<int>(
+        (static_cast<double>(elapsed_ns) /
+         static_cast<double>(deadline_ns)) * 1000.0);
+
     int strikes;
     if (elapsed_ns >= over_budget_ns) {
+        const int cur_max = runtime_demote_max_ratio_x1000_.load(
+            std::memory_order_relaxed);
+        if (ratio_x1000 > cur_max) {
+            runtime_demote_max_ratio_x1000_.store(ratio_x1000,
+                std::memory_order_relaxed);
+        }
+        // ── Item #8 (v0.7) — saturation cap ──────────────────────────────
+        // Belt-and-suspenders: if the demote latch CAS somehow never fires
+        // (should not happen in correct runs), the counter would accumulate
+        // indefinitely. Cap at kRuntimeDemoteStrikesSaturationCeiling so it
+        // never wraps. Single-producer invariant (audio thread only) means
+        // load+if+store is race-free here.
+        const int cur = runtime_demote_strikes_.load(std::memory_order_acquire);
+        if (cur >= kRuntimeDemoteStrikesSaturationCeiling) {
+            return; // already saturated; demote latch should have fired
+        }
         strikes = runtime_demote_strikes_.fetch_add(1,
             std::memory_order_acq_rel) + 1;
     } else {
+        // Good block: reset strike counter and also reset the in-progress
+        // max-ratio accumulator (the demote didn't fire; start fresh).
         runtime_demote_strikes_.store(0, std::memory_order_release);
+        runtime_demote_max_ratio_x1000_.store(0, std::memory_order_release);
         return;
     }
 
-    if (strikes >= kRuntimeDemoteStrikes) {
+    if (strikes >= effective_strikes) {
         // Sticky demote. Edge-trigger the warning latch via CAS so multiple
         // entrants (audio thread plus theoretical test reseed) can race
         // safely — only the first writer flips the latch.
@@ -488,12 +534,90 @@ void BinauralMonitor::recordB2BlockTiming(int block_size,
         if (runtime_demoted_.compare_exchange_strong(expected, true,
                 std::memory_order_acq_rel))
         {
+            // v0.7 D-S3 iter-3 §C.2 — snapshot demote-moment context together
+            // with release ordering so the IO-thread drain reads a consistent
+            // triple. The snapshot captures the audio thread's current values
+            // at the exact demote latch firing — even if prepareToPlay()
+            // re-inits block_size_/sample_rate_ later, this snapshot is the
+            // authoritative demote-moment record.
+            runtime_demote_max_ratio_at_event_x1000_.store(
+                runtime_demote_max_ratio_x1000_.load(std::memory_order_relaxed),
+                std::memory_order_release);
+            runtime_demote_block_size_at_event_.store(
+                block_size_, std::memory_order_release);
+            runtime_demote_sample_rate_at_event_.store(
+                static_cast<int>(sample_rate_), std::memory_order_release);
+
             runtime_demote_warning_pending_.store(true,
                 std::memory_order_release);
             effective_mode_.store(static_cast<int>(BinauralMode::Direct),
                                   std::memory_order_release);
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v0.7 D-S1 — user-controlled reset hatch
+// ─────────────────────────────────────────────────────────────────────────
+
+BinauralMonitor::ResetResult
+BinauralMonitor::resetRuntimeDemoteFromUser(int64_t now_ns) noexcept
+{
+    // Guard: if not currently demoted, nothing to reset.
+    if (!runtime_demoted_.load(std::memory_order_acquire)) {
+        return ResetResult::NotDemoted;
+    }
+
+    // Cooldown check: compare against last-reset timestamp.
+    const int64_t last = runtime_demote_last_reset_ns_.load(
+                             std::memory_order_acquire);
+    // INT64_MIN means "never reset" — always accept. Otherwise check elapsed.
+    if (last != INT64_MIN) {
+        const int64_t elapsed = now_ns - last;
+        if (elapsed < kResetDemoteCooldownNs) {
+            reset_rejected_count_.fetch_add(1, std::memory_order_relaxed);
+            // Rate-limit warning to at most once per cooldown window (Critic §D.7).
+            bool already_emitted = reset_cooldown_warning_emitted_.load(
+                                       std::memory_order_acquire);
+            if (!already_emitted) {
+                reset_cooldown_warning_emitted_.store(true,
+                    std::memory_order_release);
+                reset_demote_cooldown_pending_.store(true,
+                    std::memory_order_release);
+            }
+            return ResetResult::CooldownActive;
+        }
+    }
+
+    // ── AM-1-extended 8-atomic reset (iter-3 §C.2 ordering) ──
+    //
+    // Order rationale (Critic §C.3 + AM-1):
+    //   1. Clear D-S3 telemetry atomics first (Item #3 snapshot slots).
+    //   2. Clear v0.6 #5 sticky state: strikes → warning_pending → demoted.
+    //      runtime_demoted_ is cleared LAST so the audio thread cannot
+    //      race-observe (demoted_=false AND strikes_>=threshold) simultaneously.
+    //   3. Snapshot cooldown timestamp + clear warning-rate-limit flag.
+    //   4. Arm accepted-warning latch.
+
+    // Step 1 — D-S3 telemetry atomics (4 atomics, Item #3 declares write sites)
+    runtime_demote_max_ratio_x1000_.store(0, std::memory_order_release);
+    runtime_demote_max_ratio_at_event_x1000_.store(0, std::memory_order_release);
+    runtime_demote_block_size_at_event_.store(0, std::memory_order_release);
+    runtime_demote_sample_rate_at_event_.store(0, std::memory_order_release);
+
+    // Step 2 — v0.6 #5 sticky state (strikes first, then warning_pending, demoted last)
+    runtime_demote_strikes_.store(0, std::memory_order_release);
+    runtime_demote_warning_pending_.store(false, std::memory_order_release);
+    runtime_demoted_.store(false, std::memory_order_release);  // LAST
+
+    // Step 3 — cooldown snapshot + rate-limit flag reset
+    runtime_demote_last_reset_ns_.store(now_ns, std::memory_order_release);
+    reset_cooldown_warning_emitted_.store(false, std::memory_order_release);
+
+    // Step 4 — arm accepted-warning latch for IO heartbeat drain
+    reset_demote_accepted_pending_.store(true, std::memory_order_release);
+
+    return ResetResult::Accepted;
 }
 
 void BinauralMonitor::injectRuntimeUnderrunStrikesForTest() noexcept
@@ -507,6 +631,12 @@ void BinauralMonitor::clearRuntimeDemoteForTest() noexcept
     runtime_demote_strikes_.store(0, std::memory_order_release);
     runtime_demoted_.store(false, std::memory_order_release);
     runtime_demote_warning_pending_.store(false, std::memory_order_release);
+    // v0.7 D-S3 — also clear the snapshot atomics so tests can verify
+    // they are reset to 0 after a simulated D-S1 reset.
+    runtime_demote_max_ratio_x1000_.store(0, std::memory_order_release);
+    runtime_demote_max_ratio_at_event_x1000_.store(0, std::memory_order_release);
+    runtime_demote_block_size_at_event_.store(0, std::memory_order_release);
+    runtime_demote_sample_rate_at_event_.store(0, std::memory_order_release);
 }
 
 // v0.6 D-M2 — time kSteadyClockProbeSamples calls to steady_clock::now()

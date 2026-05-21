@@ -239,9 +239,35 @@ Code table:
 | `xfade_truncated_cpu` | The 2-block mode-transition / slot-swap crossfade was probe-clamped to 1 block due to insufficient CPU headroom. The transition still completed without click; this is a quality-of-service signal, not an error. | Audio thread via `observeAndArmXfade()` when arming a 1-block ramp because `probe_warning_set_` is true. | v0.5.1 |
 | `ambivs_demoted_runtime` | B2 wall-clock cost exceeded 90 % of the block deadline for 8 consecutive blocks. Effective mode auto-demoted to B1 (Direct) for the remainder of the current `prepareToPlay` lifetime. | Audio thread via `recordB2BlockTiming()` when strikes reach `kRuntimeDemoteStrikes`. Sticky until next `prepareToPlay` (see v0.6 D-M1 fix). | v0.6.0 |
 | `rt_timing_unavailable` | The `initialize()`-time probe found that `std::chrono::steady_clock::now()` falls back to a syscall on this host (average per-call ≥ 200 ns), so the v0.6 #5 runtime auto-demote detector has been silently disabled to avoid being a self-fulfilling demote prophecy. B2 still renders, but the `ambivs_demoted_runtime` warning will not fire on this platform regardless of CPU load. | Control thread `BinauralMonitor::initialize()` after the timing probe. Sticky for the BinauralMonitor lifetime; re-armed by the next `initialize()` only if the new probe is also slow. | v0.6.1 |
+| `reset_demote_accepted` | The `/sys/binaural_reset_demote ,i 1` user hatch was accepted: all 8 demote-state atomics were reset, B2 is re-armed. The cooldown counter was also reset (the next reset will be accepted after 60 s). | IO thread via `BinauralMonitor::resetRuntimeDemoteFromUser()` on Accept. | v0.7 |
+| `reset_demote_cooldown_active` | The `/sys/binaural_reset_demote ,i 1` call was rejected because the last accepted reset happened less than 60 s ago. Rate-limited to **at most once per cooldown window** to prevent outbound-ring saturation under rapid reset spam (Critic §D.7). | IO thread via `BinauralMonitor::resetRuntimeDemoteFromUser()` on CooldownActive, first rejection only per window. | v0.7 |
 
 Future codes will be appended here; consumers must treat unknown
 codes as "log + ignore" rather than error.
+
+### `/sys/binaural_reset_demote` — user-controlled demote reset hatch (v0.7 inbound)
+
+Allows a connected client to re-arm the B2 runtime auto-demote state after it has fired, without requiring a host restart or `prepareToPlay` cycle.
+
+```
+/sys/binaural_reset_demote  ,i  <enable>
+```
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `enable` | i | `1` = attempt reset; `0` = no-op (reserved for future toggle use) |
+
+**Behavior:**
+- If `enable == 0`: silently ignored.
+- If the monitor is **not currently demoted** (`runtime_demoted_ == false`): returns `NotDemoted` — no atomics written, no outbound warning.
+- If within the **60-second cooldown window** (last accepted reset < 60 s ago): returns `CooldownActive`. At most one `reset_demote_cooldown_active` warning is emitted per cooldown window (rate-limited to prevent DOS via SPSC ring saturation).
+- If outside the cooldown window (or first ever call): performs the **8-atomic AM-1 reset** and emits `reset_demote_accepted`.
+
+**AS-5 process-lifetime cooldown semantic:** The cooldown counter (`runtime_demote_last_reset_ns_`) is **not** reset by `prepareToPlay` / `initialize()`. It persists for the lifetime of the process. Closing and re-opening a project starts a new process, which resets the counter naturally. This is intentional — it prevents a rapid close/reopen cycle from bypassing the cooldown. See `CH7_BINAURAL.md §7.5.4`.
+
+**Peer-validation:** This verb uses the same OSC peer-validation infra as all other `/sys/` verbs. An unauthenticated sender (no prior `/sys/handshake`) can submit the packet, but no reply is routed back and no outbound drops are incurred (the existing `osc_security_peer_validation` ctest covers this).
+
+---
 
 ### `/sys/state` — fallback_mode snapshot (v0.5.1 additive)
 
@@ -316,6 +342,43 @@ Select the Ambisonics decoder algorithm. Takes effect on next audio prepare cycl
   - `3` = EPAD (Energy-Preserving Ambi Decoding, Jacobi SVD; Zotter & Frank 2012)
   - `4` = IN_PHASE (in-phase decoder; Daniel 2000 §3.30)
 - Unknown values clamp to `0` (PINV).
+
+---
+
+---
+
+## Outbound — Diagnostic Telemetry (v0.7+)
+
+### `/sys/binaural_diag`
+
+Emitted by the IO-thread heartbeat drain **once per runtime auto-demote event**
+(NOT periodic). Immediately follows `/sys/binaural_warning ,s "ambivs_demoted_runtime"`
+on the same drain pass; wire order is source-deterministic (SPSC ring FIFO).
+
+```
+/sys/binaural_diag  ,iif  <block_size>  <sample_rate_int>  <observed_max_ratio>
+```
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `block_size` | i (int32) | Audio block size in samples at the moment of demote |
+| `sample_rate_int` | i (int32) | Sample rate in Hz (integer cast) at the moment of demote |
+| `observed_max_ratio` | f (float32) | Highest (elapsed_ns / deadline_ns) ratio observed across all over-budget blocks in the strike run; 1.0 = exactly at deadline |
+
+**Emission semantics:**
+- One packet per demote event. After a `/sys/binaural_reset_demote ,i 1` accept + re-demote
+  cycle, one more packet will be emitted on the next demote.
+- The three fields are snapshotted at the audio-thread CAS-success demote latch — they reflect
+  the session context at the exact moment of demote, not the post-demote context.
+- A D-S1 reset (`/sys/binaural_reset_demote ,i 1` → `reset_demote_accepted`) clears the
+  snapshot; the next demote event produces a fresh packet.
+
+**AS-2 slow-degradation limitation:**
+The slow-degradation pattern (ratio creeping up over hours, never crossing the demote
+threshold) is NOT detected by the event-driven `/sys/binaural_diag` channel.
+v0.8 may add a pre-demote-window summary channel (B-3) once real telemetry shape is
+observed in production. Until then, consumers should treat absence of `/sys/binaural_diag`
+as "no demote fired", not "ratio is healthy".
 
 ---
 

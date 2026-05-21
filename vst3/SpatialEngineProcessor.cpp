@@ -1303,6 +1303,27 @@ void SpatialEngineProcessor::heartbeatLoop() noexcept
             if (engine_->binauralDrainRuntimeDemotePending()) {
                 engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
                                                 "ambivs_demoted_runtime");
+                // v0.7 D-S3: emit /sys/binaural_diag ,iif immediately after the
+                // warning, on the same drain pass. Wire order is deterministic:
+                // warning first, diag second (SPSC ring FIFO, single producer here).
+                engine_->oscBackend().sendReply(
+                    "/sys/binaural_diag", ",iif",
+                    engine_->binauralSnapshotBlockSizeAtEvent(),
+                    engine_->binauralSnapshotSampleRateAtEvent(),
+                    engine_->binauralSnapshotMaxRatioX1000() / 1000.0f);
+            }
+
+            // v0.7 D-S1: edge-triggered emission of reset-hatch warning strings.
+            // "reset_demote_accepted"      — reset was accepted; B2 re-armed.
+            // "reset_demote_cooldown_active" — within 60 s cooldown window;
+            //   rate-limited to at most once per window (Critic §D.7).
+            if (engine_->binauralDrainResetDemoteAcceptedPending()) {
+                engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                                "reset_demote_accepted");
+            }
+            if (engine_->binauralDrainResetDemoteCooldownPending()) {
+                engine_->oscBackend().sendReply("/sys/binaural_warning", ",s",
+                                                "reset_demote_cooldown_active");
             }
 
             // v0.6 D-M2: edge-triggered emission of

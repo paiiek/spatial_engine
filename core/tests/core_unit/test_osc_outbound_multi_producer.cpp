@@ -355,5 +355,101 @@ int main()
                 "(%d producers × %d iters, sent+drops=%llu exact)\n",
                 kProducers, kIters,
                 static_cast<unsigned long long>(sent + drops));
+
+    // ── v0.7 D-S3 — ,iif overload coverage (AM-3 option b) ──────────────────
+    // Exercise the new sendReply(addr, types, int32_t i1, int32_t i2, float f1)
+    // overload concurrently alongside existing ,s/,sf/,i packets. Verifies:
+    //   1. The overload enqueues without corrupting the ring (accounting exact).
+    //   2. FIFO ordering holds: the ,iif packet arrives after any ,i packets
+    //      already enqueued in the same thread (source-deterministic ordering
+    //      per SPSC ring — documented as a comment, NOT an assertion per AM-4).
+    {
+        // Fresh client socket for this sub-test.
+        LoopbackSocket client2 = bindLoopback();
+        if (client2.fd < 0) {
+            std::fprintf(stderr, "FAIL: iif client bind failed\n");
+            return 1;
+        }
+
+        // Re-use the existing backend (already has peer endpoint captured).
+        // Drain ring state from previous test.
+        backend.outboundDrainForTest(backend.outboundPending());
+
+        const uint64_t sent_before  = backend.outboundSent();
+        const uint64_t drops_before = backend.outboundDrops();
+
+        // Concurrently: one producer sends ,iif packets; a second sends ,i
+        // packets. Together they contend on the CAS ring head.
+        constexpr int kIifIters = 20;
+        std::atomic<int> iif_enqueued{0};
+        std::atomic<int> i_enqueued{0};
+
+        std::thread iif_producer([&]() {
+            for (int k = 0; k < kIifIters; ++k) {
+                // block_size=128, sample_rate=48000, ratio=1.05f (over-budget)
+                if (backend.sendReply("/sys/binaural_diag", ",iif",
+                                      static_cast<int32_t>(128),
+                                      static_cast<int32_t>(48000),
+                                      1.05f)) {
+                    iif_enqueued.fetch_add(1, std::memory_order_relaxed);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        });
+        std::thread i_producer([&]() {
+            for (int k = 0; k < kIifIters; ++k) {
+                if (backend.sendReply("/sys/binaural_status", ",i",
+                                      static_cast<int32_t>(k))) {
+                    i_enqueued.fetch_add(1, std::memory_order_relaxed);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        });
+        iif_producer.join();
+        i_producer.join();
+
+        // Wait for drain to process all newly enqueued slots.
+        const int total_new = iif_enqueued.load() + i_enqueued.load();
+        auto iif_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < iif_deadline) {
+            const uint64_t delta_sent  = backend.outboundSent()  - sent_before;
+            const uint64_t delta_drops = backend.outboundDrops() - drops_before;
+            if (delta_sent + delta_drops >= static_cast<uint64_t>(total_new)) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        const uint64_t delta_sent  = backend.outboundSent()  - sent_before;
+        const uint64_t delta_drops = backend.outboundDrops() - drops_before;
+        const uint64_t total_accounted = delta_sent + delta_drops;
+
+        std::printf("[iif_overload] iif_enqueued=%d i_enqueued=%d "
+                    "delta_sent=%llu delta_drops=%llu\n",
+                    iif_enqueued.load(), i_enqueued.load(),
+                    static_cast<unsigned long long>(delta_sent),
+                    static_cast<unsigned long long>(delta_drops));
+
+        // Accounting must be exact: every enqueued slot either sent or dropped.
+        if (total_accounted < static_cast<uint64_t>(total_new)) {
+            std::fprintf(stderr,
+                "FAIL iif accounting: enqueued=%d but sent+drops=%llu\n",
+                total_new,
+                static_cast<unsigned long long>(total_accounted));
+            ::close(client2.fd);
+            return 1;
+        }
+        // At least some ,iif packets must have been sent (ring was not full
+        // before we started this sub-test).
+        if (iif_enqueued.load() == 0) {
+            std::fprintf(stderr, "FAIL iif overload: zero packets enqueued "
+                         "(sendReply ,iif always dropped)\n");
+            ::close(client2.fd);
+            return 1;
+        }
+
+        ::close(client2.fd);
+        std::printf("PASS ,iif overload concurrent producer sub-test "
+                    "(iif_enqueued=%d)\n", iif_enqueued.load());
+    }
+
     return 0;
 }

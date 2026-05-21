@@ -131,6 +131,35 @@ public:
         binaural_.recordB2BlockTiming(block_size, sample_rate, elapsed_ns);
     }
 
+    // v0.7 D-S1 — forwarder for the user-controlled runtime demote reset hatch.
+    // Called from the OSC IO thread after decoding /sys/binaural_reset_demote ,i 1.
+    // now_ns: steady_clock nanoseconds from the calling context.
+    output::BinauralMonitor::ResetResult
+    resetBinauralRuntimeDemoteFromUser(int64_t now_ns) noexcept {
+        return binaural_.resetRuntimeDemoteFromUser(now_ns);
+    }
+
+    // v0.7 D-S1 — IO-thread drain latches for new warning strings.
+    bool binauralDrainResetDemoteAcceptedPending() noexcept {
+        return binaural_.drainResetDemoteAcceptedPending();
+    }
+    bool binauralDrainResetDemoteCooldownPending() noexcept {
+        return binaural_.drainResetDemoteCooldownPending();
+    }
+
+    // v0.7 D-S3 — demote-moment snapshot forwarders for the heartbeat drain
+    // /sys/binaural_diag ,iif emission. Read by IO thread after
+    // binauralDrainRuntimeDemotePending() returns true.
+    int binauralSnapshotMaxRatioX1000() const noexcept {
+        return binaural_.snapshotRuntimeDemoteMaxRatioX1000();
+    }
+    int binauralSnapshotBlockSizeAtEvent() const noexcept {
+        return binaural_.snapshotRuntimeDemoteBlockSizeAtEvent();
+    }
+    int binauralSnapshotSampleRateAtEvent() const noexcept {
+        return binaural_.snapshotRuntimeDemoteSampleRateAtEvent();
+    }
+
     // v0.6 D-M2 — engine-level forwarders for the steady_clock vDSO
     // probe results. Audio thread reads isSteadyClockFast() through the
     // forwarder to gate the wall-clock brackets in audioBlock(); IO

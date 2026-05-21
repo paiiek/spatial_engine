@@ -67,7 +67,14 @@ int main()
     // Must be well under the legacy 1-second stall.
     ASSERT_OK(elapsed_ms < 200);
 
+    // VST3 refcount teardown: queryInterface bumps the refcount once per
+    // interface. comp + ap each hold an outstanding ref; without releasing
+    // them the processor never reaches destructor → SpatialEngine never
+    // tears down → ASan reports leaks for everything prepareToPlay()
+    // allocated (IRConvReverb, NoiseChan vectors, ...).
+    ap->release();
     comp->terminate();
+    comp->release();
     proc->release();
 
     if (g_fail == 0) {

@@ -3,6 +3,7 @@
 > **적용 버전**: v0.5.0 부터 (B1 / B2 디코더 + KdTree3D 룩업 + RT 안전 슬롯 스왑).
 > v0.5.1 에서 OSC 통보 채널 / 모드 전환 크로스페이드 / SOFA 미로드 강제 뮤트 추가.
 > v0.6.0 에서 audio thread OSC 송신 분리 + 런타임 sticky 자동 디모트 추가.
+> v0.7.0 부터 Linux ARM64 CI (`ubuntu-24.04-arm`) 가 **필수(required) 게이트**로 승격되었습니다 — ARM64 빌드 실패 시 머지가 차단됩니다 (`docs/ci-promotion-history.md` 참고).
 
 이 챕터는 헤드폰으로 공간 음향을 미리듣기 위한 **바이노럴 모니터링** 기능의
 사용법을 다룹니다. v0.4 까지의 `-6 dB` placeholder 다운믹스가 아니라, **실제
@@ -72,7 +73,7 @@ DAW 한 트랙에서 두 출력을 동시에 라우팅합니다 (Ch.5 참고).
 1. **헤드폰에서 무음**:
    - `.speh` 의 `sofa_path:` 가 실제 존재하는지 확인 (`ls` 로).
    - SOFA 가 로드 안 됐으면 v0.5.1 부터 **강제 뮤트** 가 켜집니다. OSC `/sys/binaural_warning ,s "no_sofa_loaded"` 가 1 회 들어왔는지 호스트에서 확인.
-   - 자세히는 §7.4 OSC 통보 채널 + §7.5 Troubleshooting.
+   - 자세히는 §7.4 OSC 통보 채널 + §7.5 Troubleshooting (reset hatch: §7.5.4).
 2. **헤드폰에서 placeholder 같은 다운믹스 소리** (v0.4 흔적):
    - `.speh` 의 `binaural:` 줄이 `enable=0` 또는 누락. v0.5+ 에서도 binaural
      이 꺼져있으면 v0.4 의 `-6 dB` 다운믹스가 fallback 으로 흐릅니다.
@@ -207,7 +208,43 @@ OSC 채널** 로 상태를 통보합니다. 모두 **IO 스레드** (audio threa
   줄어듭니다 (Ch.9 알고리즘 가이드의 ER 섹션 참고). spatial_engine 의 룸
   reverb (FDN) 가 그 역할을 할 수 있습니다.
 
-### 7.5.4 B1 ↔ B2 자동 전환이 너무 빈번해요
+### 7.5.4 런타임 디모트 후 B2 를 재시도하고 싶어요 (OSC reset hatch)
+
+v0.7 부터 `/sys/binaural_reset_demote ,i 1` OSC 커맨드를 보내면 현재 세션 안에서 런타임 sticky 디모트를 해제할 수 있습니다. 프로젝트 재오픈 없이도 즉시 B2 를 재시도할 수 있습니다.
+
+**커맨드 형식:**
+```
+/sys/binaural_reset_demote  ,i  1
+```
+
+**결과 코드 (`/sys/binaural_warning ,s <code>` 로 통보):**
+
+| 코드 | 의미 |
+|------|------|
+| `reset_demote_accepted` | 리셋 수락 — B2 재시도 가능. |
+| `reset_demote_cooldown_active` | 직전 수락 리셋으로부터 60 초 미경과 — 이번 요청은 무시됨. |
+| (무통보) | 현재 디모트 상태가 아님 (no-op). |
+
+**AS-5 process-lifetime cooldown 의미론:**
+
+60 초 cooldown 카운터는 `initialize()` / `prepareToPlay()` 에 의해 **리셋되지 않습니다** — 프로세스 수명 동안 유지됩니다. **프로젝트를 닫았다 다시 열면 cooldown 카운터가 새로 시작합니다 — 이는 의도된 동작입니다.** 빠른 프로젝트 재오픈으로 cooldown 을 우회하는 것을 막기 위함입니다.
+
+**사용 예시 (Python):**
+```python
+import socket, struct
+
+def send_osc_i(sock, dest, addr, value):
+    def pad(s):
+        b = s.encode() + b'\x00'
+        return b + b'\x00' * ((-len(b)) % 4)
+    pkt = pad(addr) + pad(',i') + struct.pack('>i', value)
+    sock.sendto(pkt, dest)
+
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+send_osc_i(s, ('127.0.0.1', 9001), '/sys/binaural_reset_demote', 1)
+```
+
+### 7.5.5 B1 ↔ B2 자동 전환이 너무 빈번해요
 
 - v0.5.0 시점에는 시작 probe 가 매 `prepareToPlay()` 마다 재평가 → 머신 부하
   변화에 따라 B2 ↔ B1 이 flap 할 수 있었습니다.
@@ -216,7 +253,7 @@ OSC 채널** 로 상태를 통보합니다. 모두 **IO 스레드** (audio threa
   B2 로 다시 보내려면 프로젝트를 닫고 다시 열거나 `/sys/binaural_mode ,i 1`
   을 다시 보내야 합니다.
 
-### 7.5.5 "디모트 된 상태로 프로젝트를 저장했는데, 다시 열면 B2 가 다시 동작해요"
+### 7.5.6 "디모트 된 상태로 프로젝트를 저장했는데, 다시 열면 B2 가 다시 동작해요"
 
 **예상된 동작입니다.** v0.6 의 sticky 자동 디모트는 **`prepareToPlay()` lifetime
 범위 내에서만 sticky** 입니다 — 프로젝트를 저장/종료/재오픈 하면 새 `prepareToPlay`
@@ -237,7 +274,7 @@ OSC 채널** 로 상태를 통보합니다. 모두 **IO 스레드** (audio threa
 B2 로 갈 수 있는지"* 평가합니다. 한 머신에서 디모트가 계속 발생한다면 그것이
 실제 그 머신의 한계 신호 — B1 을 명시적으로 `requested_mode` 로 저장 (`/sys/binaural_mode ,i 0`) 하는 것이 안정적입니다.
 
-### 7.5.6 macOS 에서 들리지 않아요
+### 7.5.7 macOS 에서 들리지 않아요
 
 - v0.6 시점에는 macOS 에 **CoreAudio 백엔드가 미구현** 입니다 (`docs/SETUP_MACOS.md` §빌드 후 노트 참고). 빌드 자체는 통과해도 standalone 의 실시간 출력은 무음입니다.
 - VST3 로 macOS DAW (Logic, Cubase) 에서 사용하는 경로는 호스트가 오디오 IO 를 담당하므로 들립니다 — 이 경로의 macOS 검증은 P2 작업으로 진행 예정 (`docs/weekly_progress_report_2026-05-18.md` §5.1 P2-1).

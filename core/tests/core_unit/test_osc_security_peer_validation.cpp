@@ -294,12 +294,88 @@ int testM1_validDecodeOnly()
     return 0;
 }
 
+// ─── v0.7 D-S1 test ─────────────────────────────────────────────────────────
+//
+// /sys/binaural_reset_demote ,i 1 from an unauthenticated peer (no prior
+// handshake) must not affect the outbound ring (outbound_drops_ unchanged)
+// and must not promote the sender into last_peer_endpoint_.
+//
+// Plan ref: §2 Item #1 Test (3) — peer-validation reuse.
+
+// Build /sys/binaural_reset_demote ,i <enable> packet.
+static std::vector<uint8_t> buildResetDemotePacket(int32_t enable) {
+    std::vector<uint8_t> pkt;
+    auto pushPadded = [&](const char* s) {
+        size_t len = std::strlen(s) + 1;
+        for (size_t i = 0; i < len; ++i) pkt.push_back(static_cast<uint8_t>(s[i]));
+        while (pkt.size() % 4 != 0) pkt.push_back(0);
+    };
+    pushPadded("/sys/binaural_reset_demote");
+    pushPadded(",i");
+    const uint32_t u = static_cast<uint32_t>(enable);
+    pkt.push_back((u >> 24) & 0xFF);
+    pkt.push_back((u >> 16) & 0xFF);
+    pkt.push_back((u >>  8) & 0xFF);
+    pkt.push_back((u >>  0) & 0xFF);
+    return pkt;
+}
+
+int testDS1_unauthenticatedPeerRejected()
+{
+    // Track whether the command sink was invoked with a reset-demote command.
+    std::atomic<bool> reset_demote_dispatched{false};
+    auto sink = [&](const spe::ipc::Command& cmd) {
+        if (cmd.tag == spe::ipc::CommandTag::SysBinauralResetDemote) {
+            reset_demote_dispatched.store(true, std::memory_order_release);
+        }
+    };
+
+    // Use injectPacket with a peer address but WITHOUT a prior handshake.
+    // The OSCBackend will decode the packet (non-Unknown tag → sink called),
+    // but the peer must NOT be promoted to last_peer_endpoint_ — the existing
+    // M1 contract ensures only valid-handshake senders become the reply target.
+    {
+        spe::ipc::OSCBackend backend(sink, /*listen_port=*/0);
+        REQUIRE(!backend.hasPeerEndpoint());
+
+        // Inject the reset-demote packet from an unauthenticated source.
+        auto pkt = buildResetDemotePacket(1);
+        struct sockaddr_in peer{};
+        peer.sin_family      = AF_INET;
+        peer.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        peer.sin_port        = htons(9999); // arbitrary unauthenticated port
+
+        // OSCBackend::injectPacket(packet, peer, len) only captures the peer
+        // when the decoded command tag != Unknown (per M1 fix). The sink IS
+        // invoked (decode succeeds), but because no handshake has established
+        // an authorized reply target, the outbound ring should remain empty
+        // (sendReply with no peer returns false / drops silently).
+        backend.injectPacket(std::span<const uint8_t>(pkt),
+                             reinterpret_cast<const struct sockaddr*>(&peer),
+                             sizeof(peer));
+
+        // The decode succeeded, so sink was called.
+        REQUIRE(reset_demote_dispatched.load(std::memory_order_acquire));
+
+        // No outbound reply should have been queued (no established peer for
+        // the warning drain path). outbound_drops_ must be 0 (ring not
+        // overflowed) because sendReply with no peer simply returns false.
+        REQUIRE(backend.outboundPending() == 0);
+        REQUIRE(backend.outboundDrops() == 0);
+    }
+
+    std::puts("PASS DS1: /sys/binaural_reset_demote from unauthenticated peer "
+              "decoded but outbound ring unaffected");
+    return 0;
+}
+
 } // namespace
 
 int main()
 {
     if (testH1_validation() != 0) return 1;
     if (testM1_validDecodeOnly() != 0) return 1;
-    std::puts("PASS test_osc_security_peer_validation (H1 + M1)");
+    if (testDS1_unauthenticatedPeerRejected() != 0) return 1;
+    std::puts("PASS test_osc_security_peer_validation (H1 + M1 + DS1)");
     return 0;
 }

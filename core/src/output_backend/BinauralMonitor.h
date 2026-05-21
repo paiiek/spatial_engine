@@ -239,10 +239,47 @@ public:
     // modern Linux this is a vDSO call (~30 ns, no syscall, no alloc).
     //
     // Tuning:
-    //   kDemoteStrikes        = 8 consecutive blocks (≈ 21 ms at 48 kHz/128)
+    // ──── Demote threshold derivation (v0.7 D-S2) ────
+    // At runtime: effective_strikes = max(kRuntimeDemoteStrikes,
+    //     ceil(0.020s / block_seconds))
+    // Time-window invariant: ~20 ms regardless of block size.
+    // kRuntimeDemoteStrikes is the FLOOR (preserves v0.6 behavior at
+    // 48 kHz / 128-sample = 2.67ms/block → effective_strikes = 8).
+    // At 32 samples / 48 kHz: effective_strikes = 30 (longer hysteresis).
+    // At 1024 samples / 48 kHz: effective_strikes = 8 (floor, since each
+    // block IS most of the deadline).
     //   kDemoteBudgetFraction = 0.9  (90% of deadline)
     static constexpr int   kRuntimeDemoteStrikes        = 8;
     static constexpr float kRuntimeDemoteBudgetFraction = 0.9f;
+    // ──── Item #8 (v0.7) — saturation ceiling ────
+    // Belt-and-suspenders cap: strike counter never wraps past this value.
+    // Set to 1000 — far above any reasonable effective_strikes.
+    static constexpr int   kRuntimeDemoteStrikesSaturationCeiling = 1000;
+
+    // ──── v0.7 D-S1 — user-controlled reset hatch (60 s cooldown) ────
+    //
+    // Inbound OSC /sys/binaural_reset_demote ,i 1 calls
+    // resetRuntimeDemoteFromUser() on the IO thread. The method performs
+    // an 8-atomic ordered reset (AM-1 + iter-3 §C.2) and returns one of
+    // three outcome codes so the heartbeat drain can emit the appropriate
+    // /sys/binaural_warning string.
+    //
+    // Cooldown semantics (AS-5): runtime_demote_last_reset_ns_ is NOT reset
+    // by initialize() — it is process-lifetime. Close-and-reopen-project
+    // starts a new process so the cooldown counter resets naturally. This is
+    // intentional; documented in CH7_BINAURAL.md §7.5.4.
+    static constexpr int64_t kResetDemoteCooldownNs = 60LL * 1'000'000'000LL;
+
+    enum class ResetResult {
+        Accepted,       // reset performed; warning "reset_demote_accepted" armed
+        CooldownActive, // within 60 s of last reset; warning rate-limited
+        NotDemoted,     // runtime_demoted_ was false; no-op
+    };
+
+    // IO-thread: attempt to re-arm the runtime demote state. now_ns is the
+    // caller's steady_clock reading in nanoseconds. Returns the outcome code.
+    // Not safe to call from the audio thread.
+    ResetResult resetRuntimeDemoteFromUser(int64_t now_ns) noexcept;
 
     // True when runtime auto-demote has fired (sticky until next initialize()).
     bool isRuntimeDemoted() const noexcept {
@@ -274,6 +311,35 @@ public:
     // demoted flag, and warning latch all reset to fresh-start values.
     // Useful for re-running scenarios in a single test process.
     void clearRuntimeDemoteForTest() noexcept;
+
+    // v0.7 D-S1 — IO-thread drain latches for the two new warning codes.
+    // Heartbeat loop calls these each tick; true → emit the corresponding
+    // /sys/binaural_warning ,s "<code>" exactly once per event.
+    bool drainResetDemoteAcceptedPending() noexcept {
+        return reset_demote_accepted_pending_.exchange(false,
+                                                       std::memory_order_acq_rel);
+    }
+    bool drainResetDemoteCooldownPending() noexcept {
+        return reset_demote_cooldown_pending_.exchange(false,
+                                                       std::memory_order_acq_rel);
+    }
+
+    // v0.7 D-S3 — demote-moment snapshot accessors (IO thread / test use).
+    // These read the values snapshotted at the audio-thread CAS-success demote
+    // latch. Acquire ordering pairs with the release stores in recordB2BlockTiming().
+    // Returns 0 before the first demote event (init value) or after a D-S1 reset.
+    int snapshotRuntimeDemoteMaxRatioX1000() const noexcept {
+        return runtime_demote_max_ratio_at_event_x1000_.load(
+            std::memory_order_acquire);
+    }
+    int snapshotRuntimeDemoteBlockSizeAtEvent() const noexcept {
+        return runtime_demote_block_size_at_event_.load(
+            std::memory_order_acquire);
+    }
+    int snapshotRuntimeDemoteSampleRateAtEvent() const noexcept {
+        return runtime_demote_sample_rate_at_event_.load(
+            std::memory_order_acquire);
+    }
 
     // ──── v0.6 D-M2 — steady_clock vDSO availability probe ────
     //
@@ -493,6 +559,34 @@ private:
     std::atomic<int>  runtime_demote_strikes_{0};
     std::atomic<bool> runtime_demoted_{false};
     std::atomic<bool> runtime_demote_warning_pending_{false};
+
+    // v0.7 D-S1 — user-reset hatch atomics.
+    // runtime_demote_last_reset_ns_: timestamp of the last successful reset
+    //   (INT64_MIN = never reset; first call is always Accepted).
+    //   Process-lifetime: NOT cleared by initialize() (AS-5 cooldown semantic).
+    // reset_rejected_count_: cumulative count of cooldown-rejected reset calls.
+    // reset_cooldown_warning_emitted_: rate-limits the "reset_demote_cooldown_active"
+    //   warning to at most once per cooldown window (Critic §D.7 DOS-mitigation).
+    //   Set on first cooldown rejection; cleared on Accept.
+    // reset_demote_accepted_pending_: one-shot latch for the IO heartbeat drain
+    //   to emit /sys/binaural_warning ,s "reset_demote_accepted".
+    // reset_demote_cooldown_pending_: one-shot latch for the IO heartbeat drain
+    //   to emit /sys/binaural_warning ,s "reset_demote_cooldown_active".
+    std::atomic<int64_t> runtime_demote_last_reset_ns_{INT64_MIN};
+    std::atomic<int>     reset_rejected_count_{0};
+    std::atomic<bool>    reset_cooldown_warning_emitted_{false};
+    std::atomic<bool>    reset_demote_accepted_pending_{false};
+    std::atomic<bool>    reset_demote_cooldown_pending_{false};
+
+    // v0.7 D-S3 demote-moment snapshot atomics (Item #3 writes to these;
+    // Item #1 declares them here so resetRuntimeDemoteFromUser's 8-atomic
+    // enumeration compiles correctly. Write sites added by Item #3.)
+    // Snapshotted at the CAS-success demote latch; read by heartbeat drain
+    // for /sys/binaural_diag emission. Init 0 (no event yet).
+    std::atomic<int>   runtime_demote_max_ratio_x1000_{0};
+    std::atomic<int>   runtime_demote_max_ratio_at_event_x1000_{0};
+    std::atomic<int>   runtime_demote_block_size_at_event_{0};
+    std::atomic<int>   runtime_demote_sample_rate_at_event_{0};
 
     // v0.6 D-M2 — steady_clock::now() vDSO availability flag, set by
     // initialize() based on a 10 000-sample timing probe. When false,
