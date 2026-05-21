@@ -13,11 +13,24 @@ name: Cross-platform core build + ctest
 #   - pytest is run only on the same job for the macOS lane since the
 #     soak/asyncio harness has platform-specific timing assumptions.
 #
-# Failure of a matrix leg does NOT block merge in the v0.6 cycle; this
-# workflow runs as a *signal*. After the first stable green run on each
-# leg we will promote it to required via branch protection (v0.6.x or v0.7
-# admin task — tracked in docs/weekly_progress_report_2026-05-18.md §5
-# P2-1).
+# v0.7 promotion status:
+#   - linux-arm64: REQUIRED gate as of v0.7 (D-S5). ARM64 failure BLOCKS merge.
+#     See docs/ci-promotion-history.md for 5-green soak gate and promotion log.
+#     See docs/release/v0.7.0/cross-platform-gating.md for click-path + rollback.
+#   - macos-14 (Apple Silicon): signal-only per AS-6. Named owner: paiiek.
+#     Hardware-handoff scoped to v0.8 after checklist sign-off.
+#
+# AS-4 rollback procedure: if ARM64 leg flakes >2 consecutive runs after
+# promotion, revert the continue-on-error change via git revert + open a
+# Linear ticket for triage. Do NOT bypass via [skip ci] — that masks systemic
+# issues. Rollback options:
+#   Option-A (preferred): repo admin uses GitHub "Merge without waiting for
+#     requirements" bypass. Audit log entry mandatory; admin must comment issue link.
+#   Option-B (fallback): repo admin temporarily removes linux-arm64 from required
+#     status checks, merges the revert PR, re-adds linux-arm64. Gap window must
+#     be <15 minutes; document in weekly_progress_report §5.3.
+#   Re-promotion after fix: requires fresh 5-green soak before re-flipping
+#     continue-on-error. Same rule as initial promotion.
 
 on:
   push:
@@ -36,23 +49,16 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  core-cross-platform:
-    name: ${{ matrix.os }} (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
-    continue-on-error: true   # v0.6 cycle: signal-only, not gating.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: linux-arm64
-            arch: aarch64
-            runner: ubuntu-24.04-arm
-            cmake_jobs_cmd: nproc
-          - os: macos-arm64
-            arch: arm64
-            runner: macos-14
-            cmake_jobs_cmd: sysctl -n hw.ncpu
-
+  # v0.7 D-S5 — Linux ARM64 promoted to REQUIRED per plan ratification
+  # (Architect §A.4 + Critic §C.4 promotion order). 5-consecutive-green soak
+  # required before merging this promotion. After merge: ARM64 failure BLOCKS merge.
+  # TODO(repo-admin): mark 'core-linux-arm64 (linux-arm64 / aarch64)' as a
+  # required status check in Settings → Branches → branch protection rules.
+  core-linux-arm64:
+    name: linux-arm64 (aarch64)
+    runs-on: ubuntu-24.04-arm
+    # continue-on-error intentionally absent — this job is REQUIRED in v0.7.
+    # See AS-4 rollback procedure in file header above.
     steps:
       - uses: actions/checkout@v4
 
@@ -60,22 +66,10 @@ jobs:
         run: |
           uname -a
           cmake --version
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            xcode-select -p
-            clang --version
-          else
-            gcc --version || true
-            clang --version || true
-          fi
-
-      - name: Install cmake (macOS via brew)
-        if: runner.os == 'macOS'
-        run: |
-          brew update --quiet
-          brew install --quiet cmake
+          gcc --version || true
+          clang --version || true
 
       - name: Install build deps (Linux ARM)
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -89,16 +83,10 @@ jobs:
 
       - name: Build core
         run: |
-          cmake --build build_core -j$(${{ matrix.cmake_jobs_cmd }})
+          cmake --build build_core -j$(nproc)
 
       - name: SSE-guard sanity (v0.5 — no unguarded _mm_ outside x86_64)
-        if: matrix.arch != 'x86_64'
         run: |
-          # On non-x86 the build above already exercised the guard. This
-          # is a belt-and-suspenders check that the source tree has no
-          # ungated _mm_* calls that snuck past per-arch compile units.
-          # We allow _mm_ inside `#if defined(__x86_64__)` and the SSE
-          # detection block (`SPE_HAS_SSE`).
           n=$(grep -rn "_mm_" core/src/ 2>/dev/null \
               | grep -v "__x86_64__" \
               | grep -v "SPE_HAS_SSE" \
@@ -111,7 +99,7 @@ jobs:
       - name: ctest (full core suite)
         run: |
           cd build_core
-          ctest --output-on-failure -j$(${{ matrix.cmake_jobs_cmd }})
+          ctest --output-on-failure -j$(nproc)
 
       - name: Capture ctest log on failure
         if: failure()
@@ -122,13 +110,7 @@ jobs:
           fi
 
       - name: Smoke wav-capture (v0.6 #9 release-store smoke on non-x86)
-        if: matrix.arch != 'x86_64'
         run: |
-          # 2-second wav-capture run. Forces the outbound OSC ring through
-          # at least 2 wrap cycles at 1 Hz heartbeat, exercising the v0.6
-          # #9 release-store on a non-x86 architecture. Failure of this
-          # step is meaningful — passing is not proof of weak-order
-          # correctness but absence of crash is necessary.
           if [ -x build_core/core/spatial_engine_core ]; then
             timeout 5 build_core/core/spatial_engine_core \
               --osc-port 0 \
@@ -144,7 +126,90 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cross-platform-${{ matrix.os }}-${{ github.sha }}
+          name: cross-platform-linux-arm64-${{ github.sha }}
+          path: |
+            build_core/Testing/Temporary/LastTest.log
+            /tmp/v06_smoke.wav
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # v0.7 AS-6 — macOS-14 (Apple Silicon) remains signal-only.
+  # Named owner: paiiek. Hardware-handoff (physical Apple Silicon Mac access
+  # for triage) scoped to v0.8 per AS-6 deferral. Promotion requires:
+  #   1. 1 full cycle of green builds after v0.7 ship.
+  #   2. macos-arm64-verify.md checklist sign-off by paiiek.
+  #   3. Fresh 5-green soak per §7.1 Scenario C pre-mortem criteria.
+  core-macos-arm64:
+    name: macos-arm64 (arm64)
+    runs-on: macos-14
+    continue-on-error: true   # v0.7 AS-6: signal-only. Named owner: paiiek. Promote in v0.8.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print toolchain info
+        run: |
+          uname -a
+          cmake --version
+          xcode-select -p
+          clang --version
+
+      - name: Install cmake (macOS via brew)
+        run: |
+          brew update --quiet
+          brew install --quiet cmake
+
+      - name: Configure NO_JUCE core
+        run: |
+          cmake -B build_core -S . \
+            -DSPATIAL_ENGINE_NO_JUCE=ON \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build core
+        run: |
+          cmake --build build_core -j$(sysctl -n hw.ncpu)
+
+      - name: SSE-guard sanity (v0.5 — no unguarded _mm_ outside x86_64)
+        run: |
+          n=$(grep -rn "_mm_" core/src/ 2>/dev/null \
+              | grep -v "__x86_64__" \
+              | grep -v "SPE_HAS_SSE" \
+              | grep -v "//" \
+              | wc -l | tr -d ' ')
+          echo "Unguarded _mm_ call hits: $n"
+          test "$n" = "0" \
+            || (grep -rn "_mm_" core/src/ | grep -v "__x86_64__" | grep -v "SPE_HAS_SSE" | grep -v "//"; exit 1)
+
+      - name: ctest (full core suite)
+        run: |
+          cd build_core
+          ctest --output-on-failure -j$(sysctl -n hw.ncpu)
+
+      - name: Capture ctest log on failure
+        if: failure()
+        run: |
+          if [ -f build_core/Testing/Temporary/LastTest.log ]; then
+            echo "=== LastTest.log (tail 200) ==="
+            tail -200 build_core/Testing/Temporary/LastTest.log
+          fi
+
+      - name: Smoke wav-capture (v0.6 #9 release-store smoke on non-x86)
+        run: |
+          if [ -x build_core/core/spatial_engine_core ]; then
+            timeout 5 build_core/core/spatial_engine_core \
+              --osc-port 0 \
+              --wav /tmp/v06_smoke.wav \
+              --seconds 2 \
+              || echo "smoke exited non-zero (acceptable for headless wav-capture)"
+            ls -la /tmp/v06_smoke.wav || echo "no wav generated"
+          else
+            echo "spatial_engine_core not built at expected path; skipping smoke"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-platform-macos-arm64-${{ github.sha }}
           path: |
             build_core/Testing/Temporary/LastTest.log
             /tmp/v06_smoke.wav
