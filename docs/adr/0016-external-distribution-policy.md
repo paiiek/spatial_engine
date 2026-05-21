@@ -321,3 +321,41 @@ counsel engagement. The audit-log discipline at
 `docs/license_procurement_plan.md §Audit log` exists precisely to make
 that counsel engagement (if ever needed) fast and cheap by giving
 counsel a complete record of *what was conveyed to whom and when*.
+
+### Legal-review trigger events
+
+The following three events each independently require the named owner to act. Default owner for
+all triggers is **paiiek**; owner may be reassigned per case — document the reassignment in
+`docs/legal/handoff-audit-log.md` or a new Limitations subsection (append-only).
+
+**Trigger 1 — A recipient requests Band-1 distribution authorization.**
+
+- **Default owner**: paiiek. Owner may be reassigned per case; document the reassignment in
+  `docs/legal/handoff-audit-log.md`.
+- **Action**: use `docs/legal/BAND_1_HANDOFF_TEMPLATE.md` (template v1.0 or later) to formalise
+  the handoff. Obtain recipient acknowledgement (Field 4). Append the audit-log entry (Field 5)
+  to `docs/legal/handoff-audit-log.md`. Confirm Band-1 cap (≤5 v0.x total) has not been
+  exceeded before proceeding.
+
+**Trigger 2 — A recipient questions or disputes ADR 0016's authority or scope.**
+
+- **Default owner**: paiiek. Owner may be reassigned per case; document the reassignment in
+  `docs/legal/handoff-audit-log.md`.
+- **Action**: pause distribution immediately. Document the question and the project's response
+  in this Limitations section as a new append-only dated subsection. If the response requires
+  legal interpretation (e.g., GPL-3 §6 compliance, JUCE licence scope, jurisdiction-specific
+  FOSS obligations), escalate to live legal counsel — do not attempt to resolve with project-lead
+  interpretation alone. Resume distribution only after the response is documented and, if counsel
+  was engaged, after counsel confirms the response is adequate.
+
+**Trigger 3 — A jurisdiction-specific legal change potentially affects this policy.**
+
+- **Default owner**: paiiek. Owner may be reassigned per case; document the reassignment in
+  `docs/legal/handoff-audit-log.md`.
+- **Examples**: new EU AI Act provisions that reclassify audio-processing software; US copyright
+  reform affecting GPL-3 copyleft scope; JUCE licence term changes.
+- **Action**: re-evaluate ADR 0016 §Decision and Appendix A in light of the change. Document the
+  delta (what changed, what it means for this ADR, and the decision taken) in a new dated
+  subsection of this Limitations section (append-only). If the change materially affects the
+  Band classification or §6 election, draft a ADR 0016 amendment (new ADR or explicit version
+  bump) and have it reviewed by legal counsel before the next distribution event.
