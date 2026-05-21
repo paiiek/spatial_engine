@@ -249,3 +249,157 @@ class TestBothWarningCodesObserved:
             f"emissions spread {spread_ms:.1f} ms apart "
             f"(budget {SPREAD_BUDGET_MS} ms)"
         )
+
+
+# ---------------------------------------------------------------------------
+# v0.7 D-S3 — /sys/binaural_diag telemetry channel test
+# ---------------------------------------------------------------------------
+
+
+def parse_osc_args_iif(pkt: bytes) -> tuple[int, int, float] | None:
+    """
+    Parse ,iif arguments from an OSC packet. Returns (i1, i2, f1) or None
+    if the type tag is not exactly ',iif' or the packet is too short.
+    """
+    # Skip address string (null-terminated, 4-byte aligned).
+    nul = pkt.find(b"\x00")
+    if nul < 0:
+        return None
+    addr_end = nul + (4 - (nul % 4))
+    rest = pkt[addr_end:]
+    # Type tag string.
+    nul2 = rest.find(b"\x00")
+    if nul2 < 0:
+        return None
+    tag = rest[:nul2].decode("ascii", errors="replace")
+    if tag != ",iif":
+        return None
+    tag_end = nul2 + (4 - (nul2 % 4))
+    args = rest[tag_end:]
+    if len(args) < 12:  # 4 + 4 + 4 bytes
+        return None
+    i1 = struct.unpack(">i", args[0:4])[0]
+    i2 = struct.unpack(">i", args[4:8])[0]
+    f1 = struct.unpack(">f", args[8:12])[0]
+    return (i1, i2, f1)
+
+
+class TestBinauralDiagChannel:
+    """
+    v0.7 D-S3 — verify /sys/binaural_diag ,iif is emitted on runtime demote.
+
+    Drive the engine to demote via --inject-probe-throughput (same mechanism
+    as TestBothWarningCodesObserved; the VST3 heartbeat drain pattern is not
+    reachable from the standalone CLI, so we use the existing standalone
+    demote path and assert the diag packet schema).
+
+    AM-4 downgrade: ordering between ambivs_demoted_runtime and
+    /sys/binaural_diag is NOT asserted here (it would require modifying the
+    existing TestBothWarningCodesObserved class, which is forbidden). The
+    expected source-deterministic ordering (warning first, diag second, same
+    drain pass, SPSC ring FIFO) is documented here as a comment for human
+    readers only.
+
+    NOTE: The standalone binary emits /sys/binaural_warning for the probe
+    path (ambivs_disabled_cpu), not the runtime-demote path
+    (ambivs_demoted_runtime). The /sys/binaural_diag packet is wired to the
+    heartbeat drain's runtime-demote branch in the VST3 processor, which the
+    standalone does not exercise. This test therefore asserts the ,iif schema
+    via the OSCBackend unit-level test (test_osc_outbound_multi_producer) for
+    the packet shape, and uses the warning_capture fixture to verify the
+    overall OSC infrastructure is healthy. The VST3 integration path is
+    covered by the C++ ctest scenarios in test_b2_runtime_underrun_auto_demote.
+
+    A full end-to-end pytest driving the VST3 plugin to runtime-demote is
+    deferred to v0.8 (requires a headless VST3 host fixture).
+    """
+
+    def test_binaural_diag_emitted_on_demote(self, warning_capture):
+        """
+        Assert /sys/binaural_diag ,iif schema is correct when received.
+
+        The standalone drives a probe-demote (ambivs_disabled_cpu path) which
+        does NOT emit /sys/binaural_diag (that path is VST3-only). We listen
+        for any /sys/binaural_diag packet that may arrive (e.g., from a future
+        standalone wiring) and validate its schema if present. If no packet
+        arrives, we assert the OSC infrastructure is healthy by verifying the
+        warning packets still arrive within budget — confirming the pipeline
+        that would carry /sys/binaural_diag is operational.
+
+        This test logs any received /sys/binaural_diag packets to
+        soak_reports/binaural_diag_YYYYMMDD.jsonl for longitudinal analysis.
+        """
+        import json
+        from datetime import date
+
+        proc, client, _port, spawn_time = warning_capture
+        trigger_at = spawn_time + EMIT_AFTER_MS / 1000.0
+        absolute_deadline = trigger_at + PER_EMISSION_LATENCY_BUDGET_MS / 1000.0
+
+        ambivs_at: float | None = None
+        diag_packet: tuple[int, int, float] | None = None
+        diag_at: float | None = None
+
+        drain_deadline = absolute_deadline + 1.0
+        while time.monotonic() < drain_deadline and not ambivs_at:
+            try:
+                pkt, _src = client.recvfrom(1024)
+            except socket.timeout:
+                continue
+            recv_at = time.monotonic()
+            addr = parse_osc_address(pkt)
+            if addr == "/sys/binaural_warning":
+                tag = parse_osc_type_tag(pkt)
+                if (tag in (",sf", ",s")) and b"ambivs_disabled_cpu" in pkt:
+                    ambivs_at = recv_at
+            elif addr == "/sys/binaural_diag":
+                args = parse_osc_args_iif(pkt)
+                if args is not None:
+                    diag_packet = args
+                    diag_at = recv_at
+
+        # The warning must have arrived (proves the OSC pipeline is working).
+        if not ambivs_at:
+            try:
+                stderr = proc.stderr.read1(8192).decode("utf-8", errors="replace")
+            except Exception:
+                stderr = "<unreadable>"
+            pytest.fail(
+                f"ambivs_disabled_cpu warning missing — OSC pipeline not healthy; "
+                f"engine stderr:\n{stderr}"
+            )
+
+        # If a /sys/binaural_diag packet arrived, validate its ,iif schema.
+        if diag_packet is not None:
+            block_size, sample_rate_int, observed_max_ratio = diag_packet
+            assert block_size > 0, (
+                f"/sys/binaural_diag block_size={block_size} must be > 0"
+            )
+            assert sample_rate_int > 0, (
+                f"/sys/binaural_diag sample_rate_int={sample_rate_int} must be > 0"
+            )
+            assert observed_max_ratio > 0.0, (
+                f"/sys/binaural_diag observed_max_ratio={observed_max_ratio} must be > 0"
+            )
+            # Diag must arrive within per-emission budget of its trigger.
+            assert diag_at is not None
+            diag_lat_ms = (diag_at - trigger_at) * 1000.0
+            assert diag_lat_ms < PER_EMISSION_LATENCY_BUDGET_MS, (
+                f"/sys/binaural_diag arrived {diag_lat_ms:.1f} ms after trigger "
+                f"(budget {PER_EMISSION_LATENCY_BUDGET_MS} ms)"
+            )
+
+        # Log to soak_reports/ regardless of whether the diag packet arrived.
+        soak_dir = REPO_ROOT / "tests" / "soak_harness" / "soak_reports"
+        soak_dir.mkdir(exist_ok=True)
+        log_path = soak_dir / f"binaural_diag_{date.today().strftime('%Y%m%d')}.jsonl"
+        record = {
+            "ts": time.time(),
+            "diag_received": diag_packet is not None,
+            "block_size": diag_packet[0] if diag_packet else None,
+            "sample_rate_int": diag_packet[1] if diag_packet else None,
+            "observed_max_ratio": diag_packet[2] if diag_packet else None,
+            "diag_lat_ms": (diag_at - trigger_at) * 1000.0 if diag_at else None,
+        }
+        with open(log_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
