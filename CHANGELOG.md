@@ -5,6 +5,95 @@ All notable changes to the Spatial Engine project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-05-21
+
+RT-safety follow-through + telemetry + cross-platform CI promotion.
+Eight-item cycle closing the v0.6 retro's binding recommendations. All
+OSC changes are additive; no state-format change. Tracks
+`.omc/plans/spatial-engine-v0.7.md` (iter-3 ralplan consensus). Full
+notes: `docs/release/v0.7.0/RELEASE_NOTES_EN.md`.
+
+### Added
+- **`/sys/binaural_reset_demote ,i 1` user recovery hatch (#1, D-S1).**
+  In-host re-arm of B2 after a runtime sticky-demote, on the OSC IO
+  thread. Clears the full 8-atomic demote state in a race-safe order
+  (`runtime_demoted_` last). 60 s cooldown prevents glitch-loop
+  ping-pong; rejections emit `reset_demote_cooldown_active` at most once
+  per window (DOS rate-limit, Critic §D.7); accept emits
+  `reset_demote_accepted`. Cooldown is process-lifetime (AS-5) — not
+  reset by `prepareToPlay`. New ctests `b2_runtime_underrun_user_reset`
+  (+ AM-1 zero-hysteresis regression gate) and
+  `b2_runtime_underrun_user_reset_concurrent`.
+- **`/sys/binaural_diag ,iif` event-driven telemetry (#3, D-S3).**
+  `<block_size> <sample_rate_int> <observed_max_ratio>` emitted once per
+  demote event, immediately after `ambivs_demoted_runtime` on the same
+  IO drain pass. Fields snapshotted at the audio-thread demote latch
+  (demote-moment context, not live-at-drain). New `sendReplyImplIIF`
+  encoder (ADR 0017 §B). New pytest `test_binaural_diag_emitted_on_demote`.
+- **Relacy synthetic race verifier (#4, D-S4).**
+  `test_osc_outbound_relacy` exercises the SPSC outbound ring under the
+  relacy C++11 memory-model checker, verifying the v0.6 #9 release-store
+  fix. Vendored dev-dep behind `SPATIAL_ENGINE_BUILD_RELACY_TESTS=OFF`
+  (default off). License audit in `third_party/relacy/`.
+- **`scripts/audit_release_p_tags.sh` (#7).** P-tag chain integrity
+  audit across weekly reports / release notes / ADRs (audit-only,
+  non-gating for v0.7 — V07-Q7).
+- **ADR 0017** documenting the `/sys/binaural_diag` telemetry channel
+  (event-driven, dedicated encoder, snapshot-at-latch).
+
+### Changed
+- **Block-size-aware demote hysteresis (#2, D-S2).**
+  `kRuntimeDemoteStrikes = 8` is now the demote-strikes *floor*;
+  `effective_strikes = max(8, ceil(0.020s / block_seconds))` pins the
+  demote window at ~20 ms regardless of block size (30 strikes at 32
+  samples / 48 kHz; floor of 8 at ≥128). Three new
+  `b2_runtime_underrun_auto_demote` scenarios.
+- **Linux ARM64 CI promoted to required (#5, D-S5).**
+  `cross-platform.yml` `core-linux-arm64` (`ubuntu-24.04-arm`) exits
+  `continue-on-error` and becomes a required merge gate after a 5-green
+  post-merge soak. `core-macos-arm64` stays signal-only with named owner
+  (AS-6). Gating + AS-4 rollback in
+  `docs/release/v0.7.0/cross-platform-gating.md`.
+- **Demote-strikes saturation guard (#8).** `runtime_demote_strikes_`
+  caps so a long over-budget run cannot overflow; the test-only
+  `clearRuntimeDemoteForTest()` hook is gated behind the test build flag.
+- **ADR 0016 legal-review trigger events (#6).** Three named triggers
+  (Band-1 request; ADR-authority dispute; jurisdiction change), each with
+  a default owner (`paiiek`) and explicit action; paired with
+  `docs/legal/BAND_1_HANDOFF_TEMPLATE.md`. Not legal-counsel reviewed.
+
+### Release validation (2026-05-21)
+- `ctest` (NO_JUCE `build_off`, serial): **122/122 PASS, 0 failed**
+  (count exceeds the plan's projected 118 because the ADR 0018/0019
+  PCM-IPC commits grew the baseline after the plan was authored). Under
+  `-j` parallelism `vst3_bind_collision` can flake on a port-bind race;
+  passes in isolation and serially.
+- `pytest tests/`: **48 passed, 0 failed** (incl. the new diag test).
+- Relacy `test_osc_outbound_relacy` (1024 iterations): no race detected.
+
+### Known limitations (intentional)
+- **`bench_heartbeat_drain_latency` ctest (Critic §C.1) not implemented
+  — deferred to v0.7.x.** The D-S3 drain extension is functionally
+  tested but has no automated wall-clock-cost regression gate yet.
+- ARM64 required-gate soak is post-merge; branch protection not yet
+  flipped. macOS arm64 stays signal-only (no Apple Silicon HW verify).
+- Slow-degradation telemetry not detected by event-driven
+  `/sys/binaural_diag` (B-3 pre-demote-window summary deferred to v0.8,
+  V07-Q1). ADR 0016 / Band-1 template not legal-counsel reviewed.
+
+### Closed open questions
+- **V051-OQ1** — `/sys/binaural_status` stays 1 Hz; diagnostic telemetry
+  is event-driven (not 1 Hz polling).
+- **V051-OQ2** — runtime sticky auto-demote shipped as committed v0.6 #5;
+  v0.7 D-S2 makes the strike count block-size-aware.
+
+### Plan
+- `.omc/plans/spatial-engine-v0.7.md` (iter-3). Full ralplan
+  Planner→Architect→Critic consensus (contrast with the v0.6 post-hoc
+  cadence). Architect/Critic review artifacts under `.omc/plans/`.
+
+---
+
 ## [0.6.0] — 2026-05-18
 
 RT-safety hardening bundle on already-shipped surfaces. No user-visible
