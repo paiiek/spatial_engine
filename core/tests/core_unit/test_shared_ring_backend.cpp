@@ -238,6 +238,35 @@ static int test_block_size_divisor_and_max_gates() {
     return 0;
 }
 
+// ── Case 7: ring_capacity_non_pow2_rejected_on_attach ─────────────────────
+
+static int test_ring_capacity_non_pow2_rejected() {
+    constexpr int kEngineBlock = 256;
+    // capacity_frames = 6000 (non-pow2) → DeviceOpenFailed at start().
+    {
+        RingFixture fx(48000, 64, 2, 6000);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);  // mmap of total_region_bytes(2, 6000) succeeds
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::DeviceOpenFailed);
+        assert(!be->isRunning());
+        assert(be->stagingCapacity() == 0);  // nothing allocated
+    }
+    // capacity_frames = 8192 (pow2) → Ok; masking capacity == header verbatim.
+    {
+        RingFixture fx(48000, 64, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+        assert(be->isRunning());
+        assert(be->maskingCapacityFrames() == 8192u);  // never a rounded value
+        be->stop();
+    }
+    std::printf("  PASS  ring_capacity_non_pow2_rejected_on_attach\n");
+    return 0;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -257,6 +286,7 @@ int main() {
     int rc = 0;
     rc |= test_header_magic_and_version_validated();
     rc |= test_block_size_divisor_and_max_gates();
+    rc |= test_ring_capacity_non_pow2_rejected();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
