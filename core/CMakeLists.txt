@@ -139,6 +139,8 @@ set(SPE_CORE_SOURCES
     src/ambi/AmbiDecoder.cpp
     # ADR 0019 PR1: POSIX shm region (Linux + macOS only)
     $<$<BOOL:${UNIX}>:src/audio_io/shm/SharedMemoryRegion.cpp>
+    # ADR 0019 PR2: input-only shared-ring backend (Linux + macOS only)
+    $<$<BOOL:${UNIX}>:src/audio_io/SharedRingBackend.cpp>
     # M2-HOA: 4 new decoder algorithms (HOA Decoder Diversification sprint)
     src/ambi/MaxREDecoder.cpp
     src/ambi/InPhaseDecoder.cpp

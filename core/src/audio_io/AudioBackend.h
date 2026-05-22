@@ -21,6 +21,8 @@ enum class BackendError {
     SampleRateUnsupported,
     AlreadyStarted,
     NotStarted,
+    BlockConfigMismatch,    // ADR 0019: header block_size does not divide engine block,
+                            // or block_size > capacity_frames; distinct from BlockSizeExceedsMax.
 };
 
 const char* describe(BackendError e) noexcept;

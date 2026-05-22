@@ -12,6 +12,7 @@ const char* describe(BackendError e) noexcept {
         case BackendError::SampleRateUnsupported: return "sample_rate_unsupported";
         case BackendError::AlreadyStarted:        return "already_started";
         case BackendError::NotStarted:            return "not_started";
+        case BackendError::BlockConfigMismatch:   return "block_config_mismatch";
     }
     return "unknown";
 }

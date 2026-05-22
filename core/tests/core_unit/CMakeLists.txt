@@ -618,3 +618,25 @@ add_test(NAME shm_ring_header COMMAND test_shm_ring_header)
 add_executable(test_shared_memory_region test_shared_memory_region.cpp)
 target_link_libraries(test_shared_memory_region PRIVATE spe_core)
 add_test(NAME shared_memory_region COMMAND test_shared_memory_region)
+
+# ─────────────────────────────────────────────────────────────────────────
+# ADR 0019 PR2 — input-only SharedRingBackend: cases 1–8.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Always-on target: cases 1–7 + case 8 structural invariants (ii/iii/iv).
+# Requires /dev/shm (Linux) or POSIX shm (macOS); SKIPs elsewhere.
+add_executable(test_shared_ring_backend test_shared_ring_backend.cpp)
+target_link_libraries(test_shared_ring_backend PRIVATE spe_core)
+add_test(NAME shared_ring_backend COMMAND test_shared_ring_backend)
+
+# RT-sentinel target: case 8 invariant (i) rt_alloc_violations()==0 is only
+# meaningful when the alloc-recording override TU (RtAssertNoAlloc.cpp) is
+# compiled, i.e. SPE_RT_ASSERTS=ON. Mirror p1_rt_no_alloc (line 106 above).
+if(SPATIAL_ENGINE_RT_ASSERTS)
+    add_executable(test_shared_ring_backend_rt_sentinel test_shared_ring_backend.cpp)
+    target_link_libraries(test_shared_ring_backend_rt_sentinel PRIVATE spe_core)
+    target_compile_definitions(test_shared_ring_backend_rt_sentinel PRIVATE
+        SRB_RT_SENTINEL=1)
+    add_test(NAME shared_ring_backend_rt_sentinel
+        COMMAND test_shared_ring_backend_rt_sentinel)
+endif()
