@@ -355,6 +355,68 @@ static int test_underrun_fills_silence_and_increments_xrun() {
     return 0;
 }
 
+// ── Case 4: producer_drain_state_plays_remaining_then_silence ─────────────
+
+static int test_producer_drain_state_plays_remaining_then_silence() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 8192;
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+    // Producer writes 2 blocks → write_idx == 2*block, read_idx == 0.
+    auto b0 = ramp_blocks(kCh, kBlock, /*seed=*/1.0f);
+    auto b1 = ramp_blocks(kCh, kBlock, /*seed=*/2.0f);
+    fx.producer_write_block(b0, kBlock, /*pts=*/0);
+    fx.producer_write_block(b1, kBlock, /*pts=*/0);
+    // Then producer goes Draining (enum value 2).
+    fx.header()->producer_state.store(
+        static_cast<std::uint32_t>(ProducerState::Draining), std::memory_order_release);
+
+    // pump #1: available == 2*block → delivers b0 sample-exact, read_idx → block.
+    be->pump_block(&cb, 0);
+    for (std::uint32_t ch = 0; ch < kCh; ++ch)
+        for (std::uint32_t n = 0; n < kBlock; ++n)
+            assert(cb.captured[ch][n] == b0[ch][n]);
+    assert(fx.header()->read_idx.load(std::memory_order_acquire) == kBlock);
+    assert(be->xrunCount() == 0);
+
+    // pump #2: available == block → delivers b1 sample-exact, read_idx → 2*block.
+    be->pump_block(&cb, 0);
+    for (std::uint32_t ch = 0; ch < kCh; ++ch)
+        for (std::uint32_t n = 0; n < kBlock; ++n)
+            assert(cb.captured[ch][n] == b1[ch][n]);
+    assert(fx.header()->read_idx.load(std::memory_order_acquire) == 2 * kBlock);
+    assert(be->xrunCount() == 0);
+
+    // pump #3: available == 0 && state == Draining → silence + xrun, read_idx unchanged.
+    be->pump_block(&cb, 0);
+    for (std::uint32_t ch = 0; ch < kCh; ++ch)
+        for (std::uint32_t n = 0; n < kBlock; ++n)
+            assert(cb.captured[ch][n] == 0.0f);
+    assert(fx.header()->read_idx.load(std::memory_order_acquire) == 2 * kBlock);
+    assert(be->xrunCount() == 1);
+
+    // Producer goes Closed (enum value 3); pump → silence, read_idx unchanged.
+    fx.header()->producer_state.store(
+        static_cast<std::uint32_t>(ProducerState::Closed), std::memory_order_release);
+    be->pump_block(&cb, 0);
+    for (std::uint32_t ch = 0; ch < kCh; ++ch)
+        for (std::uint32_t n = 0; n < kBlock; ++n)
+            assert(cb.captured[ch][n] == 0.0f);
+    assert(fx.header()->read_idx.load(std::memory_order_acquire) == 2 * kBlock);
+    assert(be->xrunCount() == 2);
+
+    be->stop();
+    std::printf("  PASS  producer_drain_state_plays_remaining_then_silence\n");
+    return 0;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -376,6 +438,7 @@ int main() {
     rc |= test_block_size_divisor_and_max_gates();
     rc |= test_ring_capacity_non_pow2_rejected();
     rc |= test_underrun_fills_silence_and_increments_xrun();
+    rc |= test_producer_drain_state_plays_remaining_then_silence();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
