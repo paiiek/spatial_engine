@@ -70,6 +70,26 @@ public:
     std::vector<std::vector<float>> captured;
 };
 
+// Alloc-free callback for the RT sentinel (case 8 invariant i). Reads each
+// input sample into a volatile sink so the copy is not optimized away, but
+// performs no heap allocation.
+class SilentCallback final : public AudioCallback {
+public:
+    void prepareToPlay(double, int) override {}
+    void releaseResources() override {}
+    void audioBlock(const AudioBlock& blk) override {
+        ++calls;
+        if (blk.input_channels) {
+            for (int ch = 0; ch < blk.input_channel_count; ++ch) {
+                const float* src = blk.input_channels[ch];
+                for (int n = 0; n < blk.num_frames; ++n) sink += src[n];
+            }
+        }
+    }
+    int   calls = 0;
+    float sink  = 0.0f;
+};
+
 // Owns a created shm region + writes a RingHeader. Cleans up on destruction.
 struct RingFixture {
     std::string         name;
@@ -537,6 +557,111 @@ static int test_pacing_drift_emits_warning_rate_limited() {
     return 0;
 }
 
+// ── Case 8: audio_thread_no_alloc_no_syscall ──────────────────────────────
+//
+// Pre-fill the ring with >= K blocks (K=256) and drive the RT body K times
+// against the steady-state buffer. Two portions:
+//   • Structural invariants (ii/iii/iv) — asserted in BOTH build configs
+//     (no override needed): read_idx advanced by exactly K*block_size; xrun
+//     count unchanged (no late/underrun branch); staging .data()/.capacity()
+//     identical before/after (a realloc would move them — the only meaningful
+//     alloc guard in build_off).
+//   • RT sentinel (i) rt_alloc_violations()==0 — meaningful ONLY when the
+//     alloc-recording override TU is compiled (SPE_RT_ASSERTS=ON, i.e. the
+//     SRB_RT_SENTINEL target). Run via pump_synchronous (the named hook).
+
+static constexpr int kRtBlocks = 256;
+
+// Build a backend on a ring pre-filled with K blocks of distinct ramp data so
+// every pump in the steady run hits the copy path (available >= block_size).
+// Returns the fixture (kept alive by the caller) via out-param.
+static void prefill_ring(RingFixture& fx) {
+    for (int i = 0; i < kRtBlocks; ++i) {
+        auto blk = ramp_blocks(fx.channels, fx.header()->block_size,
+                               static_cast<float>(i) * 7.0f);
+        fx.producer_write_block(blk, fx.header()->block_size, /*pts=*/0);
+    }
+}
+
+#if !defined(SRB_RT_SENTINEL)
+
+static int test_audio_thread_structural_invariants() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    // Capacity must hold K*block contiguously without overrunning the producer;
+    // capacity is a sliding window so K blocks just need available>=block each
+    // pump. cap = next pow2 >= a few blocks; producer writes K blocks total.
+    constexpr std::uint32_t kCap = 32768;  // pow2, >= K*block window safety
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+    prefill_ring(fx);
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+    // Capture staging buffer identity BEFORE the steady run (post-allocate).
+    const float* staging_before = be->stagingData();
+    const std::size_t cap_before = be->stagingCapacity();
+    const unsigned long long xr_before = be->xrunCount();
+    assert(cap_before > 0);
+
+    // Drive the real RT body K times (no thread, no sleep).
+    for (int i = 0; i < kRtBlocks; ++i)
+        be->pump_block(&cb, static_cast<std::uint64_t>(i) * kBlock);
+
+    // (ii) read_idx advanced by exactly K*block_size.
+    assert(fx.header()->read_idx.load(std::memory_order_acquire)
+           == static_cast<std::uint64_t>(kRtBlocks) * kBlock);
+    // (iii) xrunCount() unchanged (no late/underrun branch taken).
+    assert(be->xrunCount() == xr_before);
+    // (iv) staging .data()/.capacity() identical before/after (no realloc).
+    assert(be->stagingData() == staging_before);
+    assert(be->stagingCapacity() == cap_before);
+
+    be->stop();
+    std::printf("  PASS  audio_thread_no_alloc_no_syscall (structural ii/iii/iv)\n");
+    return 0;
+}
+
+#else  // SRB_RT_SENTINEL
+
+static int test_audio_thread_rt_sentinel() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 32768;
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+    prefill_ring(fx);
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    // Alloc-free callback: the RT sentinel measures pump_block, so the
+    // callback itself must not allocate (CaptureCallback's per-block
+    // std::vector growth would falsely trip the override).
+    SilentCallback cb;
+
+    spe::util::rt_alloc_violations_reset();
+    // pump_synchronous arms SPE_RT_NO_ALLOC_SCOPE() inside pump_block; the
+    // override TU records any heap alloc on the RT path.
+    assert(be->pump_synchronous(&cb, kRtBlocks, /*hw_ts_base=*/0, kEngineBlock)
+           == BackendError::Ok);
+
+    // (i) zero allocations on the RT body.
+    const unsigned long long v = spe::util::rt_alloc_violations();
+    if (v != 0) {
+        std::fprintf(stderr, "FAIL: rt_alloc_violations=%llu (expected 0)\n", v);
+        return 1;
+    }
+    std::printf("  PASS  audio_thread_no_alloc_no_syscall (RT sentinel i: violations=0)\n");
+    return 0;
+}
+
+#endif  // SRB_RT_SENTINEL
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -544,7 +669,7 @@ static int test_pacing_drift_emits_warning_rate_limited() {
 int main() {
     std::printf("=== test_shared_ring_backend (RT sentinel) ===\n");
     int rc = 0;
-    // case 8 invariant (i) added below in case 8 step.
+    rc |= test_audio_thread_rt_sentinel();
     if (rc == 0) std::printf("All shared_ring_backend RT-sentinel checks PASSED.\n");
     return rc;
 }
@@ -561,6 +686,7 @@ int main() {
     rc |= test_producer_drain_state_plays_remaining_then_silence();
     rc |= test_producer_pid_dead_emits_stale_warning_once();
     rc |= test_pacing_drift_emits_warning_rate_limited();
+    rc |= test_audio_thread_structural_invariants();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
