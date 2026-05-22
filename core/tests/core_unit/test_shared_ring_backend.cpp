@@ -267,6 +267,94 @@ static int test_ring_capacity_non_pow2_rejected() {
     return 0;
 }
 
+// ── Case 3: underrun_fills_silence_and_increments_xrun ────────────────────
+
+static int test_underrun_fills_silence_and_increments_xrun() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 8192;
+
+    // ── Empty-ring underrun + attachedNoData latch + sample-exact replay ──
+    {
+        RingFixture fx(48000, kBlock, kCh, kCap);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+        // (1) Empty ring (write_idx==read_idx==0): one pump → all-zero block,
+        //     xrunCount()+1, read_idx NOT advanced.
+        be->pump_block(&cb, /*hw_ts=*/1000);
+        assert(cb.calls == 1);
+        assert(cb.last_in_channels == static_cast<int>(kCh));
+        assert(cb.last_frames == static_cast<int>(kBlock));
+        for (std::uint32_t ch = 0; ch < kCh; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == 0.0f);
+        assert(be->xrunCount() == 1);
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == 0);
+
+        // (2) attachedNoData once-on-attach latch (ring still empty).
+        be->poll_diagnostics(/*now_ms=*/0, /*now_ns=*/0);
+        assert(be->attachedNoDataWarningCount() == 1);
+        be->poll_diagnostics(/*now_ms=*/0, /*now_ns=*/0);
+        assert(be->attachedNoDataWarningCount() == 1);  // latched
+
+        // (3) Producer writes one block → next pump delivers it sample-exact,
+        //     xrunCount() unchanged, read_idx advanced by exactly block_size.
+        auto blk = ramp_blocks(kCh, kBlock, /*seed=*/10.0f);
+        fx.producer_write_block(blk, kBlock, /*pts=*/0);
+        const unsigned long long xr_before = be->xrunCount();
+        be->pump_block(&cb, /*hw_ts=*/2000);
+        assert(be->xrunCount() == xr_before);
+        for (std::uint32_t ch = 0; ch < kCh; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == blk[ch][n]);
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == kBlock);
+        be->stop();
+    }
+
+    // ── PM1 capacity-wrap split sub-case ──────────────────────────────────
+    // Seed read_idx == write_idx near the wrap so the next read straddles it.
+    {
+        constexpr std::uint32_t wCh = 1;
+        constexpr std::uint32_t wCap = 8;      // pow2
+        constexpr std::uint32_t wBlock = 4;    // divides engine block 256
+        RingFixture fx(48000, wBlock, wCh, wCap);
+        // Pre-seed indices so (read_idx & (cap-1)) + block > cap:
+        //   read = write = 6 → idx=6, 6+4=10 > 8 → first=2, rest=2.
+        fx.header()->read_idx.store(6, std::memory_order_relaxed);
+        fx.header()->write_idx.store(6, std::memory_order_relaxed);
+
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+        // Producer fills the contiguous logical block [6,10) — physically
+        // straddling the wrap (frames 6,7 then 0,1).
+        std::vector<std::vector<float>> wblk(wCh, std::vector<float>(wBlock, 0.0f));
+        for (std::uint32_t n = 0; n < wBlock; ++n)
+            wblk[0][n] = 100.0f + static_cast<float>(n);
+        fx.producer_write_block(wblk, wBlock, /*pts=*/0);
+
+        const unsigned long long xr_before = be->xrunCount();
+        be->pump_block(&cb, /*hw_ts=*/0);
+        // read_idx advanced by exactly block_size.
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == 6 + wBlock);
+        // xrunCount unchanged across the wrapped read.
+        assert(be->xrunCount() == xr_before);
+        // Two staged halves (pre-wrap tail + post-wrap head) equal producer ±0.
+        for (std::uint32_t n = 0; n < wBlock; ++n)
+            assert(cb.captured[0][n] == wblk[0][n]);
+        be->stop();
+    }
+
+    std::printf("  PASS  underrun_fills_silence_and_increments_xrun\n");
+    return 0;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -287,6 +375,7 @@ int main() {
     rc |= test_header_magic_and_version_validated();
     rc |= test_block_size_divisor_and_max_gates();
     rc |= test_ring_capacity_non_pow2_rejected();
+    rc |= test_underrun_fills_silence_and_increments_xrun();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
