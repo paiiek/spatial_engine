@@ -184,6 +184,60 @@ static int test_header_magic_and_version_validated() {
     return 0;
 }
 
+// ── Case 2: block_size_divisor_and_max_gates ─────────────────────────────
+
+static int test_block_size_divisor_and_max_gates() {
+    constexpr int kEngineBlock = 256;  // <= MAX_BLOCK(512)
+
+    // block_size = 100 does NOT divide 256 → BlockConfigMismatch.
+    {
+        RingFixture fx(48000, 100, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::BlockConfigMismatch);
+        assert(!be->isRunning());
+        assert(be->stagingCapacity() == 0);
+        assert(std::strcmp(describe(BackendError::BlockConfigMismatch),
+                           "block_config_mismatch") == 0);
+    }
+    // block_size = 64 divides 256 and <= capacity → Ok.
+    {
+        RingFixture fx(48000, 64, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+        assert(be->isRunning());
+        be->stop();
+    }
+    // block_size = 1024 > MAX_BLOCK(512) → BlockSizeExceedsMax (ONLY this gate).
+    {
+        RingFixture fx(48000, 1024, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::BlockSizeExceedsMax);
+        assert(!be->isRunning());
+    }
+    // block_size = 512 (divides? 256 % 512 != 0 — but the block>capacity gate
+    // is the one under test here) but capacity = 256 → block > capacity →
+    // BlockConfigMismatch. 512 <= MAX_BLOCK so it passes the max gate; the
+    // divisor gate would also catch 256 % 512 != 0, but block>capacity is the
+    // pinned sub-case. Use engine block 512 so the divisor passes and only the
+    // block>capacity gate fires.
+    {
+        RingFixture fx(48000, 512, 2, 256);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, 512) == BackendError::BlockConfigMismatch);
+        assert(!be->isRunning());
+    }
+    std::printf("  PASS  block_size_divisor_and_max_gates\n");
+    return 0;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -202,6 +256,7 @@ int main() {
     std::printf("=== test_shared_ring_backend ===\n");
     int rc = 0;
     rc |= test_header_magic_and_version_validated();
+    rc |= test_block_size_divisor_and_max_gates();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
