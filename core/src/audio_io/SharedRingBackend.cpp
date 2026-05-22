@@ -71,6 +71,11 @@ std::unique_ptr<SharedRingBackend> SharedRingBackend::attach(const std::string& 
     // exceeds the object size — accesses beyond the backing store then SIGBUS
     // on the audio thread. backing_size() returns the fstat st_size captured
     // at attach time. (Additive PR1 accessor — see SharedMemoryRegion.h.)
+    // NOTE: this is a point-in-time snapshot; a producer that ftruncate-shrinks
+    // the object AFTER attach can still induce SIGBUS. That is an accepted
+    // same-host, file-permission-controlled risk per ADR 0019 §10 (rings are
+    // not authenticated; a producer corrupting its own live ring is out of
+    // scope) — the RT availability clamp + geometry ceiling bound the rest.
     const std::size_t backing = backend->region_.backing_size();
     if (backing > 0 && backing < full_bytes) {
         backend->region_.detach();
