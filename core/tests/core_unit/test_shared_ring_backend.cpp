@@ -470,6 +470,73 @@ static int test_producer_pid_dead_emits_stale_warning_once() {
     return 0;
 }
 
+// ── Case 6: pacing_drift_emits_warning_rate_limited ───────────────────────
+
+static int test_pacing_drift_emits_warning_rate_limited() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kSr = 48000;
+    RingFixture fx(kSr, kBlock, 2, 8192);
+    // Write a block so write_idx != 0 (isolate from the attachedNoData latch).
+    auto blk = ramp_blocks(2, kBlock, 1.0f);
+    fx.producer_write_block(blk, kBlock, /*pts=*/0);
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+    // block_period_ns computed exactly as the backend does (truncating cast).
+    const std::uint64_t bp = static_cast<std::uint64_t>(
+        1e9 * static_cast<double>(kBlock) / static_cast<double>(kSr));
+
+    const unsigned long long xr0 = be->xrunCount();
+    const std::uint64_t ri0 = fx.header()->read_idx.load(std::memory_order_acquire);
+
+    auto set_pts = [&](std::uint64_t v) {
+        fx.header()->producer_meta_block_pts_ns.store(v, std::memory_order_release);
+    };
+    auto set_hb_fresh = [&](std::uint64_t now_ms) {
+        fx.header()->producer_heartbeat_ms.store(now_ms, std::memory_order_release);
+    };
+
+    const std::uint64_t t0 = 5'000'000'000ULL;
+
+    // Seed baseline pts → caches t0, no warning.
+    set_hb_fresh(0); set_pts(t0);
+    be->poll_diagnostics(/*now_ms=*/0, /*now_ns=*/0);
+    assert(be->pacingWarningCount() == 0);
+
+    // Boundary low: delta == exactly one block period (NOT >) → no warning.
+    set_hb_fresh(0); set_pts(t0 + bp);
+    be->poll_diagnostics(0, 0);
+    assert(be->pacingWarningCount() == 0);
+
+    // Boundary high: delta == block_period_ns + 1 → warning fires once.
+    set_hb_fresh(0); set_pts(t0 + bp + (bp + 1));
+    be->poll_diagnostics(0, 0);
+    assert(be->pacingWarningCount() == 1);
+
+    // Rate-limit (once / 5 s): another drifted delta within the 5 000 ms
+    // window → suppressed.
+    set_hb_fresh(4000); set_pts(t0 + bp + (bp + 1) + (bp + 1));
+    be->poll_diagnostics(/*now_ms=*/4000, 0);
+    assert(be->pacingWarningCount() == 1);
+
+    // Re-arm: after now advanced > 5 000 ms with another drift → fires.
+    set_hb_fresh(5001); set_pts(t0 + bp + (bp + 1) + (bp + 1) + (bp + 1));
+    be->poll_diagnostics(/*now_ms=*/5001, 0);
+    assert(be->pacingWarningCount() == 2);
+
+    // No audio-thread mutation by any poll_diagnostics call.
+    assert(be->xrunCount() == xr0);
+    assert(fx.header()->read_idx.load(std::memory_order_acquire) == ri0);
+
+    be->stop();
+    std::printf("  PASS  pacing_drift_emits_warning_rate_limited\n");
+    return 0;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -493,6 +560,7 @@ int main() {
     rc |= test_underrun_fills_silence_and_increments_xrun();
     rc |= test_producer_drain_state_plays_remaining_then_silence();
     rc |= test_producer_pid_dead_emits_stale_warning_once();
+    rc |= test_pacing_drift_emits_warning_rate_limited();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
