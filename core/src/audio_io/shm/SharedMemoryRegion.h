@@ -65,10 +65,16 @@ public:
     /// Does NOT shm_unlink — lifecycle is the producer's responsibility.
     void detach() noexcept;
 
-    bool        is_attached() const noexcept { return base_ != nullptr; }
-    void*       base()        noexcept       { return base_; }
-    const void* base()        const noexcept { return base_; }
-    std::size_t size()        const noexcept { return size_; }
+    bool        is_attached()  const noexcept { return base_ != nullptr; }
+    void*       base()         noexcept       { return base_; }
+    const void* base()         const noexcept { return base_; }
+    std::size_t size()         const noexcept { return size_; }
+
+    /// Actual size of the shm/file backing object at attach time (from fstat).
+    /// May be smaller than size() if the object was created with fewer bytes
+    /// than the requested mmap size. Returns 0 if fstat failed or not attached.
+    /// ADR 0019 PR2 hardening — additive accessor, does not break PR1 callers.
+    std::size_t backing_size() const noexcept { return backing_size_; }
 
     /// Typed pointer to the RingHeader at offset 0.
     /// Precondition: is_attached() && size() >= sizeof(RingHeader).
@@ -76,8 +82,9 @@ public:
     const RingHeader* header() const noexcept;
 
 private:
-    void*       base_ = nullptr;
-    std::size_t size_ = 0;
+    void*       base_         = nullptr;
+    std::size_t size_         = 0;
+    std::size_t backing_size_ = 0;  // fstat st_size at attach; 0 on failure
 };
 
 }  // namespace spe::audio_io::shm

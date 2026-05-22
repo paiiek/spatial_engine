@@ -69,6 +69,15 @@ public:
     static constexpr std::uint64_t kStaleRateLimitMs        = 30000;  // shm_producer_stale once / 30 s
     static constexpr std::uint64_t kPacingRateLimitMs       = 5000;   // shm_producer_pacing once / 5 s
 
+    // Geometry bounds (FIX-2). Enforced in both attach() and prepare() to
+    // prevent integer overflow in total_region_bytes() and pathological allocs.
+    //   kMaxChannels       — ADR §2.3 "1..64" per-ring channel count.
+    //   kMaxCapacityFrames — 2^20 = 1,048,576 frames ≈ 21.8 s @ 48 kHz;
+    //     caps the region at ≤ 64 * 2^20 * 4 = 2^28 bytes — generous but well
+    //     below the u64 overflow boundary for total_region_bytes().
+    static constexpr std::uint32_t kMaxChannels        = 64u;
+    static constexpr std::uint32_t kMaxCapacityFrames  = 1u << 20;  // 1,048,576
+
     // attach(): OS-level mmap ONLY. Returns nullptr on OS failure. Performs
     // NO header validation (that is start()'s job). The caller owns the
     // returned backend; the producer owns the shm lifecycle (we never unlink).

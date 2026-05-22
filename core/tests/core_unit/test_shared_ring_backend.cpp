@@ -190,7 +190,17 @@ static int test_header_magic_and_version_validated() {
         assert(be->start(&cb, 256) == BackendError::DeviceOpenFailed);
         assert(!be->isRunning());
     }
-    // Valid magic + version (other gates pass): start() == Ok, running.
+    // Bad header_size (FIX-6): start() rejects wrong header_size.
+    {
+        RingFixture fx(48000, 64, 2, 8192);
+        fx.header()->header_size = 0xDEAD;   // wrong
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, 256) == BackendError::DeviceOpenFailed);
+        assert(!be->isRunning());
+    }
+    // Valid magic + version + header_size (other gates pass): start() == Ok.
     {
         RingFixture fx(48000, 64, 2, 8192);
         auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
@@ -557,6 +567,260 @@ static int test_pacing_drift_emits_warning_rate_limited() {
     return 0;
 }
 
+// ── SEC-1: stale_read_idx_ahead_of_write_rejected ─────────────────────────
+// FIX-1: start() must reject header where read_idx > write_idx (consumer
+// ahead of producer — impossible on a healthy ring; signals stale/corrupt
+// region). Also verifies pump_block's signed-safe clamping: if write_idx
+// regresses mid-run, pump yields silence+xrun with no OOB copy.
+
+static int test_stale_read_idx_ahead_of_write_rejected() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCap = 8192;
+
+    // (a) start() gate: header read_idx=block, write_idx=0 → DeviceOpenFailed.
+    {
+        RingFixture fx(48000, kBlock, 2, kCap);
+        fx.header()->read_idx.store(kBlock, std::memory_order_relaxed);
+        fx.header()->write_idx.store(0, std::memory_order_relaxed);
+
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::DeviceOpenFailed);
+        assert(!be->isRunning());
+        assert(be->stagingCapacity() == 0);
+    }
+
+    // (b) pump_block clamping: start with a healthy ring (1 block available),
+    //     then simulate write_idx regressing below read_idx_local_ mid-run by
+    //     forcibly writing write_idx=0 after start. pump_block must yield
+    //     silence+xrun without advancing read_idx, and the staging buffer
+    //     pointer/capacity must be unchanged (no OOB / no realloc).
+    {
+        RingFixture fx(48000, kBlock, 2, kCap);
+        // Pre-fill 1 block so start() sees write_idx > read_idx = 0.
+        auto blk = ramp_blocks(2, kBlock, 5.0f);
+        fx.producer_write_block(blk, kBlock, /*pts=*/0);
+
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+        // Consume the one block normally.
+        be->pump_block(&cb, 0);
+        assert(be->xrunCount() == 0);
+        const unsigned long long xr_base = be->xrunCount();
+
+        // Simulate write_idx regression (stale/buggy producer).
+        fx.header()->write_idx.store(0, std::memory_order_release);
+
+        const float* data_before = be->stagingData();
+        const std::size_t cap_before = be->stagingCapacity();
+
+        be->pump_block(&cb, 1);  // must clamp, yield silence, xrun++
+        assert(be->xrunCount() == xr_base + 1);
+        // Staging pointer/capacity unchanged (no OOB realloc).
+        assert(be->stagingData()     == data_before);
+        assert(be->stagingCapacity() == cap_before);
+        // read_idx in header not advanced past the regressed write_idx.
+        // (The header still shows the value from the prior successful consume.)
+        for (std::uint32_t ch = 0; ch < 2; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == 0.0f);
+
+        be->stop();
+    }
+
+    std::printf("  PASS  stale_read_idx_ahead_of_write_rejected\n");
+    return 0;
+}
+
+// ── SEC-2: oversized_geometry_rejected ────────────────────────────────────
+// FIX-2: channels==0, channels>64, capacity>kMaxCapacityFrames must all be
+// rejected before any allocation, whether caught in attach() or start().
+
+static int test_oversized_geometry_rejected() {
+    constexpr int kEngineBlock = 256;
+
+    // channels = 65 (> kMaxChannels=64): attach() returns nullptr.
+    // We cannot use RingFixture directly (it would create a valid region with
+    // channels=65 which is fine for the OS but rejected by our bounds gate).
+    // Build the shm manually at a safe size (treat channels as 1 for sizing),
+    // then overwrite the header to claim channels=65.
+    {
+        const std::string name = unique_shm_name();
+        SharedMemoryRegion region;
+        // Create a region sized for (1 channel, 1024 frames) — small, safe.
+        const std::size_t bytes = total_region_bytes(1, 1024);
+        assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
+        RingHeader* h = region.header();
+        std::memset(h, 0, sizeof(RingHeader));
+        h->magic           = kSpeRingMagic;
+        h->version         = kRingHeaderVersion;
+        h->header_size     = kRingHeaderSize;
+        h->sample_rate     = 48000;
+        h->block_size      = 64;
+        h->channels        = 65;   // over limit
+        h->capacity_frames = 1024;
+        h->write_idx.store(0, std::memory_order_relaxed);
+        h->read_idx.store(0, std::memory_order_relaxed);
+        region.detach();
+
+        auto be = SharedRingBackend::attach(name, AttachMode::OpenExisting);
+        assert(be == nullptr);  // rejected by attach() geometry bounds
+
+        ::shm_unlink(name.c_str());
+    }
+
+    // capacity_frames = 2^31 (pow2 but over kMaxCapacityFrames=2^20):
+    // attach() must return nullptr (prevent pathological mmap request).
+    {
+        const std::string name = unique_shm_name();
+        SharedMemoryRegion region;
+        const std::size_t bytes = total_region_bytes(1, 1024);
+        assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
+        RingHeader* h = region.header();
+        std::memset(h, 0, sizeof(RingHeader));
+        h->magic           = kSpeRingMagic;
+        h->version         = kRingHeaderVersion;
+        h->header_size     = kRingHeaderSize;
+        h->sample_rate     = 48000;
+        h->block_size      = 64;
+        h->channels        = 1;
+        h->capacity_frames = 1u << 31;  // pow2 but huge
+        h->write_idx.store(0, std::memory_order_relaxed);
+        h->read_idx.store(0, std::memory_order_relaxed);
+        region.detach();
+
+        auto be = SharedRingBackend::attach(name, AttachMode::OpenExisting);
+        assert(be == nullptr);  // rejected by attach() before mmap overflow
+
+        ::shm_unlink(name.c_str());
+    }
+
+    // channels = 0: attach() returns nullptr.
+    {
+        const std::string name = unique_shm_name();
+        SharedMemoryRegion region;
+        // total_region_bytes(0, 1024) = kRingHeaderSize + 0 = 4096
+        const std::size_t bytes = total_region_bytes(0, 1024);
+        assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
+        RingHeader* h = region.header();
+        std::memset(h, 0, sizeof(RingHeader));
+        h->magic           = kSpeRingMagic;
+        h->version         = kRingHeaderVersion;
+        h->header_size     = kRingHeaderSize;
+        h->sample_rate     = 48000;
+        h->block_size      = 64;
+        h->channels        = 0;   // zero
+        h->capacity_frames = 1024;
+        h->write_idx.store(0, std::memory_order_relaxed);
+        h->read_idx.store(0, std::memory_order_relaxed);
+        region.detach();
+
+        auto be = SharedRingBackend::attach(name, AttachMode::OpenExisting);
+        assert(be == nullptr);
+
+        ::shm_unlink(name.c_str());
+    }
+
+    // Valid channels=2 + valid capacity=8192: attach returns non-null,
+    // start() Ok, stagingCapacity() > 0.
+    {
+        RingFixture fx(48000, 64, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+        assert(be->stagingCapacity() > 0);
+        be->stop();
+    }
+
+    std::printf("  PASS  oversized_geometry_rejected\n");
+    return 0;
+}
+
+// ── SEC-3: region_smaller_than_header_claims_rejected ─────────────────────
+// FIX-3: a region created for (channels=2, capacity=8192) that has its
+// header overwritten to claim capacity=16384 must be rejected by attach() so
+// the audio thread never addresses beyond the backing store (SIGBUS).
+
+static int test_region_smaller_than_header_claims_rejected() {
+    // Create a region sized for (2 channels, 8192 frames).
+    const std::string name = unique_shm_name();
+    {
+        SharedMemoryRegion region;
+        const std::size_t bytes = total_region_bytes(2, 8192);
+        assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
+        RingHeader* h = region.header();
+        std::memset(h, 0, sizeof(RingHeader));
+        h->magic           = kSpeRingMagic;
+        h->version         = kRingHeaderVersion;
+        h->header_size     = kRingHeaderSize;
+        h->sample_rate     = 48000;
+        h->block_size      = 64;
+        h->channels        = 2;
+        h->capacity_frames = 16384;  // LIES — actual backing is only 8192 frames
+        h->write_idx.store(0, std::memory_order_relaxed);
+        h->read_idx.store(0, std::memory_order_relaxed);
+        region.detach();
+    }
+    // attach() reads channels=2, capacity=16384 from probe header, computes
+    // full_bytes = total_region_bytes(2,16384), tries to mmap that much, then
+    // re-reads the header and detects claimed capacity > probed capacity (since
+    // the region was created smaller and the probe saw channels/cap from header
+    // but the actual object is smaller). The second-pass check catches the lie.
+    auto be = SharedRingBackend::attach(name, AttachMode::OpenExisting);
+    assert(be == nullptr);  // must be rejected — backing too small
+
+    ::shm_unlink(name.c_str());
+    std::printf("  PASS  region_smaller_than_header_claims_rejected\n");
+    return 0;
+}
+
+// ── SEC-5: zero_sample_rate_rejected ──────────────────────────────────────
+// FIX-5: sample_rate==0 in the header causes div-by-zero in poll_diagnostics.
+// start() must return SampleRateUnsupported.
+
+static int test_zero_sample_rate_rejected() {
+    constexpr int kEngineBlock = 256;
+
+    // sample_rate = 0 → SampleRateUnsupported.
+    {
+        RingFixture fx(/*sample_rate=*/0, 64, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::SampleRateUnsupported);
+        assert(!be->isRunning());
+        assert(be->stagingCapacity() == 0);
+    }
+    // sample_rate = 7999 (below 8000 floor) → SampleRateUnsupported.
+    {
+        RingFixture fx(7999, 64, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::SampleRateUnsupported);
+        assert(!be->isRunning());
+    }
+    // sample_rate = 48000 (valid) → Ok.
+    {
+        RingFixture fx(48000, 64, 2, 8192);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+        assert(be->isRunning());
+        be->stop();
+    }
+
+    std::printf("  PASS  zero_sample_rate_rejected\n");
+    return 0;
+}
+
 // ── Case 8: audio_thread_no_alloc_no_syscall ──────────────────────────────
 //
 // Pre-fill the ring with >= K blocks (K=256) and drive the RT body K times
@@ -687,6 +951,10 @@ int main() {
     rc |= test_producer_pid_dead_emits_stale_warning_once();
     rc |= test_pacing_drift_emits_warning_rate_limited();
     rc |= test_audio_thread_structural_invariants();
+    rc |= test_stale_read_idx_ahead_of_write_rejected();
+    rc |= test_oversized_geometry_rejected();
+    rc |= test_region_smaller_than_header_claims_rejected();
+    rc |= test_zero_sample_rate_rejected();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }

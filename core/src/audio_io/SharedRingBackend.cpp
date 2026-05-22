@@ -49,11 +49,34 @@ std::unique_ptr<SharedRingBackend> SharedRingBackend::attach(const std::string& 
     const std::uint32_t capacity  = h->capacity_frames;
     probe.detach();
 
+    // FIX-2: enforce geometry bounds before computing total_region_bytes so we
+    // never pass an overflow-inducing channels/capacity to mmap. A buggy or
+    // stale producer that wrote huge values is rejected here with nullptr.
+    if (channels == 0u || channels > kMaxChannels) {
+        return nullptr;
+    }
+    if (capacity == 0u || capacity > kMaxCapacityFrames) {
+        return nullptr;
+    }
+
     const std::size_t full_bytes = shm::total_region_bytes(channels, capacity);
+
     if (backend->region_.attach(path.c_str(), shm::AttachMode::OpenExisting, full_bytes)
             != shm::RegionError::Ok) {
         return nullptr;
     }
+
+    // FIX-3: verify the actual shm backing object is at least as large as the
+    // geometry claims. mmap() on Linux succeeds even when the requested size
+    // exceeds the object size — accesses beyond the backing store then SIGBUS
+    // on the audio thread. backing_size() returns the fstat st_size captured
+    // at attach time. (Additive PR1 accessor — see SharedMemoryRegion.h.)
+    const std::size_t backing = backend->region_.backing_size();
+    if (backing > 0 && backing < full_bytes) {
+        backend->region_.detach();
+        return nullptr;
+    }
+
     return backend;
 }
 
@@ -77,13 +100,27 @@ BackendError SharedRingBackend::prepare(AudioCallback* callback, int engine_bloc
 
     const RingHeader* h = region_.header();
 
-    // Gate 1: magic + version.
-    if (h->magic != kSpeRingMagic || h->version != kRingHeaderVersion) {
+    // Gate 1: magic + version + header_size (FIX-6: fold header_size into the
+    // identity check — a wrong header_size signals a different wire format).
+    if (h->magic != kSpeRingMagic
+        || h->version != kRingHeaderVersion
+        || h->header_size != shm::kRingHeaderSize) {
         return BackendError::DeviceOpenFailed;
     }
 
     const std::uint32_t hdr_block = h->block_size;
     const std::uint32_t hdr_cap   = h->capacity_frames;
+    const std::uint32_t hdr_ch    = h->channels;
+
+    // Gate 1b: geometry bounds (FIX-2). Checked before any arithmetic that
+    // uses channels/capacity so total_region_bytes() cannot overflow and
+    // staging alloc cannot request hundreds of GiB.
+    if (hdr_ch == 0u || hdr_ch > kMaxChannels) {
+        return BackendError::DeviceOpenFailed;
+    }
+    if (hdr_cap == 0u || hdr_cap > kMaxCapacityFrames) {
+        return BackendError::DeviceOpenFailed;
+    }
 
     // Gate 2: block_size > MAX_BLOCK strictly (the ONLY gate returning this code).
     if (hdr_block > static_cast<std::uint32_t>(spe::MAX_BLOCK)) {
@@ -106,16 +143,32 @@ BackendError SharedRingBackend::prepare(AudioCallback* callback, int engine_bloc
         return BackendError::DeviceOpenFailed;
     }
 
+    // Gate 5: sample_rate must be in a sane range (prevents div-by-zero in
+    // poll_diagnostics and any downstream period computation).
+    const std::uint32_t hdr_sr = h->sample_rate;
+    if (hdr_sr < 8000u || hdr_sr > 768000u) {
+        return BackendError::SampleRateUnsupported;
+    }
+
+    // Gate 6: consumer can never be ahead of the producer; a stale/corrupted
+    // region with read_idx > write_idx would cause uint64 underflow in
+    // pump_block's availability computation → unbounded OOB copy on the audio
+    // thread. Reject it here (control thread, before any worker starts).
+    const std::uint64_t hdr_wi = h->write_idx.load(std::memory_order_acquire);
+    const std::uint64_t hdr_ri = h->read_idx.load(std::memory_order_acquire);
+    if (hdr_ri > hdr_wi) {
+        return BackendError::DeviceOpenFailed;
+    }
+
     // All gates passed — commit geometry + allocate.
-    sample_rate_      = static_cast<double>(h->sample_rate);
+    sample_rate_      = static_cast<double>(hdr_sr);
     in_channels_      = static_cast<int>(h->channels);
     block_size_       = static_cast<int>(hdr_block);
     engine_block_     = engine_block_size;
     masking_capacity_ = hdr_cap;
 
-    // Resync the consumer cursor to the producer's read_idx (PR3 will revisit
-    // the resync-on-attach policy as case 9; PR2 mirrors the header read_idx).
-    read_idx_local_ = h->read_idx.load(std::memory_order_relaxed);
+    // Seed the consumer cursor from the validated read_idx.
+    read_idx_local_ = hdr_ri;
 
     allocate_staging();
     callback_ = callback;
@@ -193,8 +246,13 @@ void SharedRingBackend::pump_block(AudioCallback* callback, std::uint64_t hw_ts_
     //     read may be hoisted above this.
     const std::uint64_t write_idx = h->write_idx.load(std::memory_order_acquire);
 
-    // (2) available = write_idx - read_idx_local (read_idx is consumer-owned).
-    const std::uint64_t available = write_idx - read_idx_local_;
+    // (2) Signed-safe availability: if write_idx ever regresses below
+    //     read_idx_local_ (stale/corrupted region mid-run), clamp to 0 so we
+    //     take the silence branch rather than computing a ~1.8e19 "available"
+    //     that would drive an unbounded OOB memcpy on the audio thread.
+    const std::uint64_t available = (write_idx >= read_idx_local_)
+                                    ? (write_idx - read_idx_local_)
+                                    : 0u;
 
     const char* base = static_cast<const char*>(region_.base());
 
@@ -218,18 +276,19 @@ void SharedRingBackend::pump_block(AudioCallback* callback, std::uint64_t hw_ts_
             }
         }
         read_idx_local_ += block;
+        // (4a) Publish the consumed range with a release store — only after the
+        //      copy completes, and ONLY on the consume branch. Skipping this on
+        //      underrun avoids a spurious cross-process cache-line write each
+        //      silent block (NIT-b).
+        region_.header()->read_idx.store(read_idx_local_, std::memory_order_release);
     } else {
         // Underrun: silence + backend-private xrun record. DO NOT advance
-        // read_idx past write_idx.
+        // read_idx past write_idx; do NOT write the header (NIT-b).
         std::memset(staging_flat_.data(), 0,
                     staging_flat_.size() * sizeof(float));
         xruns_.record_underrun();
         ++underrun_warnings_;  // maps to shm_underrun (PR4)
     }
-
-    // (4) Publish the consumed range with a release store — only after the
-    //     copy completed.
-    region_.header()->read_idx.store(read_idx_local_, std::memory_order_release);
 
     // (5) Build the AudioBlock (input-only) and call the engine.
     AudioBlock blk;
@@ -266,6 +325,10 @@ BackendError SharedRingBackend::pump_synchronous(AudioCallback* callback, int bl
 // read_idx, touches staging, or writes a header atomic.
 
 void SharedRingBackend::poll_diagnostics(std::uint64_t now_ms, std::uint64_t now_ns) noexcept {
+    // now_ns is intentionally unused in PR2. PR4 will pass it through to the
+    // /sys/warning OSC timestamp field when wiring the real emission on top of
+    // these counter edges — keeping the param now preserves the PR4 call-site
+    // interface without an API break. (NIT-a)
     (void)now_ns;
     const RingHeader* h = region_.header();
 

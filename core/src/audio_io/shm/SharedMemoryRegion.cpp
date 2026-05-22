@@ -49,19 +49,22 @@ SharedMemoryRegion::~SharedMemoryRegion() {
 }
 
 SharedMemoryRegion::SharedMemoryRegion(SharedMemoryRegion&& other) noexcept
-    : base_(other.base_), size_(other.size_)
+    : base_(other.base_), size_(other.size_), backing_size_(other.backing_size_)
 {
-    other.base_ = nullptr;
-    other.size_ = 0;
+    other.base_         = nullptr;
+    other.size_         = 0;
+    other.backing_size_ = 0;
 }
 
 SharedMemoryRegion& SharedMemoryRegion::operator=(SharedMemoryRegion&& other) noexcept {
     if (this != &other) {
         detach();
-        base_ = other.base_;
-        size_ = other.size_;
-        other.base_ = nullptr;
-        other.size_ = 0;
+        base_         = other.base_;
+        size_         = other.size_;
+        backing_size_ = other.backing_size_;
+        other.base_         = nullptr;
+        other.size_         = 0;
+        other.backing_size_ = 0;
     }
     return *this;
 }
@@ -116,6 +119,16 @@ RegionError SharedMemoryRegion::attach(const char* name,
         }
     }
 
+    // Capture backing size before mmap so FIX-3 (PR2 hardening) can compare
+    // the actual object size against the geometry the header claims.
+    std::size_t backing = 0;
+    {
+        struct stat st{};
+        if (::fstat(fd, &st) == 0 && st.st_size > 0) {
+            backing = static_cast<std::size_t>(st.st_size);
+        }
+    }
+
     void* ptr = ::mmap(nullptr,
                        size_bytes,
                        PROT_READ | PROT_WRITE,
@@ -127,8 +140,9 @@ RegionError SharedMemoryRegion::attach(const char* name,
 
     if (ptr == MAP_FAILED) return RegionError::MmapFailed;
 
-    base_ = ptr;
-    size_ = size_bytes;
+    base_         = ptr;
+    size_         = size_bytes;
+    backing_size_ = backing;
     return RegionError::Ok;
 }
 
@@ -140,8 +154,9 @@ RegionError SharedMemoryRegion::attach(const char* name,
 void SharedMemoryRegion::detach() noexcept {
     if (base_ != nullptr) {
         ::munmap(base_, size_);
-        base_ = nullptr;
-        size_ = 0;
+        base_         = nullptr;
+        size_         = 0;
+        backing_size_ = 0;
     }
 }
 
