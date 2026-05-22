@@ -417,6 +417,59 @@ static int test_producer_drain_state_plays_remaining_then_silence() {
     return 0;
 }
 
+// ── Case 5: producer_pid_dead_emits_stale_warning_once ────────────────────
+
+static int test_producer_pid_dead_emits_stale_warning_once() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    RingFixture fx(48000, kBlock, 2, 8192);
+    // Write a block so write_idx != 0 (isolate from the attachedNoData latch).
+    auto blk = ramp_blocks(2, kBlock, 1.0f);
+    fx.producer_write_block(blk, kBlock, /*pts=*/0);
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+    const std::uint64_t now_ms = 1000000;
+    const unsigned long long xr0 = be->xrunCount();
+    const std::uint64_t ri0 = fx.header()->read_idx.load(std::memory_order_acquire);
+
+    auto set_hb = [&](std::uint64_t v) {
+        fx.header()->producer_heartbeat_ms.store(v, std::memory_order_release);
+    };
+
+    // Boundary low: age exactly 100 ms (NOT > 100) → no warning.
+    set_hb(now_ms - 100);
+    be->poll_diagnostics(now_ms, /*now_ns=*/0);
+    assert(be->staleWarningCount() == 0);
+
+    // Boundary high: age 101 ms → warning fires once.
+    set_hb(now_ms - 101);
+    be->poll_diagnostics(now_ms, 0);
+    assert(be->staleWarningCount() == 1);
+
+    // Rate-limit (once / 30 s): call again at now_ms+10, still stale, within
+    // the 30 000 ms window → suppressed.
+    set_hb((now_ms + 10) - 101);
+    be->poll_diagnostics(now_ms + 10, 0);
+    assert(be->staleWarningCount() == 1);
+
+    // Re-arm: call at now_ms + 30001, still stale → fires again.
+    set_hb((now_ms + 30001) - 101);
+    be->poll_diagnostics(now_ms + 30001, 0);
+    assert(be->staleWarningCount() == 2);
+
+    // No audio-thread mutation by any poll_diagnostics call.
+    assert(be->xrunCount() == xr0);
+    assert(fx.header()->read_idx.load(std::memory_order_acquire) == ri0);
+
+    be->stop();
+    std::printf("  PASS  producer_pid_dead_emits_stale_warning_once\n");
+    return 0;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 
 #if defined(SRB_RT_SENTINEL)
@@ -439,6 +492,7 @@ int main() {
     rc |= test_ring_capacity_non_pow2_rejected();
     rc |= test_underrun_fills_silence_and_increments_xrun();
     rc |= test_producer_drain_state_plays_remaining_then_silence();
+    rc |= test_producer_pid_dead_emits_stale_warning_once();
     if (rc == 0) std::printf("All shared_ring_backend tests PASSED.\n");
     return rc;
 }
