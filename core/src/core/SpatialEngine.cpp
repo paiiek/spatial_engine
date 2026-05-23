@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace spe::core {
@@ -236,6 +237,23 @@ SpatialEngine::SpatialEngine(int listen_port)
                 }
                 return;
             case ipc::CommandTag::HbPing:
+                // ADR 0018 D-5 — tick the external-player liveness timestamp
+                // when this ping came from the player (carries `,d`). The
+                // engine's own 10 Hz publisher (`,h`) is excluded so its
+                // internal loopback never masks a dead player. Clearing the
+                // latch here means a resumed player re-arms the stale warning.
+                if (auto* p = std::get_if<ipc::PayloadHbPing>(&cmd.payload)) {
+                    if (p->from_external) {
+                        using clock = std::chrono::system_clock;
+                        const int64_t now_unix_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                clock::now().time_since_epoch()).count();
+                        last_player_ping_unix_ms_.store(
+                            now_unix_ms, std::memory_order_relaxed);
+                        player_stale_latched_.store(
+                            false, std::memory_order_relaxed);
+                    }
+                }
                 // M5.1 — refresh TTL for any echo subscriber from this peer.
                 if (osc_backend_.echoPlane().hasSubscribers()) {
                     const auto& ep = osc_backend_.lastPeerEndpoint();
@@ -1019,6 +1037,43 @@ void SpatialEngine::injectProbeThroughputAndEmit(float throughput_rt)
         osc_backend_.sendReply("/sys/binaural_warning", ",sf",
                                code, binaural_.probeThroughput());
     }
+}
+
+// ADR 0018 D-5 — external-player heartbeat staleness check. Control/IO thread
+// only (never the audio thread): no allocation beyond the small stack buffer,
+// and the sendReply enqueue is the same lock-free path used by every other
+// /sys/ telemetry emission. Emits /sys/warning ,iis 0 0 "player_heartbeat_stale"
+// "<seconds>" at most once per kPlayerStaleWarnIntervalMs window when the last
+// external ping is older than kPlayerHeartbeatStaleMs.
+bool SpatialEngine::checkPlayerHeartbeatStale(int64_t now_unix_ms) noexcept
+{
+    const int64_t last = last_player_ping_unix_ms_.load(std::memory_order_relaxed);
+    if (last == 0) {
+        return false;  // no external ping ever seen → nothing to watch
+    }
+
+    const int64_t age_ms = now_unix_ms - last;
+    if (age_ms < kPlayerHeartbeatStaleMs) {
+        return false;  // fresh enough
+    }
+
+    // Rate-limit: at most once per 30 s window. The latch is cleared on the
+    // next external ping (control-thread HbPing path), which re-arms a future
+    // warning after a resume-then-stale cycle.
+    if (player_stale_latched_.load(std::memory_order_relaxed) &&
+        (now_unix_ms - last_stale_warning_unix_ms_) < kPlayerStaleWarnIntervalMs) {
+        return false;
+    }
+
+    last_stale_warning_unix_ms_ = now_unix_ms;
+    player_stale_latched_.store(true, std::memory_order_relaxed);
+
+    char seconds_str[24];
+    std::snprintf(seconds_str, sizeof(seconds_str), "%lld",
+                  static_cast<long long>(age_ms / 1000));
+    osc_backend_.sendReply("/sys/warning", ",iis", 0, 0,
+                           "player_heartbeat_stale", seconds_str);
+    return true;
 }
 
 }  // namespace spe::core
