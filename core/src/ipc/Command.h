@@ -141,6 +141,12 @@ struct PayloadSysAmbiDecoderType {
 
 struct PayloadHbPing {
     uint64_t timestamp_ms = 0; // wall-clock ms at publisher side
+    // ADR 0018 D-5 — distinguishes the producer. The engine-internal
+    // HeartbeatPublisher tags pings with `,h` (int64 ms) / `,t` (timetag);
+    // the external adm_player (M3) tags them with `,d` (unix seconds). The
+    // decoder sets from_external=true on the `,d` path so the control thread
+    // can tick last_player_ping_unix_ms_ only for player-originated pings.
+    bool from_external = false;
 };
 
 struct PayloadHbPong {
@@ -190,7 +196,14 @@ struct PayloadNoiseGain {
     float    gain_db = -60.f; // -60 dB ≡ effectively muted
 };
 
-struct PayloadTransportPlay {};
+// ADR 0018 D-2 — /transport/play optionally carries a `,d unix_time_seconds`
+// timetag from adm_player M3. The engine stays EDGE-TRIGGERED: the gate flips
+// immediately on decode; this field is advisory only (logged), never used to
+// schedule a delayed start in this milestone. 0 = unset → immediate (legacy
+// behaviour). The field is future-proofing for an M4 sample-clock scheduler.
+struct PayloadTransportPlay {
+    double start_unix_seconds = 0.0;
+};
 struct PayloadTransportStop {};
 
 struct PayloadReverbSelect {

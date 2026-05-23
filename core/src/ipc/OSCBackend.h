@@ -128,6 +128,14 @@ public:
     bool sendReply(const char* addr, const char* types,
                    int32_t i1, int32_t i2, float f1) noexcept;
 
+    // ADR 0018 D-5 — mixed-type ,iis packet (schema/type ints + 2 strings).
+    // Used for /sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>".
+    // Parallel impl matching the ,iif precedent (same rationale: a distinct
+    // wire shape from the ,s/,sf/,i sendReplyImpl forms).
+    bool sendReply(const char* addr, const char* types,
+                   int32_t i1, int32_t i2,
+                   const char* s1, const char* s2) noexcept;
+
     // Test-only accessor — returns true iff a peer endpoint has been captured
     // (either via recvfrom() or injectPacket(packet, peer, len)).
     bool hasPeerEndpoint() const noexcept {
@@ -320,6 +328,15 @@ private:
                                          float f1) noexcept;
     bool sendReplyImplIIF(const char* addr, const char* types,
                           int32_t i1, int32_t i2, float f1) noexcept;
+
+    // ADR 0018 D-5 — dedicated ,iis encoder + impl. Mirrors the ,iif pattern.
+    static std::size_t encodeOscReplyIIS(uint8_t* dst, std::size_t cap,
+                                         const char* addr, const char* types,
+                                         int32_t i1, int32_t i2,
+                                         const char* s1, const char* s2) noexcept;
+    bool sendReplyImplIIS(const char* addr, const char* types,
+                          int32_t i1, int32_t i2,
+                          const char* s1, const char* s2) noexcept;
 
     // IO-thread drain loop: blocks for a tiny interval, drains outbound_ring_
     // via sendto(). Runs while running_ is true.

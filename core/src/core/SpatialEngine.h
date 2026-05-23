@@ -203,6 +203,45 @@ public:
     void setTransportPlay(bool play) noexcept { transport_play_.store(play); }
     bool isTransportPlaying() const noexcept  { return transport_play_.load(); }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // ADR 0018 D-5 — external-player heartbeat liveness.
+    //
+    // The engine does NOT run HeartbeatMonitor on inbound /hb/ping from the
+    // player (the engine is the audio source-of-truth; the player's death
+    // just means OSC stops and the engine keeps rendering). Instead we keep a
+    // single low-priority "last seen" wall-clock timestamp, ticked from the
+    // control-thread drain when a /hb/ping arrives from the EXTERNAL player
+    // (carries `,d`; PayloadHbPing::from_external == true). The engine's own
+    // 10 Hz publisher (`,h`) does NOT tick this.
+    //
+    // checkPlayerHeartbeatStale() runs on the control / IO thread (NEVER the
+    // audio thread): when the last external ping is older than 5 s it emits
+    // /sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>" at most once
+    // per 30 s, piggybacking on the existing outbound warning channel (ADR
+    // 0017 telemetry rules). The latch clears on the next external ping.
+    // ─────────────────────────────────────────────────────────────────────
+    static constexpr int64_t kPlayerHeartbeatStaleMs    = 5000;   // 5× the 1 Hz period
+    static constexpr int64_t kPlayerStaleWarnIntervalMs = 30000;  // ≤ once per 30 s
+
+    int64_t lastPlayerPingUnixMs() const noexcept {
+        return last_player_ping_unix_ms_.load(std::memory_order_relaxed);
+    }
+
+    // Control/IO-thread tick: evaluate staleness against `now_unix_ms` and emit
+    // the warning at most once per 30 s window. now_unix_ms is supplied by the
+    // caller so tests can drive a deterministic mocked clock. Returns true iff
+    // a warning was emitted on this call. No-op when no external ping has been
+    // seen yet (last_player_ping_unix_ms_ == 0).
+    bool checkPlayerHeartbeatStale(int64_t now_unix_ms) noexcept;
+
+    // Test-only: deterministically record an external player ping at a given
+    // wall-clock and clear the staleness latch (mirrors the control-thread
+    // HbPing-from-external path without needing a UDP round-trip).
+    void recordPlayerPingForTest(int64_t unix_ms) noexcept {
+        last_player_ping_unix_ms_.store(unix_ms, std::memory_order_relaxed);
+        player_stale_latched_.store(false, std::memory_order_relaxed);
+    }
+
     // VST3 layer host→core control plane (Phase C C2 §15.A).
     // Forwards in-process commands to the OSC backend's sink, bypassing
     // OSC encode/decode. Lock-free (cmd_fifo_ enqueue inside sink_).
@@ -376,6 +415,16 @@ private:
     std::atomic<bool>          render_ready_{false};
     std::atomic<bool>          transport_play_{true};
     std::atomic<bool>          ltc_chase_enable_{false};
+
+    // ADR 0018 D-5 — external-player heartbeat liveness state. All accessed
+    // from the control / IO thread only (plus a relaxed read for /sys/state).
+    // last_player_ping_unix_ms_: 0 = no external ping seen yet.
+    // last_stale_warning_unix_ms_: window-start of the most recent emission.
+    // player_stale_latched_: true while inside a stale window (cleared on the
+    //   next external ping so a resume re-arms the warning).
+    std::atomic<int64_t>       last_player_ping_unix_ms_{0};
+    int64_t                    last_stale_warning_unix_ms_{0};
+    std::atomic<bool>          player_stale_latched_{false};
     // v0.4 — control-thread storage for runtime path injection. Audio path
     // does NOT read these directly; consumed by prepareToPlay() / VST3
     // setupProcessing() at block boundaries.

@@ -592,6 +592,85 @@ bool OSCBackend::sendReply(const char* addr, const char* types,
     return sendReplyImplIIF(addr, types, i1, i2, f1);
 }
 
+// ADR 0018 D-5 — dedicated ,iis encoder + impl (parallel to ,iif). Used for
+// /sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>".
+std::size_t OSCBackend::encodeOscReplyIIS(uint8_t* dst, std::size_t cap,
+                                           const char* addr, const char* types,
+                                           int32_t i1, int32_t i2,
+                                           const char* s1, const char* s2) noexcept
+{
+    if (!dst || !addr || !types || !s1 || !s2) return 0;
+    std::size_t off = 0;
+
+    std::size_t n = writeOscString(dst + off, cap - off, addr);
+    if (n == 0) return 0;
+    off += n;
+
+    if (types[0] != ',') return 0;
+    n = writeOscString(dst + off, cap - off, types);
+    if (n == 0) return 0;
+    off += n;
+
+    // Arguments in wire order per OSC 1.0 type tag: i1, i2, s1, s2.
+    n = writeBeI32(dst + off, cap - off, i1);
+    if (n == 0) return 0;
+    off += n;
+
+    n = writeBeI32(dst + off, cap - off, i2);
+    if (n == 0) return 0;
+    off += n;
+
+    n = writeOscString(dst + off, cap - off, s1);
+    if (n == 0) return 0;
+    off += n;
+
+    n = writeOscString(dst + off, cap - off, s2);
+    if (n == 0) return 0;
+    off += n;
+
+    return off;
+}
+
+bool OSCBackend::sendReplyImplIIS(const char* addr, const char* types,
+                                   int32_t i1, int32_t i2,
+                                   const char* s1, const char* s2) noexcept
+{
+    if (last_peer_len_.load(std::memory_order_acquire) == 0) {
+        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    const std::size_t idx =
+        claimSlotCAS(out_head_, out_tail_, kOutboundRingCap);
+    if (idx == static_cast<std::size_t>(-1)) {
+        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    auto& slot = outbound_ring_[idx];
+    const std::size_t n = encodeOscReplyIIS(slot.buf.data(), slot.buf.size(),
+                                             addr, types, i1, i2, s1, s2);
+    if (n == 0) {
+        slot.len      = 0;
+        slot.dest_len = 0;
+        slot.ready.store(true, std::memory_order_release);
+        outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        out_cv_.notify_one();
+        return false;
+    }
+    slot.len      = static_cast<uint16_t>(n);
+    slot.dest_len = last_peer_len_.load(std::memory_order_acquire);
+    std::memcpy(&slot.dest, &last_peer_endpoint_, slot.dest_len);
+    slot.ready.store(true, std::memory_order_release);
+    out_cv_.notify_one();
+    return true;
+}
+
+bool OSCBackend::sendReply(const char* addr, const char* types,
+                            int32_t i1, int32_t i2,
+                            const char* s1, const char* s2) noexcept
+{
+    return sendReplyImplIIS(addr, types, i1, i2, s1, s2);
+}
+
 // ---------------------------------------------------------------------------
 // Outbound drain loop — IO thread, runs alongside udp_thread_.
 // ---------------------------------------------------------------------------
