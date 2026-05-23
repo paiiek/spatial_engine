@@ -83,7 +83,9 @@ All multi-byte fields are little-endian. All atomic fields are `_Atomic uint64_t
 | 0x0044 | `producer_meta_block_pts_ns`   | atomic u64  | rw        | r/o       | Monotonic ns timestamp of the **first sample** in the most recently completed write. Lets the engine align with OSC `start_unix_seconds` (ADR 0018 D-2). |
 | 0x004C | `producer_state`               | atomic u32  | rw        | r/o       | 0=idle 1=streaming 2=draining 3=closed. Engine treats 2/3 as "play remaining frames, then silence." |
 | 0x0050 | `seq`                          | atomic u64  | rw        | r/o       | Incremented every successful block write. Used by tests + soak harness to verify no drops. |
-| 0x0058 | _reserved (zero-init)_         | bytes       | —         | —         | Padding to 0x1000. Future v2 fields land here. |
+| 0x0058 | _reserved (zero-init)_         | bytes       | rw (zero-init only) | rw (attach-lock at 0x0058) | Padding to 0x1000. Future v2 fields land here. **First 4 bytes = consumer-attach-lock (PR3).**[^consumer-lock] |
+
+[^consumer-lock]: **Consumer-attach-lock (PR3, ADR 0019 Decision 2).** The producer zero-inits the entire `_reserved` span (it already does), which leaves the lock word = 0 = "unlocked"; PR5's Python producer needs no change. The consumer CAS-locks the first 4 bytes (`kConsumerLockOffset = 0x0058`, an `atomic<u32>`) `0 → getpid()` in `start()` (SPSC single-consumer enforcement, with `kill(pid,0)`-ESRCH stale reclaim) and stores `→ 0` in `stop()`. This is the ONLY consumer header write beyond `read_idx`, is control-thread-only, and is never touched on the RT path. PR7 (Windows) would need `OpenProcess`-based liveness in place of `kill(pid,0)`.
 
 Indices are **64-bit monotonic** so we never reason about wrap-around at the wire level; modular arithmetic happens only at memory-access time (`idx & (capacity - 1)`).
 
@@ -292,5 +294,5 @@ Estimated total: ~600 LoC engine, ~200 LoC player, ~400 LoC tests, ~50 LoC CI YA
 
 - **Sub-block scheduling of OSC commands** — the alignment point is the engine audio block. We do NOT make OSC time-tags sample-accurate within a block. (D-2 in ADR 0018 already locked this.)
 - **Multi-producer mixing** — see §2.1.
-- **Encrypted/authenticated rings** — same-host, file-permission-controlled. Users who need cross-host want a network protocol, not shm.
+- **Encrypted/authenticated rings** — same-host, file-permission-controlled. Users who need cross-host want a network protocol, not shm. (PR3 note: the engine's `--input-backend shm:<path>` regular-file branch opens an operator-supplied path with `O_RDWR` and follows symlinks; this is explicitly inside the same-host operator trust boundary — the path comes from the operator's own argv, ring content is never disclosed, and write-back happens only after the header magic/geometry gates pass.)
 - **Engine-as-producer / player-as-consumer** — that's M5 (recorder pickup), ADR 0020.

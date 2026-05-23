@@ -25,6 +25,13 @@
 //                     the previous-pts cache, and the per-code last-warning
 //                     timestamps. NEVER advances read_idx, NEVER touches the
 //                     staging buffers, NEVER writes a header atomic.
+//   • Exception (PR3, ADR 0019): the consumer-attach-lock word at
+//                     kConsumerLockOffset is CAS'd 0→pid in start() (gate 7) and
+//                     stored→0 in stop(). This is the ONLY header write outside
+//                     read_idx, is CONTROL-THREAD-ONLY (start/stop), and is NEVER
+//                     touched on the RT path (pump_block/thread_loop). The
+//                     Decision-1 resync store-back to read_idx in prepare() is
+//                     likewise control-thread-only (before the worker spawns).
 //
 // ── attach()/start() contract (ADR 0019 §3.1, plan iter-2 C2) ────────────
 //   attach() does ONLY the OS-level mmap (SharedMemoryRegion::attach). It
@@ -55,9 +62,11 @@
 
 #if defined(__linux__) || defined(__APPLE__)
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace spe::audio_io {
@@ -109,9 +118,12 @@ public:
     // companion overload used in tests + PR3 wiring.
     BackendError start(AudioCallback* callback) override;
     BackendError start(AudioCallback* callback, int engine_block_size);
+    // PR3: 3-arg form carries the engine's output channel count so the backend
+    // can own the output staging the engine renders into (Decision 3(ii)).
+    BackendError start(AudioCallback* callback, int engine_block_size, int out_channels);
 
     BackendError stop() noexcept override;
-    bool         isRunning() const noexcept override { return running_; }
+    bool         isRunning() const noexcept override { return running_.load(); }
     unsigned long long xrunCount() const noexcept override { return xruns_.total(); }
 
     // ── Diagnostics accessors (control thread only) ────────────────────
@@ -146,9 +158,13 @@ public:
 
     // pump_synchronous() — deterministic test hook: drive `blocks` pump_block
     // calls with synthetic monotonic hw timestamps (mirrors
-    // NullBackend::pump_synchronous). No thread, no sleep.
+    // NullBackend::pump_synchronous). No thread, no sleep. Does NOT acquire the
+    // consumer lock (acquire_consumer_lock=false) so tests can double-attach via
+    // this hook without tripping the SPSC reject. out_channels sizes the output
+    // staging so the synchronous path can exercise output composition (M3).
     BackendError pump_synchronous(AudioCallback* callback, int blocks,
-                                  std::uint64_t hw_ts_base, int engine_block_size);
+                                  std::uint64_t hw_ts_base, int engine_block_size,
+                                  int out_channels);
 
     // ── Test accessors (mirror NullBackend's set_input_fixture / pump_*
     //    test-hook precedent) ─────────────────────────────────────────────
@@ -159,18 +175,34 @@ public:
     // realloc on the RT path would move .data() / change .capacity().
     const float*  stagingData()     const noexcept { return staging_flat_.data(); }
     std::size_t   stagingCapacity() const noexcept { return staging_flat_.capacity(); }
+    // Output staging pointer/capacity (PR3 Decision 3(ii)): the engine renders
+    // into this backend-owned scratch buffer. Same stability invariant as the
+    // input staging (case 8 iv extended): a realloc on the RT path would move
+    // .data() / change .capacity().
+    const float*  outStagingData()     const noexcept { return out_staging_flat_.data(); }
+    std::size_t   outStagingCapacity() const noexcept { return out_staging_flat_.capacity(); }
 
 private:
     SharedRingBackend() = default;
 
     // Common gate+allocate path shared by start() and pump_synchronous().
-    BackendError prepare(AudioCallback* callback, int engine_block_size);
+    // acquire_consumer_lock: start() passes true (SPSC gate 7); pump_synchronous
+    // passes false so the test hook never trips the single-consumer reject.
+    BackendError prepare(AudioCallback* callback, int engine_block_size,
+                         int out_channels, bool acquire_consumer_lock);
+    // Unified start: spawn_worker is true ONLY for the 3-arg production/CLI/AC-5
+    // path; the 1-arg/2-arg overloads (frozen PR2 manual-pump ctests) set
+    // running_ without a worker so direct pump_block() calls are not raced.
+    BackendError start(AudioCallback* callback, int engine_block_size,
+                       int out_channels, bool spawn_worker);
     void         allocate_staging();
+    void         thread_loop();
 
     shm::SharedMemoryRegion region_;
 
     double sample_rate_     = 0.0;
     int    in_channels_     = 0;
+    int    out_channels_    = 0;   // engine output channel count (PR3 Decision 3(ii))
     int    block_size_      = 0;   // == header.block_size
     int    engine_block_    = 0;
     std::uint32_t masking_capacity_ = 0;  // == header.capacity_frames (always)
@@ -182,8 +214,15 @@ private:
     std::vector<float>        staging_flat_;
     std::vector<const float*> staging_channels_;
 
-    AudioCallback*   callback_ = nullptr;
-    bool             running_  = false;
+    // Pre-allocated planar OUTPUT staging the engine renders into (PR3): empty
+    // when out_channels_ == 0 (the PR2 test path), so cases 3–8 are unaffected.
+    std::vector<float>        out_staging_flat_;
+    std::vector<float*>       out_staging_channels_;
+
+    AudioCallback*    callback_  = nullptr;
+    std::atomic<bool> running_{false};  // worker reads it; control thread writes it
+    std::thread       worker_;          // production cadence (PR3 Decision 3(i))
+    bool              holds_consumer_lock_ = false;  // true iff gate 7 acquired (PR3 Decision 2)
     util::XrunCounter xruns_;   // backend-private (NOT header xrun_count)
 
     // ── Control-thread diagnostic state ────────────────────────────────

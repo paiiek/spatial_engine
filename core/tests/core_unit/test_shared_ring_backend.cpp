@@ -20,10 +20,12 @@
 #include "util/RtAssertNoAlloc.h"
 
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -53,6 +55,18 @@ public:
         ++calls;
         last_frames = blk.num_frames;
         last_in_channels = blk.input_channel_count;
+        last_out_channels = blk.output_channel_count;          // PR3 (AC-6)
+        last_out_nonnull  = (blk.output_channels != nullptr);  // PR3 (AC-6)
+        // Per-block output-invariant accumulator (AC-6 "every block"): count
+        // blocks whose output side matched the expected channel count + non-null
+        // pointer. expect_out_channels<0 disables the check (PR2 input-only path).
+        if (expect_out_channels >= 0
+            && blk.output_channel_count == expect_out_channels
+            && (expect_out_channels == 0
+                ? (blk.output_channels == nullptr)
+                : (blk.output_channels != nullptr))) {
+            ++out_ok_calls;
+        }
         last_hw_ts = blk.hw_timestamp_ns;
         captured.assign(static_cast<std::size_t>(blk.input_channel_count),
                         std::vector<float>(static_cast<std::size_t>(blk.num_frames), 0.0f));
@@ -66,6 +80,10 @@ public:
     int calls = 0;
     int last_frames = 0;
     int last_in_channels = 0;
+    int last_out_channels = 0;       // PR3 (AC-6): output_channel_count seen
+    bool last_out_nonnull = false;   // PR3 (AC-6): output_channels != nullptr
+    int expect_out_channels = -1;    // PR3 (AC-6): set by AC-6; -1 = check disabled
+    int out_ok_calls = 0;            // PR3 (AC-6): blocks matching the expectation
     std::uint64_t last_hw_ts = 0;
     std::vector<std::vector<float>> captured;
 };
@@ -446,6 +464,295 @@ static int test_producer_drain_state_plays_remaining_then_silence() {
     std::printf("  PASS  producer_drain_state_plays_remaining_then_silence\n");
     return 0;
 }
+
+// ── Case 9: attach_to_pre_existing_ring_resyncs_read_idx (Decision 1) ──────
+// Three sub-cases pinning the STRICT static-overwrite predicate (backlog > C):
+//   AC-1  positive  : backlog 8448 > 8192 → resync to write_idx - block.
+//   AC-2  negative  : backlog 512 < 8192  → verbatim seed, b0 first.
+//   AC-2b boundary  : backlog 8192 == 8192 → verbatim seed (NO resync), b0 first.
+//
+// Cases 9/10 + helpers live inside #if !defined(SRB_RT_SENTINEL) so they are
+// NOT compiled in the RT-sentinel build (which references only the sentinel
+// main() / case-8(i)) — avoids any -Werror=unused-function break (AC-8).
+
+#if !defined(SRB_RT_SENTINEL)
+
+// Forward decl: prefill_ring is defined later (shared with case 8); the worker
+// AC-5 test below needs a prefilled ring for the worker thread to pump.
+static void prefill_ring(RingFixture& fx);
+
+static int test_attach_to_pre_existing_ring_resyncs_read_idx() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 256;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 8192;
+
+    // ── AC-1: positive resync (backlog > C strictly) ──────────────────────
+    {
+        RingFixture fx(48000, kBlock, kCh, kCap);
+        // read_idx = 0, write_idx = 8448 → backlog 8448 > 8192.
+        const std::uint64_t kWrite = static_cast<std::uint64_t>(kCap) + kBlock;  // 8448
+        fx.header()->read_idx.store(0, std::memory_order_relaxed);
+        fx.header()->write_idx.store(kWrite, std::memory_order_relaxed);
+        // Seed the resident block [write_idx - block, write_idx) so the first
+        // pump after resync reads real (non-silent) data, not an underrun.
+        auto resident = ramp_blocks(kCh, kBlock, /*seed=*/42.0f);
+        {
+            // Write the resident block at the wrap index for (write_idx - block).
+            RingHeader* h = fx.header();
+            const std::uint32_t idx =
+                static_cast<std::uint32_t>((kWrite - kBlock) & (kCap - 1));
+            for (std::uint32_t ch = 0; ch < kCh; ++ch) {
+                float* ch_base = reinterpret_cast<float*>(
+                    fx.base() + channel_byte_offset(ch, kCap));
+                for (std::uint32_t n = 0; n < kBlock; ++n)
+                    ch_base[(idx + n) & (kCap - 1)] = resident[ch][n];
+            }
+            (void)h;
+        }
+
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+        // Resync stored write_idx - block back to the header (PM4/PR5 handshake).
+        assert(fx.header()->read_idx.load(std::memory_order_acquire)
+               == kWrite - kBlock);  // 8448 - 256 == 8192
+
+        // First pump delivers the block at logical index write_idx - block
+        // (sample-exact), NOT index 0; no spurious underrun.
+        const unsigned long long xr_before = be->xrunCount();
+        be->pump_block(&cb, /*hw_ts=*/0);
+        assert(be->xrunCount() == xr_before);  // data was available
+        for (std::uint32_t ch = 0; ch < kCh; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == resident[ch][n]);
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == kWrite);
+        be->stop();
+    }
+
+    // ── AC-2: negative (sub-capacity backlog does NOT resync, PM1 guard) ──
+    {
+        RingFixture fx(48000, kBlock, kCh, kCap);
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+        // Producer writes exactly 2 blocks → write=512, read=0, backlog 512 < 8192.
+        auto b0 = ramp_blocks(kCh, kBlock, /*seed=*/1.0f);
+        auto b1 = ramp_blocks(kCh, kBlock, /*seed=*/2.0f);
+        fx.producer_write_block(b0, kBlock, /*pts=*/0);
+        fx.producer_write_block(b1, kBlock, /*pts=*/0);
+
+        // read_idx UNCHANGED at 0 (no resync); pump#1 = b0, pump#2 = b1.
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == 0);
+        be->pump_block(&cb, 0);
+        for (std::uint32_t ch = 0; ch < kCh; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == b0[ch][n]);
+        be->pump_block(&cb, 0);
+        for (std::uint32_t ch = 0; ch < kCh; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == b1[ch][n]);
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == 2 * kBlock);
+        be->stop();
+    }
+
+    // ── AC-2b: boundary (backlog == C does NOT resync, C1 trap guard) ─────
+    {
+        RingFixture fx(48000, kBlock, kCh, kCap);
+        // read_idx = 0, write_idx = 8192 → backlog == capacity exactly.
+        // hdr_ri (frame 0) is the oldest STILL-RESIDENT frame → verbatim seed.
+        fx.header()->read_idx.store(0, std::memory_order_relaxed);
+        fx.header()->write_idx.store(kCap, std::memory_order_relaxed);
+        // Seed block b0 at logical index 0 so pump#1 reads it sample-exact.
+        auto b0 = ramp_blocks(kCh, kBlock, /*seed=*/7.0f);
+        for (std::uint32_t ch = 0; ch < kCh; ++ch) {
+            float* ch_base = reinterpret_cast<float*>(
+                fx.base() + channel_byte_offset(ch, kCap));
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                ch_base[n] = b0[ch][n];
+        }
+
+        auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+        assert(be != nullptr);
+        CaptureCallback cb;
+        assert(be->start(&cb, kEngineBlock) == BackendError::Ok);
+
+        // read_idx UNCHANGED at 0 (STRICT '>' → == C does NOT fire).
+        assert(fx.header()->read_idx.load(std::memory_order_acquire) == 0);
+        be->pump_block(&cb, 0);
+        for (std::uint32_t ch = 0; ch < kCh; ++ch)
+            for (std::uint32_t n = 0; n < kBlock; ++n)
+                assert(cb.captured[ch][n] == b0[ch][n]);  // b0 first, not skipped
+        be->stop();
+    }
+
+    std::printf("  PASS  attach_to_pre_existing_ring_resyncs_read_idx (AC-1/AC-2/AC-2b)\n");
+    return 0;
+}
+
+// ── Case 10: multi_attach_rejected + stale-lock reclaim (Decision 2) ───────
+// AC-3 multi-attach reject (own ring): 2nd start() → ConsumerAlreadyAttached,
+//      release-on-stop observable (lock word → 0), 3rd start() re-acquires.
+// AC-4 stale-lock reclaim (own ring): a dead PID in the lock word → fresh
+//      start() reclaims (lock → getpid()), stop() releases (lock → 0).
+
+static int test_multi_attach_rejected() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 8192;
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+
+    auto be1 = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be1 != nullptr);
+    CaptureCallback cb1;
+    assert(be1->start(&cb1, kEngineBlock) == BackendError::Ok);  // acquires the lock
+
+    // Second consumer attaches (mmap-only succeeds) but start() is rejected.
+    auto be2 = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be2 != nullptr);
+    CaptureCallback cb2;
+    assert(be2->start(&cb2, kEngineBlock) == BackendError::ConsumerAlreadyAttached);
+    assert(!be2->isRunning());
+    assert(be2->stagingCapacity() == 0);  // rejected consumer allocated nothing
+
+    // be1 releases on stop → the lock word is observably 0.
+    assert(be1->stop() == BackendError::Ok);
+    assert(consumer_lock_atomic(fx.header())->load(std::memory_order_acquire) == 0);
+
+    // A fresh consumer re-acquires the now-free lock.
+    auto be3 = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be3 != nullptr);
+    CaptureCallback cb3;
+    assert(be3->start(&cb3, kEngineBlock) == BackendError::Ok);
+    be3->stop();
+
+    // Error-code spelling (step 0 describe() switch).
+    assert(std::strcmp(describe(BackendError::ConsumerAlreadyAttached),
+                       "consumer_already_attached") == 0);
+
+    std::printf("  PASS  multi_attach_rejected (AC-3)\n");
+    return 0;
+}
+
+static int test_stale_consumer_lock_reclaimed() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 8192;
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+
+    // Pre-write a definitely-dead PID into the lock word. kill(0x7FFFFFFF, 0)
+    // reports ESRCH on Linux (no such process), so the reclaim path fires.
+    consumer_lock_atomic(fx.header())->store(0x7FFFFFFF, std::memory_order_release);
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    assert(be->start(&cb, kEngineBlock) == BackendError::Ok);  // reclaimed
+    // Lock now holds our pid.
+    assert(consumer_lock_atomic(fx.header())->load(std::memory_order_acquire)
+           == static_cast<std::uint32_t>(::getpid()));
+
+    // stop() releases → lock returns to 0.
+    assert(be->stop() == BackendError::Ok);
+    assert(consumer_lock_atomic(fx.header())->load(std::memory_order_acquire) == 0);
+
+    std::printf("  PASS  stale_consumer_lock_reclaimed (AC-4)\n");
+    return 0;
+}
+
+// ── Worker thread start/stop/join (Decision 3(i), AC-5 / PM3 guard) ────────
+// The ONLY case that drives the real worker thread (3-arg start). A non-atomic
+// running_ lost-store would hang the join → ctest timeout = FAIL.
+
+static int test_worker_thread_start_stop_join() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 32768;
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+    prefill_ring(fx);  // give the worker real data to pump
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    // 3-arg start → spawns the real worker thread (out_channels=0).
+    assert(be->start(&cb, kEngineBlock, /*out_channels=*/0) == BackendError::Ok);
+    assert(be->isRunning());
+
+    // Spin-wait until the worker has pumped a few blocks (bounded timeout).
+    using clock = std::chrono::steady_clock;
+    const auto deadline = clock::now() + std::chrono::seconds(2);
+    while (cb.calls <= 4 && clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    assert(cb.calls > 4);
+
+    assert(be->stop() == BackendError::Ok);  // join completes (no hang)
+    assert(!be->isRunning());
+
+    std::printf("  PASS  worker_thread_start_stop_join (AC-5)\n");
+    return 0;
+}
+
+// ── Output staging populated & RT-stable (Decision 3(ii), AC-6) ────────────
+// Drives the SYNCHRONOUS hook (no worker, deterministic). Asserts every block
+// seen by the callback had output_channel_count==8 and output_channels!=nullptr,
+// the input invariants (read_idx advanced K*block, xrun unchanged), and both
+// input + output staging are present and correctly sized (one alloc, no growth;
+// the no-realloc-on-the-fill-path guarantee is also covered by the RT-sentinel
+// lane's rt_alloc_violations()==0).
+
+static int test_output_staging_populated_rt_stable() {
+    constexpr int kEngineBlock = 256;
+    constexpr std::uint32_t kBlock = 64;
+    constexpr std::uint32_t kCh = 2;
+    constexpr std::uint32_t kCap = 32768;
+    constexpr int kOut = 8;
+    constexpr int kK   = 256;
+
+    RingFixture fx(48000, kBlock, kCh, kCap);
+    prefill_ring(fx);
+
+    auto be = SharedRingBackend::attach(fx.name, AttachMode::OpenExisting);
+    assert(be != nullptr);
+    CaptureCallback cb;
+    cb.expect_out_channels = kOut;  // arm the per-block output-invariant accumulator
+
+    assert(be->pump_synchronous(&cb, kK, /*hw_ts_base=*/0, kEngineBlock,
+                                /*out_channels=*/kOut) == BackendError::Ok);
+
+    // Every block carried output_channel_count==8 && output_channels!=nullptr.
+    assert(cb.calls == kK);
+    assert(cb.out_ok_calls == kK);
+    assert(cb.last_out_channels == kOut);
+    assert(cb.last_out_nonnull);
+
+    // Input invariants: read_idx advanced exactly K*block; xrun unchanged.
+    assert(fx.header()->read_idx.load(std::memory_order_acquire)
+           == static_cast<std::uint64_t>(kK) * kBlock);
+    assert(be->xrunCount() == 0);
+
+    // Staging present + sized to hold at least the planar block for both input
+    // and output (one alloc in prepare; the RT lane's rt_alloc_violations()==0
+    // proves no per-block growth on the fill path).
+    assert(be->stagingData() != nullptr);
+    assert(be->stagingCapacity() >= static_cast<std::size_t>(kCh) * kBlock);
+    assert(be->outStagingData() != nullptr);
+    assert(be->outStagingCapacity() >= static_cast<std::size_t>(kOut) * kBlock);
+
+    std::printf("  PASS  output_staging_populated_rt_stable (AC-6)\n");
+    return 0;
+}
+
+#endif  // !defined(SRB_RT_SENTINEL) — cases 9 + 10 + worker + output
 
 // ── Case 5: producer_pid_dead_emits_stale_warning_once ────────────────────
 
@@ -911,7 +1218,8 @@ static int test_audio_thread_rt_sentinel() {
     spe::util::rt_alloc_violations_reset();
     // pump_synchronous arms SPE_RT_NO_ALLOC_SCOPE() inside pump_block; the
     // override TU records any heap alloc on the RT path.
-    assert(be->pump_synchronous(&cb, kRtBlocks, /*hw_ts_base=*/0, kEngineBlock)
+    assert(be->pump_synchronous(&cb, kRtBlocks, /*hw_ts_base=*/0, kEngineBlock,
+                                /*out_channels=*/0)
            == BackendError::Ok);
 
     // (i) zero allocations on the RT body.
@@ -948,6 +1256,11 @@ int main() {
     rc |= test_ring_capacity_non_pow2_rejected();
     rc |= test_underrun_fills_silence_and_increments_xrun();
     rc |= test_producer_drain_state_plays_remaining_then_silence();
+    rc |= test_attach_to_pre_existing_ring_resyncs_read_idx();
+    rc |= test_multi_attach_rejected();
+    rc |= test_stale_consumer_lock_reclaimed();
+    rc |= test_worker_thread_start_stop_join();
+    rc |= test_output_staging_populated_rt_stable();
     rc |= test_producer_pid_dead_emits_stale_warning_once();
     rc |= test_pacing_drift_emits_warning_rate_limited();
     rc |= test_audio_thread_structural_invariants();

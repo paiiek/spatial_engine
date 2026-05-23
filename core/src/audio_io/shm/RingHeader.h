@@ -69,6 +69,9 @@ static_assert(sizeof(std::atomic<uint32_t>) == 4,
 // | 0x004C | producer_state              | atomic<u32>   |
 // | 0x0050 | seq                         | atomic<u64>   |
 // | 0x0058 | _reserved (zero-init)       | bytes[0xFA8]  |
+//          ↑ first 4 bytes = consumer-attach-lock (PR3, kConsumerLockOffset):
+//            producer zero-inits the whole span (→ lock starts unlocked);
+//            consumer CAS-locks 0→pid in start(), stores→0 in stop().
 
 #pragma pack(push, 1)
 
@@ -114,6 +117,31 @@ static_assert(offsetof(RingHeader, _reserved)                  == 0x0058, "_rese
 
 static_assert(sizeof(RingHeader) == 4096, "RingHeader must be exactly 4096 bytes");
 static_assert(alignof(RingHeader) >= 8,   "RingHeader must have at least 8-byte alignment");
+
+// ── Consumer attach-lock (ADR 0019 PR3, Decision 2) ──────────────────────────
+//
+// SPSC single-consumer enforcement. Carved from _reserved at offset 0x0058; the
+// wire version stays 1 because the producer zero-inits the whole _reserved span
+// (ADR §2.3), so the lock reads 0 == "no consumer" on a fresh ring — PR5's
+// Python producer needs NO change. The consumer CAS's 0→pid in start() (gate 7)
+// and stores→0 in stop(); this is the ONLY consumer header write beyond
+// read_idx, is CONTROL-THREAD-ONLY, and is NEVER touched on the RT path.
+// 0x0058 is 8-byte aligned, so the atomic is well-aligned and lock-free
+// (std::atomic<uint32_t> lock-free asserted above).
+constexpr std::size_t kConsumerLockOffset = 0x0058;  // first reserved byte, 8-aligned
+
+static_assert(kConsumerLockOffset >= offsetof(RingHeader, _reserved),
+    "consumer lock must lie inside the _reserved span");
+static_assert(kConsumerLockOffset + sizeof(std::atomic<std::uint32_t>) <= sizeof(RingHeader),
+    "consumer lock must fit within the header");
+
+/// Typed view of the consumer-attach-lock word at kConsumerLockOffset.
+/// Unconditionally compiled (production, not test-only) so both the regular and
+/// the RT-sentinel test builds reach it.
+inline std::atomic<std::uint32_t>* consumer_lock_atomic(RingHeader* h) noexcept {
+    return reinterpret_cast<std::atomic<std::uint32_t>*>(
+        reinterpret_cast<char*>(h) + kConsumerLockOffset);
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

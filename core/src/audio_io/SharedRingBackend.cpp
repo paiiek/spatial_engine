@@ -11,7 +11,12 @@
 #include "util/RtAssertNoAlloc.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <cstring>
+
+#include <unistd.h>   // getpid
 
 namespace spe::audio_io {
 
@@ -98,8 +103,9 @@ std::string SharedRingBackend::description() const {
 
 // ── prepare(): all gates IN ORDER + all allocation ────────────────────────
 
-BackendError SharedRingBackend::prepare(AudioCallback* callback, int engine_block_size) {
-    if (running_)   return BackendError::AlreadyStarted;
+BackendError SharedRingBackend::prepare(AudioCallback* callback, int engine_block_size,
+                                        int out_channels, bool acquire_consumer_lock) {
+    if (running_.load())   return BackendError::AlreadyStarted;
     if (!callback)  return BackendError::DeviceOpenFailed;
     if (!region_.is_attached()) return BackendError::DeviceOpenFailed;
 
@@ -165,15 +171,81 @@ BackendError SharedRingBackend::prepare(AudioCallback* callback, int engine_bloc
         return BackendError::DeviceOpenFailed;
     }
 
+    // Decision 1 (case 9) — gap-gated resync, STRICT static-overwrite predicate.
+    // Compute the seed for read_idx_local_ here (no side effects yet); the
+    // store-back to header.read_idx is deferred until after Gate 7 succeeds so a
+    // rejected second consumer never mutates the producer-owned header.
+    //
+    //   backlog = hdr_wi - hdr_ri  (hdr_wi >= hdr_ri — Gate 6 passed, no underflow)
+    //   The resident window is [write_idx - capacity, write_idx). hdr_ri's frame
+    //   is physically overwritten IFF hdr_ri < write_idx - capacity, i.e.
+    //   backlog > capacity_frames STRICTLY. At backlog == capacity exactly, hdr_ri
+    //   is the OLDEST STILL-RESIDENT frame — valid data that must be played, NOT
+    //   resynced (the == C boundary stays on the verbatim seed). So the trigger
+    //   is strict '>': it precisely matches case 9 (backlog > C) without touching
+    //   cases 3/4 (backlog 0 / 128 « C) or the == C resident boundary.
+    const std::uint64_t backlog = hdr_wi - hdr_ri;
+    const std::uint32_t block   = static_cast<std::uint32_t>(hdr_block);
+    bool resynced = false;
+    if (backlog > hdr_cap) {
+        // Static-overwrite: the oldest unread frame is already overwritten.
+        // Resync to the newest block's start. Underflow clamp to 0 when
+        // write_idx < block (defensively dead — Gate 3 rejects block > capacity,
+        // so backlog > capacity implies write_idx >= block in practice).
+        read_idx_local_ = (hdr_wi >= block) ? (hdr_wi - block) : 0u;
+        resynced = true;
+    } else {
+        read_idx_local_ = hdr_ri;  // PR2 verbatim seed (cases 3/4 + the == C boundary)
+    }
+
+    // Gate 7 (Decision 2): consumer attach-lock — SPSC single-consumer
+    // enforcement. CAS 0→getpid() on the lock word at kConsumerLockOffset.
+    // Runs BEFORE the resync store-back, the geometry commit, and
+    // allocate_staging() so a rejected second consumer mutates nothing and
+    // allocates nothing (PR2 "on gate failure, allocate nothing" invariant).
+    // ::kill / ::getpid are control-thread calls (start()), never on the RT path.
+    // pump_synchronous passes acquire_consumer_lock=false so the test hook can
+    // double-attach without tripping the reject.
+    if (acquire_consumer_lock) {
+        std::atomic<std::uint32_t>* lock = shm::consumer_lock_atomic(region_.header());
+        const std::uint32_t me = static_cast<std::uint32_t>(::getpid());
+        std::uint32_t expected = 0;
+        if (!lock->compare_exchange_strong(expected, me, std::memory_order_acq_rel)) {
+            // Lock held. Reclaim only if the holder is dead (kill(pid,0) reports
+            // ESRCH). PID-recycle false-negative is an accepted, fail-safe
+            // (refuse, never corrupt) same-host risk per ADR §10.
+            if (::kill(static_cast<pid_t>(expected), 0) == -1 && errno == ESRCH) {
+                // Stale holder dead → try to steal: CAS expected→me.
+                if (!lock->compare_exchange_strong(expected, me, std::memory_order_acq_rel)) {
+                    return BackendError::ConsumerAlreadyAttached;  // someone else won the race
+                }
+                // stole it
+            } else {
+                // Live holder (foreign live process, or re-entrant same pid that
+                // already holds it without a prior stop()) → refuse.
+                return BackendError::ConsumerAlreadyAttached;
+            }
+        }
+        holds_consumer_lock_ = true;
+    }
+
+    // Store-release the resync'd value into header.read_idx (PR5 producer
+    // handshake, Decision 1 step 3 / ADR §4.2). Only on the resync branch, and
+    // only after the gates above (incl. Gate 7 once wired) succeed — so a
+    // rejected consumer never writes the header. CONTROL-THREAD-ONLY write
+    // (before any worker spawns); the non-resync branch leaves read_idx untouched
+    // (PR2 behavior preserved).
+    if (resynced) {
+        region_.header()->read_idx.store(read_idx_local_, std::memory_order_release);
+    }
+
     // All gates passed — commit geometry + allocate.
     sample_rate_      = static_cast<double>(hdr_sr);
     in_channels_      = static_cast<int>(h->channels);
+    out_channels_     = out_channels;   // engine output channel count (Decision 3(ii))
     block_size_       = static_cast<int>(hdr_block);
     engine_block_     = engine_block_size;
     masking_capacity_ = hdr_cap;
-
-    // Seed the consumer cursor from the validated read_idx.
-    read_idx_local_ = hdr_ri;
 
     allocate_staging();
     callback_ = callback;
@@ -187,38 +259,88 @@ void SharedRingBackend::allocate_staging() {
         staging_channels_[static_cast<std::size_t>(ch)] =
             staging_flat_.data() + static_cast<std::size_t>(ch) * block_size_;
     }
+
+    // Output staging the engine renders into (Decision 3(ii)). Sized from the
+    // member set in prepare() before this call. When out_channels_ == 0 (PR2
+    // test path) both vectors stay empty — no alloc, pump_block stays
+    // byte-identical to PR2. Mirrors NullBackend's flat_buffer_ layout.
+    if (out_channels_ > 0) {
+        out_staging_flat_.assign(static_cast<std::size_t>(out_channels_) * block_size_, 0.0f);
+        out_staging_channels_.resize(static_cast<std::size_t>(out_channels_));
+        for (int ch = 0; ch < out_channels_; ++ch) {
+            out_staging_channels_[static_cast<std::size_t>(ch)] =
+                out_staging_flat_.data() + static_cast<std::size_t>(ch) * block_size_;
+        }
+    } else {
+        out_staging_flat_.clear();
+        out_staging_channels_.clear();
+    }
 }
 
 // ── start() ───────────────────────────────────────────────────────────────
 
 BackendError SharedRingBackend::start(AudioCallback* callback) {
     // AudioBackend seam: default engine block to the header block_size (which
-    // trivially divides itself). PR3 wires the real engine block via the
-    // companion overload.
+    // trivially divides itself), out_channels = 0 (no output staging).
     if (!region_.is_attached()) return BackendError::DeviceOpenFailed;
-    return start(callback, static_cast<int>(region_.header()->block_size));
+    return start(callback, static_cast<int>(region_.header()->block_size), 0,
+                 /*spawn_worker=*/false);
 }
 
 BackendError SharedRingBackend::start(AudioCallback* callback, int engine_block_size) {
-    const BackendError err = prepare(callback, engine_block_size);
+    return start(callback, engine_block_size, 0, /*spawn_worker=*/false);
+}
+
+BackendError SharedRingBackend::start(AudioCallback* callback, int engine_block_size,
+                                      int out_channels) {
+    // The 3-arg form is the production / AC-5 path: it spawns the worker thread.
+    return start(callback, engine_block_size, out_channels, /*spawn_worker=*/true);
+}
+
+// Private unified start: gates + alloc + prepareToPlay + (optionally) the worker.
+// spawn_worker is true ONLY for the 3-arg production/CLI/AC-5 path; the 1-arg /
+// 2-arg overloads (used by the frozen PR2 manual-pump_block ctest cases) set
+// running_=true WITHOUT a worker so a test that calls pump_block() directly is
+// not raced by a concurrent worker (preserves AC-7 byte-identical behavior).
+// All start() paths still acquire the consumer lock (acquire_consumer_lock=true,
+// Gap-b). See the §Deviations note: the plan's literal "spawn worker in every
+// start()" is inconsistent with the frozen manual-pump cases, which it elsewhere
+// (Decision 3(i)/AC-5) requires to stay thread-free.
+BackendError SharedRingBackend::start(AudioCallback* callback, int engine_block_size,
+                                      int out_channels, bool spawn_worker) {
+    const BackendError err = prepare(callback, engine_block_size, out_channels,
+                                     /*acquire_consumer_lock=*/true);
     if (err != BackendError::Ok) return err;
 
     callback_->prepareToPlay(sample_rate_, block_size_);
-    running_ = true;
-    // NOTE: production cadence (the worker std::thread with sleep_until, like
-    // NullBackend::thread_loop) is wired in PR3; PR2 ships the RT body
-    // (pump_block) + the deterministic pump_synchronous test hook. The worker
-    // thread will read steady_clock BEFORE pump_block and do the sleep_until
-    // cadence OUTSIDE pump_block.
+    running_.store(true);
+    if (spawn_worker) {
+        // Production cadence (PR3 Decision 3(i)): spawn the worker AFTER gates +
+        // alloc + prepareToPlay. The worker reads steady_clock BEFORE pump_block
+        // and does the sleep_until cadence OUTSIDE pump_block (NullBackend shape).
+        worker_ = std::thread(&SharedRingBackend::thread_loop, this);
+    }
     return BackendError::Ok;
 }
 
 BackendError SharedRingBackend::stop() noexcept {
-    if (!running_) return BackendError::NotStarted;
-    running_ = false;
+    if (!running_.load()) return BackendError::NotStarted;
+    running_.store(false);
+    // Join the worker BEFORE releaseResources + lock release so no pump_block
+    // runs after the callback's resources are freed (PR3 Decision 3(i)).
+    if (worker_.joinable()) worker_.join();
     if (callback_) {
         callback_->releaseResources();
         callback_ = nullptr;
+    }
+    // Release the consumer attach-lock (Decision 2 step 4): only if WE hold it
+    // (holds_consumer_lock_ guards against double-release / clobbering a holder
+    // that reclaimed our slot). A bare release store is correct — nobody else
+    // can hold it while we do. Reset the flag immediately so a ~dtor stop()
+    // after an explicit stop() is idempotent (no re-store).
+    if (holds_consumer_lock_ && region_.is_attached()) {
+        shm::consumer_lock_atomic(region_.header())->store(0, std::memory_order_release);
+        holds_consumer_lock_ = false;
     }
     return BackendError::Ok;
 }
@@ -295,11 +417,18 @@ void SharedRingBackend::pump_block(AudioCallback* callback, std::uint64_t hw_ts_
         ++underrun_warnings_;  // maps to shm_underrun (PR4)
     }
 
-    // (5) Build the AudioBlock (input-only) and call the engine.
+    // (5) Build the AudioBlock and call the engine. The engine renders into the
+    //     backend-owned output staging (Decision 3(ii)); when out_channels_ == 0
+    //     (PR2 test path) this is byte-identical to PR2 (nullptr/0, no fill).
+    //     std::fill over a pre-sized vector is alloc-free (RT-safe), mirroring
+    //     NullBackend's per-block output zero (NullBackend.cpp:104).
+    if (out_channels_ > 0) {
+        std::fill(out_staging_flat_.begin(), out_staging_flat_.end(), 0.0f);
+    }
     AudioBlock blk;
-    blk.output_channels      = nullptr;
+    blk.output_channels      = (out_channels_ > 0) ? out_staging_channels_.data() : nullptr;
     blk.input_channels       = staging_channels_.data();
-    blk.output_channel_count = 0;
+    blk.output_channel_count = out_channels_;
     blk.input_channel_count  = in_channels_;
     blk.num_frames           = block_size_;
     blk.sample_rate          = sample_rate_;
@@ -309,8 +438,13 @@ void SharedRingBackend::pump_block(AudioCallback* callback, std::uint64_t hw_ts_
 
 BackendError SharedRingBackend::pump_synchronous(AudioCallback* callback, int blocks,
                                                  std::uint64_t hw_ts_base,
-                                                 int engine_block_size) {
-    const BackendError err = prepare(callback, engine_block_size);
+                                                 int engine_block_size,
+                                                 int out_channels) {
+    // acquire_consumer_lock=false: the synchronous test hook never takes the
+    // SPSC consumer lock (so a test can double-attach via this path), and never
+    // spawns the worker thread (running_ stays false).
+    const BackendError err = prepare(callback, engine_block_size, out_channels,
+                                     /*acquire_consumer_lock=*/false);
     if (err != BackendError::Ok) return err;
 
     callback_->prepareToPlay(sample_rate_, block_size_);
@@ -322,6 +456,36 @@ BackendError SharedRingBackend::pump_synchronous(AudioCallback* callback, int bl
     callback_->releaseResources();
     callback_ = nullptr;
     return BackendError::Ok;
+}
+
+// ── thread_loop(): production cadence (PR3 Decision 3(i)) ────────────────────
+// Mirrors NullBackend::thread_loop. Reads steady_clock::now() BEFORE pump_block
+// (so the RT body has no clock read — hw_ts_ns is a parameter) and does the
+// sleep_until cadence OUTSIDE pump_block.
+
+void SharedRingBackend::thread_loop() {
+    using clock = std::chrono::steady_clock;
+    const auto block_period = std::chrono::nanoseconds(
+        static_cast<std::int64_t>(1e9 * block_size_ / sample_rate_));
+
+    auto next_deadline = clock::now() + block_period;
+
+    while (running_.load(std::memory_order_acquire)) {
+        // Clock read OUTSIDE pump_block (PR2 "hw_ts is a param" contract).
+        const std::uint64_t now_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now().time_since_epoch()).count());
+        if (callback_) pump_block(callback_, now_ns);
+
+        const auto now = clock::now();
+        if (now > next_deadline) {
+            xruns_.record_underrun();
+            next_deadline = now + block_period;
+        } else {
+            std::this_thread::sleep_until(next_deadline);
+            next_deadline += block_period;
+        }
+    }
 }
 
 // ── poll_diagnostics(): control thread only ─────────────────────────────────

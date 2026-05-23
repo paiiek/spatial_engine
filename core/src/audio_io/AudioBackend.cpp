@@ -13,6 +13,7 @@ const char* describe(BackendError e) noexcept {
         case BackendError::AlreadyStarted:        return "already_started";
         case BackendError::NotStarted:            return "not_started";
         case BackendError::BlockConfigMismatch:   return "block_config_mismatch";
+        case BackendError::ConsumerAlreadyAttached: return "consumer_already_attached";
     }
     return "unknown";
 }

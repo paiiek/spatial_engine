@@ -23,6 +23,8 @@ enum class BackendError {
     NotStarted,
     BlockConfigMismatch,    // ADR 0019: header block_size does not divide engine block,
                             // or block_size > capacity_frames; distinct from BlockSizeExceedsMax.
+    ConsumerAlreadyAttached, // ADR 0019 PR3: a second consumer tried to attach to a ring
+                            // that already has a live consumer (SPSC single-consumer invariant).
 };
 
 const char* describe(BackendError e) noexcept;
