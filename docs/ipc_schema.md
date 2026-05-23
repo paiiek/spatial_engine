@@ -100,6 +100,63 @@ Handshake flow:
 
 ---
 
+### Transport Commands (Phase B — ADR 0018)
+
+The engine audio gate is **binary** (playing / silent) and **edge-triggered**:
+each transport command flips the gate immediately on decode. There is no
+scheduled-start scheduler in this milestone (deferred to ADR 0019 / M4 PCM IPC).
+
+#### `/transport/play`
+
+```
+/transport/play              # no args → immediate
+/transport/play  ,d  start_unix_seconds   # advisory timetag (adm_player M3)
+```
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `start_unix_seconds` | d | **Optional, advisory only.** When present, logged but **not** used to schedule a delayed start — the gate still flips immediately (edge-triggered). `0`/absent = immediate (legacy). The field is preserved on the wire for a future M4 sample-clock scheduler (ADR 0018 D-2). Requires the type-tag parser's `,d` support (ADR 0018 D-1). |
+
+#### `/transport/stop`
+
+```
+/transport/stop              # no args → gate silent
+```
+
+#### `/transport/pause`
+
+```
+/transport/pause             # no args → ALIAS of /transport/stop
+```
+
+Decoded as `/transport/stop` at decode time (ADR 0018 D-3). The engine has no
+pause state distinct from stop (it owns no playhead — the player does). Mirrors
+the player's UI; intentionally not a new command tag so the wire format can
+later promote to a true pause without a breaking change.
+
+#### `/hb/ping`
+
+Heartbeat liveness. Accepted from two producers, distinguished by type tag:
+
+```
+/hb/ping  ,h  timestamp_ms          # engine-internal HeartbeatPublisher (10 Hz)
+/hb/ping  ,t  ntp_timetag           # OSC timetag form (also internal)
+/hb/ping  ,d  unix_time_seconds     # EXTERNAL adm_player (M3, ~1 Hz)
+/hb/ping                            # no args → timestamp 0
+```
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `timestamp_ms` | h | int64 wall-clock ms (engine-internal publisher). |
+| `ntp_timetag`  | t | OSC timetag (engine-internal). |
+| `unix_time_seconds` | d | float64 unix seconds (external player). Converted to ms internally; negatives clamp to 0. The `,d` tag flags the ping as **external**, which is what ticks the player-liveness timestamp (ADR 0018 D-5). |
+
+Only the `,d` (external) form ticks `last_player_ping_unix_ms` (see `/sys/state`
+below) and feeds the `player_heartbeat_stale` watchdog. The internal `,h`/`,t`
+publisher loopback is excluded so it can never mask a dead player.
+
+---
+
 ## State Broadcast Table (Core → UI, port 9101)
 
 ### `/sys/state`
@@ -189,6 +246,13 @@ Warning type codes (v0):
 | 3 | `sofa_load_failure` | KEMAR SOFA file missing or corrupt |
 | 4 | `ir_metadata_mismatch` | IR sample rate / length mismatch |
 | 5 | `object_pool_full` | All 64 object slots occupied |
+
+String-coded warnings (emitted with the `type` int = 0, code carried in the
+`details`-string position — ADR 0018 / ADR 0017 telemetry style):
+
+| Code string | Emitted as | Meaning |
+|-------------|------------|---------|
+| `player_heartbeat_stale` | `/sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>"` | The external adm_player's `/hb/ping ,d` has not been seen for more than 5 s (5× the player's 1 Hz cadence). The `<seconds>` string is the integer age of the last external ping. Emitted **at most once per 30 s** while stale; the latch clears on the next external ping (resume re-arms). Advisory only — the engine keeps rendering the last object positions; audio does not glitch (ADR 0018 D-5). |
 
 ---
 
@@ -300,6 +364,20 @@ that the v0 `,i` form carries is **omitted** from the `,s` form because
 the recipient already disambiguates on typetag — and adding the prefix
 would have broken the wire-format simplicity goal of the v0.5.1 Q1
 hotfix.
+
+#### `last_player_ping_unix_ms` field (Phase B — ADR 0018 D-5, additive)
+
+The `/sys/state` snapshot gains a `last_player_ping_unix_ms` integer field
+carrying the wall-clock (unix ms) of the most recent **external** player
+`/hb/ping ,d`. `0` means no external ping has been seen this session.
+
+- Backed by `SpatialEngine::lastPlayerPingUnixMs()` (a `std::atomic<int64_t>`
+  ticked from the control thread only — never the audio thread). A diagnostic
+  consumer reads it to confirm the player→engine heartbeat is fresh.
+- Only the `,d` (external) heartbeat updates it; the engine's own 10 Hz
+  `,h` publisher loopback does not.
+- **State schema bump: not required** — this is an additive integer with a
+  default of `0`; consumers ignore unknown keys per ADR 0014.
 
 ---
 
