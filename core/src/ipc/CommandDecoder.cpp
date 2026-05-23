@@ -439,13 +439,18 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadHbPing p;
         if (args.n_u64 > 0) {
             // ,h or ,t path (engine-internal HeartbeatPublisher — value already in ms)
-            p.timestamp_ms = args.u64s[0];
+            p.timestamp_ms  = args.u64s[0];
+            p.from_external = false;
         } else if (args.n_double > 0) {
-            // ,d seconds → ms (Phase B, adm_player M3 path); clamp negatives to 0
+            // ,d seconds → ms (Phase B, adm_player M3 path); clamp negatives to 0.
+            // ADR 0018 D-5: the `,d` tag identifies the EXTERNAL player; tick
+            // last_player_ping_unix_ms_ on the control thread for staleness.
             const double s = args.doubles[0];
-            p.timestamp_ms = (s > 0.0) ? static_cast<uint64_t>(s * 1000.0) : 0;
+            p.timestamp_ms  = (s > 0.0) ? static_cast<uint64_t>(s * 1000.0) : 0;
+            p.from_external = true;
         } else {
-            p.timestamp_ms = 0;
+            p.timestamp_ms  = 0;
+            p.from_external = false;
         }
         cmd.payload = p;
     } else if (addr == "/hb/pong") {
@@ -467,9 +472,22 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         cmd.tag = CommandTag::SceneList;
         cmd.payload = PayloadSceneList{};
     } else if (addr == "/transport/play") {
+        // ADR 0018 D-2 — edge-triggered. Gate flips immediately downstream;
+        // the optional `,d unix_time_seconds` timetag is advisory only (no
+        // scheduler). Requires D-1's parser fix to populate args.doubles.
         cmd.tag = CommandTag::TransportPlay;
-        cmd.payload = PayloadTransportPlay{};
+        PayloadTransportPlay p;
+        if (args.n_double > 0) {
+            p.start_unix_seconds = args.doubles[0];
+        }
+        cmd.payload = p;
     } else if (addr == "/transport/stop") {
+        cmd.tag = CommandTag::TransportStop;
+        cmd.payload = PayloadTransportStop{};
+    } else if (addr == "/transport/pause") {
+        // ADR 0018 D-3 — alias of /transport/stop at decode time. The engine
+        // gate is binary (no distinct pause state); the player owns its own
+        // playhead. Intentionally NOT a new CommandTag.
         cmd.tag = CommandTag::TransportStop;
         cmd.payload = PayloadTransportStop{};
     } else if (addr == "/reverb/select") {
