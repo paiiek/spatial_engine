@@ -4,6 +4,7 @@
 #include "audio_io/AudioCallback.h"
 #include "core/Constants.h"
 #include "core/SpatialEngine.h"
+#include "bin/PlayerStaleWatchdog.h"
 #include "geometry/LayoutLoader.h"
 #include "ipc/CommandDecoder.h"
 #include "util/RtAssertNoAlloc.h"
@@ -11,6 +12,12 @@
 
 #if defined(SPE_HAVE_JUCE)
 #include "audio_io/DanteBackend.h"
+#endif
+
+// ADR 0019 PR3: shm input backend (POSIX shm — Linux/macOS only, JUCE-free).
+#if defined(__linux__) || defined(__APPLE__)
+#include "audio_io/SharedRingBackend.h"
+#include "audio_io/shm/SharedMemoryRegion.h"
 #endif
 
 #include <atomic>
@@ -252,7 +259,8 @@ namespace {
 std::atomic<bool> g_quit{false};
 void handle_sigint(int) { g_quit.store(true); }
 
-void print_banner(const std::string& backend_name, int osc_port) {
+void print_banner(const std::string& backend_name, const std::string& input_backend_name,
+                  int osc_port) {
     std::printf("spatial_engine_core v" SPE_VERSION_STR " (full render chain)\n");
     std::printf("  MAX_OBJECTS=%d  MAX_BLOCK=%d\n", spe::MAX_OBJECTS, spe::MAX_BLOCK);
 #ifdef SPE_HAVE_JUCE
@@ -260,7 +268,8 @@ void print_banner(const std::string& backend_name, int osc_port) {
 #else
     std::printf("  JUCE: not linked  OSC-UDP: port %d\n", osc_port);
 #endif
-    std::printf("  backend=%s\n", backend_name.c_str());
+    // ADR 0019 PR3: input is selected independently of the output backend.
+    std::printf("  input=%s  output=%s\n", input_backend_name.c_str(), backend_name.c_str());
 }
 
 // Resolve default layout path by probing common CWDs. Returns the first
@@ -311,6 +320,11 @@ private:
 
 int main(int argc, char** argv) {
     std::string backend_name = "null";
+    // ADR 0019 PR3: input backend selection, distinct from --backend (output).
+    // "dante" (default) preserves current behavior (the --backend selection
+    // drives I/O); "shm:<path>" pulls PCM from a producer ring; "null" is a
+    // distinct null INPUT source.
+    std::string input_backend = "dante";
     int         run_seconds  = 10;
     int         block_size   = 64;
     int         channels     = 8;
@@ -346,6 +360,7 @@ int main(int argc, char** argv) {
             return (i + 1 < argc) ? std::atoi(argv[++i]) : def;
         };
         if      (a == "--backend")     backend_name = nexts("null");
+        else if (a == "--input-backend") input_backend = nexts("dante");
         else if (a == "--seconds")     run_seconds  = nexti(run_seconds);
         else if (a == "--block")       block_size   = nexti(block_size);
         else if (a == "--channels")    channels     = nexti(channels);
@@ -372,6 +387,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--help" || a == "-h") {
             std::printf("Usage: spatial_engine_core [--backend null|dante] "
+                        "[--input-backend shm:<path>|null|dante] "
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
                         "[--osc-port 9100] [--osc-bind 127.0.0.1] "
                         "[--wav OUTPUT.wav] [--layout PATH.yaml] "
@@ -379,6 +395,11 @@ int main(int argc, char** argv) {
                         "[--binaural-enable] [--force-probe] "
                         "[--emit-no-sofa-after-ms N]\n"
                         "\n"
+                        "  --input-backend X  Input source, distinct from --backend (output).\n"
+                        "                   shm:<path> = pull PCM from a producer ring (Linux/\n"
+                        "                   macOS); pairs with --backend for output. null = a\n"
+                        "                   distinct null INPUT source. dante (default) = current\n"
+                        "                   behavior (the --backend selection drives I/O).\n"
                         "  --osc-bind ADDR  Inbound OSC UDP bind address. Default 127.0.0.1\n"
                         "                   (loopback only — single-host IPC). Pass 0.0.0.0\n"
                         "                   to bind every interface (cross-machine setups).\n"
@@ -391,7 +412,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    print_banner(backend_name, osc_port);
+    print_banner(backend_name, input_backend, osc_port);
     std::signal(SIGINT, handle_sigint);
 
     // Engine
@@ -439,9 +460,42 @@ int main(int argc, char** argv) {
         std::printf("  binaural-enable: 1\n");
     }
 
-    // Backend
+    // ── Backend selection (ADR 0019 PR3) ──────────────────────────────────
+    // The INPUT backend (--input-backend) is the loop driver. When it is shm or
+    // null, that backend owns the output staging the engine renders into and is
+    // the sole driver; the --backend (output) selection only matters for the
+    // dante path (current behavior).
+    const bool input_is_shm  = (input_backend.rfind("shm:", 0) == 0);
+    const bool input_is_null = (input_backend == "null");
+
     std::unique_ptr<spe::audio_io::AudioBackend> backend;
-    if (backend_name == "dante") {
+
+#if defined(__linux__) || defined(__APPLE__)
+    std::unique_ptr<spe::audio_io::SharedRingBackend> shm_backend;  // kept alive when shm
+#endif
+
+    if (input_is_shm) {
+#if defined(__linux__) || defined(__APPLE__)
+        const std::string shm_path = input_backend.substr(4);
+        shm_backend = spe::audio_io::SharedRingBackend::attach(
+            shm_path, spe::audio_io::shm::AttachMode::OpenExisting);
+        if (!shm_backend) {
+            std::fprintf(stderr,
+                "[spatial_engine_core] shm input attach failed: %s\n",
+                shm_path.c_str());
+            return 1;  // no Dante fallback — the operator explicitly asked for shm
+        }
+#else
+        std::fprintf(stderr,
+            "[spatial_engine_core] shm input requires Linux/macOS.\n");
+        return 1;
+#endif
+    } else if (input_is_null) {
+        // Gap-c: a distinct null INPUT source (input_channels=channels), separate
+        // from --backend null (output). This drives the loop with a null input.
+        backend = spe::audio_io::make_null_backend(sr, channels, block_size,
+                                                   /*input_channels=*/channels);
+    } else if (backend_name == "dante") {
 #if defined(SPE_HAVE_JUCE)
         backend = spe::audio_io::make_dante_backend(sr, block_size);
 #else
@@ -462,13 +516,32 @@ int main(int argc, char** argv) {
         std::printf("  WAV capture: %s\n", wav_path.c_str());
     }
 
-    auto err = backend->start(callback);
+    // Start the driver. The shm path uses the 3-arg start (engine block +
+    // output channels) so the backend owns the output staging; all other paths
+    // use the AudioBackend 1-arg start.
+    spe::audio_io::BackendError err = spe::audio_io::BackendError::Ok;
+#if defined(__linux__) || defined(__APPLE__)
+    if (input_is_shm) {
+        err = shm_backend->start(callback, block_size, channels);
+    } else
+#endif
+    {
+        err = backend->start(callback);
+    }
     if (err != spe::audio_io::BackendError::Ok) {
         std::fprintf(stderr, "[spatial_engine_core] backend start failed: %s\n",
                      spe::audio_io::describe(err));
         return 1;
     }
-    std::printf("  backend: %s\n", backend->description().c_str());
+
+    // Non-owning driver pointer (SharedRingBackend IS an AudioBackend), so the
+    // run loop / banner / teardown are agnostic to which input backend drives.
+    spe::audio_io::AudioBackend* driver = backend.get();
+#if defined(__linux__) || defined(__APPLE__)
+    if (input_is_shm) driver = shm_backend.get();
+#endif
+
+    std::printf("  backend: %s\n", driver->description().c_str());
     std::printf("  OSC listener: %s:%d (ADM-OSC /adm/obj/N/aed)\n",
                 osc_bind.c_str(), osc_port);
     std::printf("  running %d s — Ctrl-C to stop...\n", run_seconds);
@@ -496,8 +569,29 @@ int main(int argc, char** argv) {
     const auto emit_deadline = start_time + std::chrono::milliseconds(emit_after_ms);
     bool emitted_warnings = false;
 
+    // ADR 0018 D-5 — periodic external-player staleness watchdog. The check
+    // detects the ABSENCE of incoming `,d` pings, so it cannot be driven by
+    // ping arrival; it needs this control-thread timer. servicePlayerStaleWatchdog
+    // gates the call to ~1 Hz and reads wall-clock unix ms — a cheap,
+    // allocation-free clock read on the control/IO thread (NEVER the audio
+    // thread). checkPlayerHeartbeatStale() is a no-op until at least one
+    // external ping has been seen and rate-limits its own /sys/warning to once
+    // per 30 s, so calling it every second is safe.
+    auto last_stale_check = std::chrono::steady_clock::time_point{};
+
     while (!g_quit.load() && clock::now() < deadline) {
         auto now = clock::now();
+
+        // ADR 0018 D-5 — drive the staleness watchdog (gated to ~1 Hz inside).
+        {
+            using sys_clock = std::chrono::system_clock;
+            const int64_t now_unix_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    sys_clock::now().time_since_epoch())
+                    .count();
+            spe::bin::servicePlayerStaleWatchdog(engine, now, last_stale_check,
+                                                 now_unix_ms);
+        }
 
         // Reload registry every 5 seconds.
         if (fwd_fd >= 0 &&
@@ -538,9 +632,9 @@ int main(int argc, char** argv) {
     if (fwd_fd >= 0) ::close(fwd_fd);
     (void)forward_to_instances; // referenced from forwarder helpers; suppress unused warning
 
-    backend->stop();
+    driver->stop();
     std::printf("  stopped. blocks=%llu xruns=%llu\n",
                 static_cast<unsigned long long>(engine.blocksProcessed()),
-                static_cast<unsigned long long>(backend->xrunCount()));
+                static_cast<unsigned long long>(driver->xrunCount()));
     return 0;
 }
