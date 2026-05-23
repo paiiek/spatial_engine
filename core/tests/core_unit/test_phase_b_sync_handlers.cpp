@@ -20,12 +20,14 @@
 #include "core/SpatialEngine.h"
 #include "ipc/CommandDecoder.h"
 #include "ipc/OSCBackend.h"
+#include "bin/PlayerStaleWatchdog.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -319,6 +321,87 @@ static void case10_player_heartbeat_stale_window() {
                 "(once-per-30s + clear-on-resume)\n");
 }
 
+// ---- §3b case 11: PRODUCTION periodic-tick path drives the watchdog --------
+// Regression for the ADR 0018 D-5 completeness gap: checkPlayerHeartbeatStale()
+// was never invoked from a production call site, so the staleness warning was
+// dead code at runtime even though the unit test (case10) passed by calling it
+// directly. This case drives the SAME entry point the standalone run loop uses
+// — spe::bin::servicePlayerStaleWatchdog() — with an injected steady clock AND
+// an injected wall-clock, proving the periodic tick (not a direct call) fires
+// the warning when pings stop, rate-limits to once per 30 s, and re-arms on
+// resume.
+
+static void case11_production_periodic_tick_drives_watchdog() {
+    spe::core::SpatialEngine engine(/*listen_port=*/0);
+
+    using steady = std::chrono::steady_clock;
+    const steady::time_point loop_start{};  // epoch — mock steady clock origin
+    steady::time_point last_check{};        // forces an immediate first eval
+
+    const int64_t t0 = 1700000000000LL;  // arbitrary wall-clock ms
+
+    // Helper: advance the mock steady clock by `secs` and run one watchdog
+    // service call with the matching wall-clock. Mirrors exactly what the run
+    // loop does each iteration.
+    auto tick = [&](int64_t elapsed_s) -> bool {
+        const steady::time_point now = loop_start + std::chrono::seconds(elapsed_s);
+        const int64_t unix_now_ms = t0 + elapsed_s * 1000;
+        return spe::bin::servicePlayerStaleWatchdog(engine, now, last_check,
+                                                    unix_now_ms);
+    };
+
+    // Sub-period cadence gate: prove a tick BELOW the 1 Hz period is a true
+    // no-op even when the wall-clock it carries would otherwise be stale. We
+    // record a ping at t0, evaluate once at t=10 s (stale → fires the single
+    // warning), then a tick 0.5 s later (t=10.5 s, also stale) must be gated
+    // out and return false — confirming the cadence gate, not the staleness
+    // logic, suppressed it.
+    {
+        engine.recordPlayerPingForTest(t0);
+        const steady::time_point t_a = loop_start + std::chrono::seconds(10);
+        const steady::time_point t_b = loop_start + std::chrono::milliseconds(10500);
+        assert(spe::bin::servicePlayerStaleWatchdog(
+                   engine, t_a, last_check, t0 + 10000) == true);
+        // last_check now == t_a; 0.5 s later is below kPlayerStaleCheckPeriod →
+        // gated out (no second evaluation) even though it is still stale.
+        assert(spe::bin::servicePlayerStaleWatchdog(
+                   engine, t_b, last_check, t0 + 10500) == false);
+    }
+
+    // Reset both the cadence gate and the engine liveness state for the main
+    // sequence below.
+    last_check = steady::time_point{};
+
+    // Record an external ping at t0 (mirrors the control-thread HbPing path).
+    engine.recordPlayerPingForTest(t0);
+
+    // Periodic ticks while fresh (< 5 s) → no warning.
+    assert(tick(1) == false);
+    assert(tick(4) == false);
+
+    // 6 s of silence → the PERIODIC TICK (not a direct call) fires exactly one
+    // warning.
+    assert(tick(6) == true);
+
+    // Subsequent periodic ticks within the 30 s rate-limit window → no repeat.
+    assert(tick(10) == false);
+    assert(tick(30) == false);
+
+    // Past the 30 s window from the first emission (at t0+6 s) → re-arm.
+    assert(tick(37) == true);
+
+    // Resume: a fresh external ping clears the latch; later staleness re-arms,
+    // and the periodic tick fires again.
+    const int64_t resume_s = 100;
+    engine.recordPlayerPingForTest(t0 + resume_s * 1000);
+    assert(tick(resume_s + 1) == false);  // fresh
+    assert(tick(resume_s + 6) == true);   // stale again → periodic tick fires
+
+    std::printf("case11 PASS: production_periodic_tick_drives_watchdog "
+                "(servicePlayerStaleWatchdog: 1 Hz gate + once-per-30s + "
+                "clear-on-resume)\n");
+}
+
 // ---------------------------------------------------------------------------
 
 int main() {
@@ -332,6 +415,7 @@ int main() {
     case8_handshake_reply_port_decode_guard();
     case9_unauth_d_heartbeat_dropped();
     case10_player_heartbeat_stale_window();
+    case11_production_periodic_tick_drives_watchdog();
     std::printf("All ADR 0018 §3b Phase B sync-handler cases PASSED\n");
     return 0;
 }

@@ -172,13 +172,15 @@ Already shipped, re-stated for cross-referencing:
 Resolution: **the monitor's miss-window is the subscriber's responsibility**, not the engine's. Restate:
 
 - The engine **does not** run `HeartbeatMonitor` on `/hb/ping` *inbound* from the player. The engine itself is the audio source-of-truth; it does not need to detect the player's death (the player's death just means OSC stops; the engine continues to render silence per object).
-- The engine **does** route `/hb/ping ,d` into a low-priority "session liveness" timestamp atomic (last seen wall-clock), readable from `/sys/state` for diagnostics. Drift > 5× expected period (5 s for the 1 Hz path) emits one `/sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>"` at most once per 30 s.
+- The engine **does** route `/hb/ping ,d` into a low-priority "session liveness" timestamp atomic (last seen wall-clock), exposed via the `SpatialEngine::lastPlayerPingUnixMs()` accessor for whatever external layer surfaces it (core itself emits no `/sys/state` packet — see implementation note below). Drift > 5× expected period (5 s for the 1 Hz path) emits one `/sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>"` at most once per 30 s.
 
 That makes the engine's behaviour:
 - Player crash → engine keeps rendering current object positions until something else changes them. Audio doesn't glitch. UI gets a single warning.
 - Player resume → next `/hb/ping` clears the staleness latch.
 
-Implementation footprint: a `std::atomic<int64_t> last_player_ping_unix_ms_` on `SpatialEngine`, ticked from the control-thread drain when `HbPing` arrives with `client_schema_version` source = "external" (we know it's external because it carries `,d`, vs. the engine's internal publisher which uses `,h`). The `/sys/state` snapshot writer adds one field.
+Implementation footprint: a `std::atomic<int64_t> last_player_ping_unix_ms_` on `SpatialEngine`, ticked from the control-thread drain when `HbPing` arrives with source = "external" (we know it's external because it carries `,d`, vs. the engine's internal publisher which uses `,h`). The staleness evaluation itself, `SpatialEngine::checkPlayerHeartbeatStale(now_unix_ms)`, runs on a periodic control/IO-thread timer (it detects the *absence* of pings, so it cannot be triggered by ping arrival). The standalone wires it from its ~1 Hz run-loop tick via `spe::bin::servicePlayerStaleWatchdog()` (`core/src/bin/PlayerStaleWatchdog.h`), passing wall-clock unix ms.
+
+> **Implementation note (accuracy):** core emits **no** `/sys/state` packet — there is no `/sys/state` writer anywhere in `core/src/`. The "last seen" value is exposed via the `SpatialEngine::lastPlayerPingUnixMs()` accessor for any external layer that wants to surface it; the staleness *signal* is delivered solely via `/sys/warning` (now wired into the periodic control-thread tick). The earlier `/sys/state` snapshot field described above is therefore not part of core.
 
 We **do not** add a new outbound address — the staleness signal piggybacks on the existing `/sys/warning` channel (ADR 0017 telemetry rules).
 
@@ -208,7 +210,7 @@ P4. **`tag_unknown_still_rejects`** — `,z` → parse returns false (no permiss
 7. **`transport_pause_aliases_stop`** — `/transport/pause` → `CommandTag::TransportStop`, gate flips false.
 8. **`handshake_with_reply_port_routes_ok`** — pre-existing test re-run as guard.
 9. **`handshake_d_format_heartbeat_rejected_until_handshake`** — peer-validation test extension: send `/hb/ping ,d` from unauth `(ip, port)` → silently dropped (no reply, no outbound).
-10. **`player_heartbeat_stale_warning_once`** — feed `/hb/ping ,d` then withhold for 6 s (deterministic mocked clock); expect exactly one `/sys/warning player_heartbeat_stale` and no second one within 30 s; resume → next ping clears latch (verified via state snapshot field).
+10. **`player_heartbeat_stale_warning_once`** — feed `/hb/ping ,d` then withhold for 6 s (deterministic mocked clock); expect exactly one `/sys/warning player_heartbeat_stale` and no second one within 30 s; resume → next ping clears latch (verified via the `lastPlayerPingUnixMs()` accessor). Companion case **11** drives the production periodic entry point (`spe::bin::servicePlayerStaleWatchdog()`) with an injected clock to prove the watchdog fires from the control-thread tick, not only from a direct call.
 
 All 14 cases (P1–P4 + 1–10) must pass before this ADR's code lands.
 
@@ -242,7 +244,7 @@ Estimated patch size: ~140 LoC core/IPC (12 parser + 6 OscArgs + 6 hb/ping + ~30
 - Engine-internal `HeartbeatPublisher` (10 Hz, `,h ms`) is unchanged. Any existing subscriber still receives `,h`.
 - VST3 plugin and WebGUI clients that send no `/hb/ping` are unaffected.
 - adm_player M3 wire format works as-is on day 1 with the decoder patch — no player-side change required.
-- `/sys/state` snapshot gains one field (`last_player_ping_unix_ms`). State schema bump: **not required** — additive int field, default 0, consumers ignore unknown keys per ADR 0014.
+- `last_player_ping_unix_ms` is exposed via the `SpatialEngine::lastPlayerPingUnixMs()` accessor for any external layer that wants to surface it. Core emits no `/sys/state` packet, so there is no state-schema change here.
 
 ---
 
