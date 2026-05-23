@@ -594,6 +594,12 @@ add_executable(test_osc_type_tag_parser test_osc_type_tag_parser.cpp)
 target_link_libraries(test_osc_type_tag_parser PRIVATE spe_core)
 add_test(NAME osc_type_tag_parser COMMAND test_osc_type_tag_parser)
 
+# ADR 0018 PR2 — Phase B sync handlers: D-2 transport/play advisory timetag,
+# D-3 transport/pause alias, D-5 external-player heartbeat staleness (§3b 1-10).
+add_executable(test_phase_b_sync_handlers test_phase_b_sync_handlers.cpp)
+target_link_libraries(test_phase_b_sync_handlers PRIVATE spe_core Threads::Threads)
+add_test(NAME phase_b_sync_handlers COMMAND test_phase_b_sync_handlers)
+
 # v0.5.1 final polish (Sec H2): default OSC bind is loopback (127.0.0.1).
 # Asserts: (a) no setBindAddr() call leaves the listener on 127.0.0.1,
 # (b) explicit "0.0.0.0" still binds the wildcard, (c) invalid bind strings
