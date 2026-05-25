@@ -253,6 +253,20 @@ String-coded warnings (emitted with the `type` int = 0, code carried in the
 | Code string | Emitted as | Meaning |
 |-------------|------------|---------|
 | `player_heartbeat_stale` | `/sys/warning ,iis 0 0 "player_heartbeat_stale" "<seconds>"` | The external adm_player's `/hb/ping ,d` has not been seen for more than 5 s (5× the player's 1 Hz cadence). The `<seconds>` string is the integer age of the last external ping. Emitted **at most once per 30 s** while stale; the latch clears on the next external ping (resume re-arms). Advisory only — the engine keeps rendering the last object positions; audio does not glitch (ADR 0018 D-5). |
+| `shm_underrun` | `/sys/warning ,iis 0 0 "shm_underrun" "<xruns>"` | The `--input-backend shm:` ring had no fresh block when the consumer polled, so a silent block was substituted. `<xruns>` is the cumulative underrun (silent-block) total. Emitted **at most once per second** (the emitter owns this 1/s gate; the RT counter has no source rate-limit). ADR 0019 §6. |
+| `shm_producer_stale` | `/sys/warning ,iis 0 0 "shm_producer_stale" "<seconds>"` | The shm ring's `producer_heartbeat_ms` (wall-clock ms) has not advanced for more than 100 ms — the Python adm_player producer (PR5) has stalled or died. `<seconds>` is the integer heartbeat age (`age_ms / 1000`, the same shape as `player_heartbeat_stale`). Emitted **at most once per 30 s** while stale (the `poll_diagnostics` source rate-limit). ADR 0019 §6. |
+| `shm_producer_pacing` | `/sys/warning ,iis 0 0 "shm_producer_pacing" "pacing_drift"` | Successive producer block presentation timestamps (`producer_meta_block_pts_ns`) drifted by more than one block period — the producer is not keeping real-time cadence. The detail string is the fixed marker `pacing_drift`. Emitted **at most once per 5 s** (the `poll_diagnostics` source rate-limit). ADR 0019 §6. |
+| `shm_attached_no_data` | `/sys/warning ,iis 0 0 "shm_attached_no_data" "channels=<N>"` | The shm ring was attached but no producer has written any frames yet (`write_idx == read_idx == 0`). `<N>` is the ring channel count. Emitted **once on attach**. ADR 0019 §6. |
+
+**Retry-on-no-peer (ADR 0019 PR4 / CR-2).** Unlike `player_heartbeat_stale`
+(fire-and-forget), the four `shm_*` warning edges above are **held** until a
+successful `sendReply` — if a warning edge fires before any OSC client has
+connected, its edge is re-attempted on each subsequent diagnostics tick rather
+than dropped (the same retry-on-no-peer latch the `/sys/state ,s` form uses).
+This guarantees a producer that dies/stalls before a UI or soak client connects
+still surfaces the warning once a peer attaches. The four codes are driven by a
+control-thread, shm-gated 1 Hz diagnostics tick in the standalone engine loop;
+they are never emitted on the audio thread.
 
 ---
 
@@ -378,6 +392,33 @@ carrying the wall-clock (unix ms) of the most recent **external** player
   `,h` publisher loopback does not.
 - **State schema bump: not required** — this is an additive integer with a
   default of `0`; consumers ignore unknown keys per ADR 0014.
+
+#### shm producer/consumer state keys (ADR 0019 PR4 — additive)
+
+When the engine runs with `--input-backend shm:`, the control-thread 1 Hz
+diagnostics tick emits three additional `,s "key=value"` `/sys/state` packets,
+each in the same dual-tag additive form as `fallback_mode` above (one
+`key=value` per packet, emitted **on change** with retry-on-no-peer, NOT
+periodic). A consumer that filters by typetag is unaffected.
+
+```
+/sys/state  ,s  "shm_producer_alive=0" | "shm_producer_alive=1"
+/sys/state  ,s  "shm_producer_state=0..3"
+/sys/state  ,s  "shm_consumer_locked=0" | "shm_consumer_locked=1"
+```
+
+| Key | Values | Meaning |
+|-----|--------|---------|
+| `shm_producer_alive` | `0` / `1` | `1` while the producer's `producer_heartbeat_ms` (wall-clock ms) is fresh (age ≤ 100 ms); `0` when stale. Derived from the SAME 100 ms threshold as the `shm_producer_stale` warning, so `shm_producer_alive=0` co-emits with that warning edge (ADR 0019 §6). |
+| `shm_producer_state` | `0`=Idle, `1`=Streaming, `2`=Draining, `3`=Closed | The producer lifecycle state from the ring header's `producer_state` (ADR 0019 §2.3). Sampled once per tick; sub-tick transitions (e.g. `Draining→Closed` within 1 s) are coalesced (ADR 0019 PR4 §MJ-2). |
+| `shm_consumer_locked` | `0` / `1` | `1` while this engine holds the SPSC consumer-attach lock (`kConsumerLockOffset` non-zero); `0` otherwise. Boolean by the field name; the holder PID is not exposed. |
+
+- Emitted on-change with a per-key retry-on-no-peer latch (the latch stays
+  armed until a successful `sendReply`), exactly as the `fallback_mode`
+  snapshot. The initial snapshot of all three keys is emitted on the first
+  tick (seed-and-emit) so a late-connecting consumer learns current state.
+- **State schema bump: not required** — additive `,s` keys; consumers ignore
+  unknown keys per ADR 0014. No `RingHeader`/wire change.
 
 ---
 

@@ -357,6 +357,16 @@ std::uint32_t SharedRingBackend::producer_state() const noexcept {
     return region_.header()->producer_state.load(std::memory_order_acquire);
 }
 
+std::uint32_t SharedRingBackend::consumerLockWord() const noexcept {
+    if (!region_.is_attached()) return 0;
+    // consumer_lock_atomic() takes a non-const RingHeader*; reading the shared
+    // atomic word is logically const (no header WRITE), so const_cast away the
+    // const from region_.header() (PR4 CR-1).
+    return shm::consumer_lock_atomic(
+               const_cast<shm::RingHeader*>(region_.header()))
+        ->load(std::memory_order_acquire);
+}
+
 // ── pump_block(): the RT body ───────────────────────────────────────────────
 // SPSC contract — see header. Only loads/stores/memcpy/memset; no clock read
 // (hw_ts_ns is a param), no syscall, no allocation.

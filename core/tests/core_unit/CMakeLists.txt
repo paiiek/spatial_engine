@@ -156,6 +156,15 @@ add_executable(test_osc_outbound_reply_smoke test_osc_outbound_reply_smoke.cpp)
 target_link_libraries(test_osc_outbound_reply_smoke PRIVATE spe_core Threads::Threads)
 add_test(NAME osc_outbound_reply_smoke COMMAND test_osc_outbound_reply_smoke)
 
+# ADR 0019 PR4 — shm telemetry emitter unit test. Drives
+# spe::bin::ShmTelemetryEmitter against a RingHeader-backed fixture + a
+# no-drain OSCBackend, asserting the /sys/warning + /sys/state wire bytes
+# (edge emit, underrun 1/s latch, clock-domain stale, state on-change,
+# retry-on-no-peer). Control-thread-only; no RT-path code.
+add_executable(test_shm_telemetry_emitter test_shm_telemetry_emitter.cpp)
+target_link_libraries(test_shm_telemetry_emitter PRIVATE spe_core Threads::Threads)
+add_test(NAME shm_telemetry_emitter COMMAND test_shm_telemetry_emitter)
+
 # v0.5.1 Q1 — binaural probe → /sys/binaural_warning emission test.
 # Injects a synthetic low-throughput result, drives the warning emission
 # path, asserts the client receives the ,sf "ambivs_disabled_cpu" packet.

@@ -18,6 +18,7 @@
 #if defined(__linux__) || defined(__APPLE__)
 #include "audio_io/SharedRingBackend.h"
 #include "audio_io/shm/SharedMemoryRegion.h"
+#include "bin/ShmTelemetryEmitter.h"   // ADR 0019 PR4 (D4): control-thread tick
 #endif
 
 #include <atomic>
@@ -579,19 +580,48 @@ int main(int argc, char** argv) {
     // per 30 s, so calling it every second is safe.
     auto last_stale_check = std::chrono::steady_clock::time_point{};
 
+    // ADR 0019 PR4 (D4) — shm diagnostics tick state. A default-constructed
+    // time_point forces the first shm-gated iteration to fire immediately.
+    // The emitter self-seeds on its first attached tick (internal seeded_ flag)
+    // so no caller-side seed bookkeeping is needed here.
+#if defined(__linux__) || defined(__APPLE__)
+    auto last_shm_diag_check = std::chrono::steady_clock::time_point{};
+    spe::bin::ShmTelemetryEmitter shm_telemetry;
+#endif
+
     while (!g_quit.load() && clock::now() < deadline) {
         auto now = clock::now();
 
+        // Wall-clock unix ms, computed ONCE per loop body (D2 / ADR §2.3:
+        // producer_heartbeat_ms is wall-clock). Shared by the D-5 player-stale
+        // watchdog and the PR4 shm diagnostics tick.
+        const int64_t now_unix_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
+
         // ADR 0018 D-5 — drive the staleness watchdog (gated to ~1 Hz inside).
-        {
-            using sys_clock = std::chrono::system_clock;
-            const int64_t now_unix_ms =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    sys_clock::now().time_since_epoch())
-                    .count();
-            spe::bin::servicePlayerStaleWatchdog(engine, now, last_stale_check,
-                                                 now_unix_ms);
+        spe::bin::servicePlayerStaleWatchdog(engine, now, last_stale_check,
+                                             now_unix_ms);
+
+        // ADR 0019 PR4 (D4) — shm-gated 1 Hz diagnostics tick. poll_diagnostics
+        // is called from production for the first time here (PR3 left it
+        // test-only); the emitter then maps the four PR2 warning counters +
+        // producer/consumer state onto /sys/warning + /sys/state. shm-gated so
+        // the dante/null paths are byte-identical (PM5).
+#if defined(__linux__) || defined(__APPLE__)
+        if (input_is_shm && (now - last_shm_diag_check >= std::chrono::seconds(1))) {
+            last_shm_diag_check = now;
+            const std::uint64_t now_steady_ns = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    now.time_since_epoch()).count());
+            const std::uint64_t now_unix_ms_u64 =
+                static_cast<std::uint64_t>(now_unix_ms);
+            shm_backend->poll_diagnostics(now_unix_ms_u64, now_steady_ns);  // D2
+            shm_telemetry.tick(*shm_backend, engine.oscBackend(),
+                               now_unix_ms_u64);                            // D1+D3
         }
+#endif
 
         // Reload registry every 5 seconds.
         if (fwd_fd >= 0 &&

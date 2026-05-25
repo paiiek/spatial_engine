@@ -129,6 +129,13 @@ public:
     // ── Diagnostics accessors (control thread only) ────────────────────
     std::uint64_t producer_heartbeat_ms() const noexcept;
     std::uint32_t producer_state()        const noexcept;
+    // PR4 (CR-1): read-only view of the consumer-attach-lock word at
+    // kConsumerLockOffset (0 when detached or unlocked, else the holder PID).
+    // Control-thread READ only; does NOT write the header (does not touch the
+    // poll_diagnostics WRITES-set contract). Reading the shared atomic word is
+    // logically const, so it const_casts the const header to satisfy the
+    // non-const consumer_lock_atomic() view.
+    std::uint32_t consumerLockWord()      const noexcept;
 
     unsigned long long underrunWarningCount()       const noexcept { return underrun_warnings_; }
     unsigned long long staleWarningCount()          const noexcept { return stale_warnings_; }
