@@ -150,7 +150,7 @@ public:
 `SpatialEngine::SpatialEngine` already accepts an `AudioBackend*`. We add a CLI flag in `core/src/bin/spatial_engine_core.cpp`:
 
 ```
---input-backend shm:/tmp/spe-session-1.shm
+--input-backend shm:/spe-session-1     (POSIX shm name; pairs with adm_player --sink ipc://spe-session-1)
 --input-backend null
 --input-backend dante     (default)
 ```
@@ -173,12 +173,14 @@ For tests we expose a `NullBackend`-paired-with-shm-input variant: input PCM com
 ### 4.1 CLI surface
 
 ```
-adm_player demo.wav --sink ipc:///tmp/spe-session-1.shm
+adm_player demo.wav --sink ipc://spe-session-1
                     [--ring-frames 8192]
                     [--block-size 256]
 ```
 
-`--sink ipc://<path>` switches the audio backend from `sounddevice` to a new `IpcRingSink` class. The OSC emitter path (`/adm/obj/N/aed`, etc.) is unchanged — it still hits 9100 over UDP. Phase B sync (`/sys/handshake`, `/hb/ping`, `/transport/play`) is unchanged.
+`--sink ipc://<name>` switches the audio backend from `sounddevice` to a new `IpcRingSink` class. The OSC emitter path (`/adm/obj/N/aed`, etc.) is unchanged — it still hits 9100 over UDP. Phase B sync (`/sys/handshake`, `/hb/ping`, `/transport/play`) is unchanged.
+
+> **PR5-Q3 reconciliation (ADR 0019 PR5):** `ipc://<name>` is a POSIX shm **NAME**, not a filesystem path. `multiprocessing.shared_memory.SharedMemory(name=<name>)` backs to `/dev/shm/<name>`, which the engine opens through its POSIX-name branch — so pair the player with `--input-backend shm:/<name>` (e.g. `--sink ipc://spe-session-1` ↔ `--input-backend shm:/spe-session-1`; leading slash, no second slash → `is_posix_shm_name`). The earlier filesystem-path example (`ipc:///tmp/…shm`) is superseded by the name form: it is the only form that composes with `multiprocessing.shared_memory` (which is name-based, abstracting Linux/macOS/Windows per §5) and it avoids the regular-file `O_NOFOLLOW`/symlink surface entirely (no operator-supplied path is opened).
 
 ### 4.2 Producer-side implementation outline
 
