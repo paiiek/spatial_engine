@@ -153,8 +153,20 @@ int main()
         return 1;
     }
 
-    // Give listener thread a beat.
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    // Wait for the listener thread to be fully bound (deterministic readiness).
+    {
+        auto ready_dl = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < ready_dl) {
+            if (backend.boundPortForTest() > 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (backend.boundPortForTest() == 0) {
+            std::fprintf(stderr, "FAIL: backend never bound UDP socket\n");
+            backend.stop();
+            ::close(client.fd);
+            return 1;
+        }
+    }
 
     // 3. Send a handshake so backend captures last_peer_endpoint_.
     auto pkt = buildHandshakePacket(1);
@@ -260,8 +272,16 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    // Give the receiver a moment to drain the OS UDP queue.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Wait for the receiver to drain the OS UDP queue — poll until at least
+    // half the enqueued count arrives, or a 2s deadline expires.
+    {
+        const int min_expected = total_enqueued.load() / 2;
+        auto drain_dl = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < drain_dl) {
+            if (received_total.load(std::memory_order_acquire) >= min_expected) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
 
     // Stop receiver.
     receiver_running.store(false, std::memory_order_release);

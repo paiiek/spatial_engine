@@ -112,13 +112,22 @@ int main() {
     ::sendto(client.fd, pkt.data(), pkt.size(), 0,
              reinterpret_cast<struct sockaddr*>(&engine_addr), sizeof(engine_addr));
 
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (engine.oscBackend().hasPeerEndpoint()) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    // Deterministic wait: poll hasPeerEndpoint() with a 2s deadline so the
+    // test fails fast with a clear message rather than flaking on wall-clock
+    // timing under CI load.
+    {
+        auto peer_dl = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < peer_dl) {
+            if (engine.oscBackend().hasPeerEndpoint()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
-    assert(engine.oscBackend().hasPeerEndpoint()
-           && "engine never captured handshake peer");
+    if (!engine.oscBackend().hasPeerEndpoint()) {
+        std::fprintf(stderr, "FAIL: engine never captured handshake peer (deadline)\n");
+        engine.releaseResources();
+        ::close(client.fd);
+        return 1;
+    }
 
     // 5. Drive the PRODUCTION emit path via SpatialEngine's public test hook
     //    injectProbeThroughputAndEmit(): it sets the engine's own

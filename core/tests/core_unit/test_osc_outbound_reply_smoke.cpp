@@ -126,8 +126,20 @@ bool runSmokeRound(int round_idx) {
     spe::ipc::OSCBackend backend(sink, static_cast<int>(engine_port));
     backend.start();
 
-    // Give the engine listener a beat to settle (bind + recvfrom thread up).
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    // Wait for the engine listener to be fully bound (deterministic readiness).
+    {
+        auto ready_dl = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < ready_dl) {
+            if (backend.boundPortForTest() > 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (backend.boundPortForTest() == 0) {
+            std::fprintf(stderr, "[round %d] backend never bound UDP socket\n", round_idx);
+            backend.stop();
+            ::close(client.fd);
+            return false;
+        }
+    }
 
     // 3. Send the handshake packet from client → engine.
     auto pkt = buildHandshakePacket(1);
