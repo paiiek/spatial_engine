@@ -5,6 +5,14 @@ All notable changes to the Spatial Engine project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Post-v0.7.0 work, not yet released.
+
+- **ADR 0018 — Phase B sync handlers** (Accepted): handshake / heartbeat / transport-timetag type-tag contract; control-tick player-heartbeat staleness watchdog (`9311902`).
+- **ADR 0019 — Phase C PCM IPC** (Accepted, shipping): sample-accurate POSIX shared-memory ring backend, PRs 1–5 — shm region + wire header, `SharedRingBackend`, engine `--input-backend shm:` wiring + backend pairing, `/sys/warning shm_*` + `/sys/state` telemetry, and the adm_player `IpcRingSink` Python producer + `--sink ipc://` CLI (`9cd6d57` → `868f750`). PR6 (60 s cross-process soak) + PR7 (cross-platform CI) remain.
+- **v0.8 audit remediation** (in progress, `.omc/plans/spatial-engine-v0.8-audit-remediation.md`): full-engine multi-reviewer audit; P0 flaky-test stabilization — OSC/binaural sleep-barriers → event/condvar sync (`32bfd5a`).
+
 ## [0.7.0] — 2026-05-21
 
 RT-safety follow-through + telemetry + cross-platform CI promotion.

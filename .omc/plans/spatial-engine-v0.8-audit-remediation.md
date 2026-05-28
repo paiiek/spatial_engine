@@ -132,11 +132,11 @@
 - [ ] **P3.6** OSC sleep-barrier → event sync (Test-6)
 - [ ] **P3.7** OSC malformed extra cases (Test-7)
 - [ ] **P3 commit**
-- [ ] **P4.1** ADR status/renumber + index (Arch-2,3)
-- [ ] **P4.2** open-questions reconcile (Arch-4)
-- [ ] **P4.3** CHANGELOG [Unreleased] (Arch-5)
-- [ ] **P4 commit**
-- [ ] **P5.1** prune build dirs + NUL + matrix/ (Arch-6) — record only
+- [x] **P4.1 (partial)** ADR 0018/0019 Proposed→Accepted + 0006a H1 dedup + `docs/adr/index.md`. **DEFERRED:** the `0006a→0007` file rename (risk: inbound refs — supervised) + full per-file status fill-in.
+- [ ] **P4.2 — DEFERRED** open-questions reconcile (Arch-4): partly depends on P1 (close M2HOA-Q14 after P1.1); do the ADM-OSC C3-Q* shipped-cohort close + triage after P1.
+- [x] **P4.3** CHANGELOG `[Unreleased]` (Arch-5)
+- [x] **P4 commit (partial — docs)** done out-of-band during rate-limit window (see commit below)
+- [x] **P5.1** pruned 24 stale build dirs (~5.6GB) + removed `NUL` + empty `core/src/matrix/`; kept canonical `core/build*` + `build_relacy*`; git unaffected (all ignored)
 - [ ] **P6.1** O_NOFOLLOW shm branch (Sec-1)
 - [ ] **P6.2** python dep triage (Sec-4)
 - [ ] **P6 commit**

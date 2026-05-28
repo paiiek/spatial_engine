@@ -1,4 +1,6 @@
-# ADR 0006 — Algorithm runtime swap mechanism (K=256 sample crossfade)
+# ADR 0006a — Algorithm runtime swap mechanism (K=256 sample crossfade)
+
+> Note: numbered `0006a` to disambiguate from `0006-adm-osc-v1-spec-freeze.md` (both files originally shared the H1 "ADR 0006"). The `0006a` label matches the existing cross-references (e.g. ADR 0018 "Related"). A future cleanup may renumber the file to `0007` (the 0007–0009 slots are unused); deferred to avoid breaking inbound references.
 
 - **Status**: Accepted (P0 first-draft; finalized at P3)
 - **Date**: 2026-04-28

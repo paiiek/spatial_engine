@@ -1,6 +1,6 @@
 # ADR 0019 — Phase C PCM IPC: sample-accurate shared-memory ring backend
 
-- **Status**: Proposed (2026-05-19)
+- **Status**: Accepted (proposed 2026-05-19; shipping — PR1–PR5 merged: `9cd6d57` / `1d654f2` / `5a66ed6` / `996bc50` / `868f750`. PR6 cross-process soak + PR7 cross-platform CI remain)
 - **Driver**: M4 in `adm_player/.omc/plans/adm_player_integration.md` — eliminate OS-device routing dependency between adm_player and spatial_engine, achieve sample-accurate sync. Today (Phase A+B) audio crosses the boundary via JACK / BlackHole / ASIO Link, which is correct-but-not-sample-locked and adds per-host setup pain.
 - **Related**: ADR 0002 (native core C++/JUCE), ADR 0006 (ADM-OSC v1.0), ADR 0018 (Phase B sync handlers, this PR), ADR 0013 (WebGUI producer-mode toggle).
 

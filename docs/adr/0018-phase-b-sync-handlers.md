@@ -1,6 +1,6 @@
 # ADR 0018 — Phase B Sync Handlers: handshake, heartbeat, transport timetag
 
-- **Status**: Proposed (2026-05-19)
+- **Status**: Accepted (proposed 2026-05-19; shipped — engine-side handlers wired live + control-tick player-heartbeat staleness watchdog, commit `9311902`)
 - **Driver**: adm_player M3 (`adm_player/osc_sync.py`) emits `/sys/handshake`, `/hb/ping`, `/transport/play` with a `,d unix_time` timetag. The engine already has handlers for the three addresses, but the **type-tag contract diverges** in two places. This ADR resolves the contract and pins the engine-side expectations.
 - **Related**: ADR 0006 (ADM-OSC v1.0 spec freeze), ADR 0006a (algorithm runtime swap), ADR 0010 (VST3 OSC binding model), ADR 0011 (multi-instance discovery), ADR 0017 (runtime demote telemetry).
 
