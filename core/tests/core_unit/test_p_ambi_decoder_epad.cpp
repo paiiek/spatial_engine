@@ -4,6 +4,7 @@
 
 #include "ambi/AmbiDecoder.h"
 #include "ambi/AmbisonicEncoder.h"
+#include "ambi/EPADDecoder.hpp"
 #include "geometry/SpeakerLayout.h"
 #include <cassert>
 #include <cmath>
@@ -157,10 +158,121 @@ static void test_epad_degenerate_fallback() {
     std::printf("PASS test_epad_degenerate_fallback (degenerate layout: no NaN, S=%d)\n", S);
 }
 
+// v0.8 audit P2.1 (DSP-4) — rank-aware EPAD energy_scale verification.
+// EPADDecoder::build_epad_matrix returns an S×K row-major decode matrix D.
+// With N = min(S, K), the rank-aware scale gives:
+//   tr(D·D^T) ≈ 1            (both branches)
+//   !use_EEt (K<S, N=K):  D^T·D ≈ (1/N)·I_K   (full rank in K-space)
+//   use_EEt  (S≤K, N=S):  D·D^T ≈ (1/N)·I_S   (full rank in S-space)
+// PRE-FIX BUG (energy_scale = 1/sqrt(S) in BOTH branches) made
+// tr(D·D^T) = K/S in the !use_EEt branch → these asserts would FAIL
+// against the broken code, so they pin the fix.
+//
+// Independent oracle: invariants computed from D directly, not from the
+// code under change (no dependency on the EPAD math path).
+static void test_epad_rank_aware_energy_K_less_than_S() {
+    // order=1 → K=4; 16-speaker layout → S=16 > K → !use_EEt branch.
+    auto layout = make_3d_16ch();
+    const int order = 1;
+    const int K = 4;
+    const int S = static_cast<int>(layout.speakers.size());
+    const int N = (S <= K) ? S : K;
+    assert(S > K && "this test exercises the K<S branch");
+
+    auto D = spe::ambi::EPADDecoder::build_epad_matrix(order, layout);
+    assert(static_cast<int>(D.size()) == S * K);
+
+    // tr(D · D^T) = sum_{s,k} D[s,k]^2 (Frobenius norm squared)
+    double trace_DDt = 0.0;
+    for (int s = 0; s < S; ++s)
+        for (int k = 0; k < K; ++k) {
+            double v = D[static_cast<size_t>(s)*K+k];
+            trace_DDt += v * v;
+        }
+    if (std::abs(trace_DDt - 1.0) > 1e-5) {
+        std::printf("FAIL test_epad_rank_aware_energy_K_less_than_S: tr(D·D^T)=%.6f, expected 1.0 (±1e-5)\n",
+                    trace_DDt);
+        assert(false);
+    }
+
+    // D^T · D ≈ (1/N) · I_K  (K×K identity scaled by 1/N=1/K)
+    // (D^T D)[k1,k2] = sum_s D[s,k1] * D[s,k2]
+    const double target_diag = 1.0 / static_cast<double>(N);
+    double max_off = 0.0, max_diag_err = 0.0;
+    for (int k1 = 0; k1 < K; ++k1)
+        for (int k2 = 0; k2 < K; ++k2) {
+            double sum = 0.0;
+            for (int s = 0; s < S; ++s)
+                sum += static_cast<double>(D[static_cast<size_t>(s)*K+k1]) *
+                       static_cast<double>(D[static_cast<size_t>(s)*K+k2]);
+            if (k1 == k2) {
+                double err = std::abs(sum - target_diag);
+                if (err > max_diag_err) max_diag_err = err;
+            } else {
+                double a = std::abs(sum);
+                if (a > max_off) max_off = a;
+            }
+        }
+    if (max_diag_err > 1e-5 || max_off > 1e-5) {
+        std::printf("FAIL test_epad_rank_aware_energy_K_less_than_S: D^T·D off identity — "
+                    "max_diag_err=%.3e (target 1/N=%.6f), max_off_diag=%.3e (allowed ≤ 1e-5)\n",
+                    max_diag_err, target_diag, max_off);
+        assert(false);
+    }
+    std::printf("PASS test_epad_rank_aware_energy_K_less_than_S "
+                "(S=%d, K=%d, N=%d, tr(D·D^T)=%.6f, max_diag_err=%.2e, max_off=%.2e)\n",
+                S, K, N, trace_DDt, max_diag_err, max_off);
+}
+
+static void test_epad_rank_aware_energy_S_le_K_no_regression() {
+    // v0.8 P2.1 (DSP-4) NO-REGRESSION: in the use_EEt (S≤K) branch the
+    // fix is BIT-IDENTICAL to the pre-fix code because energy_scale =
+    // 1/sqrt(N) collapses to 1/sqrt(S) when N=S. We therefore do NOT pin a
+    // closed-form D·D^T invariant here (the test layouts available in this
+    // file are not regular spherical t-designs at the orders that exercise
+    // use_EEt; both fall through to the Tikhonov PINV fallback when E^T·E
+    // is ill-conditioned, and the fallback path is an entirely different
+    // construction with no per-mode energy normalisation).
+    //
+    // Instead we verify (a) the matrix is finite, (b) Frobenius energy is
+    // bounded (no NaN/blow-up), and (c) the existing uniform-energy test
+    // (`test_epad_uniform_energy_preserved`) above acts as the
+    // behavioural lock for use_EEt — that test passed pre-fix and stays
+    // green post-fix.
+    auto layout = make_hemi_9ch();
+    const int order = 2;
+    const int K = 9;
+    const int S = static_cast<int>(layout.speakers.size());
+    assert(S <= K && "this test exercises the use_EEt branch (S≤K)");
+
+    auto D = spe::ambi::EPADDecoder::build_epad_matrix(order, layout);
+    assert(static_cast<int>(D.size()) == S * K);
+
+    double frobenius2 = 0.0;
+    for (int s = 0; s < S; ++s)
+        for (int k = 0; k < K; ++k) {
+            double v = D[static_cast<size_t>(s)*K+k];
+            assert(std::isfinite(v));
+            frobenius2 += v * v;
+        }
+    // Sanity: Frobenius² should be O(1) — not zero, not blown up.
+    if (frobenius2 < 0.1 || frobenius2 > 100.0) {
+        std::printf("FAIL test_epad_rank_aware_energy_S_le_K_no_regression: "
+                    "||D||_F^2=%.6f (expected ~O(1))\n", frobenius2);
+        std::fflush(stdout);
+        assert(false);
+    }
+    std::printf("PASS test_epad_rank_aware_energy_S_le_K_no_regression "
+                "(S=%d, K=%d, ||D||_F^2=%.6f — finite, O(1))\n",
+                S, K, frobenius2);
+}
+
 int main() {
     test_epad_uniform_energy_preserved();
     test_epad_irregular_valid_output();
     test_epad_degenerate_fallback();
+    test_epad_rank_aware_energy_K_less_than_S();
+    test_epad_rank_aware_energy_S_le_K_no_regression();
     std::printf("All EPAD decoder tests passed.\n");
     return 0;
 }

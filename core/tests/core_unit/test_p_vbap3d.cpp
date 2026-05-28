@@ -283,12 +283,70 @@ static void test5_fallback_gain_pattern() {
     std::printf("[PASS] test5: fallback gain pattern valid (>=2 nonzero, sum_sq=1)\n");
 }
 
+// v0.8 audit P2.2 (DSP-5) — degenerate-triplet fallback Σg²≈1 guard.
+// The outside-hull fallback (AlgorithmAnalyticReference.cpp:259+) picks the
+// 3 nearest speakers by angular distance, then attempts Cramer's rule. If
+// the chosen 3 are degenerate (det(L) ≈ 0, e.g. nearly coplanar through the
+// origin), it falls into the inverse-angular-distance branch at
+// AAR.cpp:299-304, then clamps non-negative and energy-normalises at
+// AAR.cpp:311-320. This guard test pins Σg² ≈ 1 (±1e-5) so a future
+// regression that drops the energy normalisation fails loudly.
+//
+// Trigger recipe (verified by inspection of the dispatch + fallback paths):
+//   - 4-speaker layout with all speakers in the y = 2e-3 plane (above the
+//     2D/3D threshold of 1e-3, so routes to 3D path).
+//   - Source at el = +60° → sy = sin(60°) ≈ 0.866; no triplet in-hull
+//     (all speaker unit vectors have y ≈ 2e-3 ≪ 0.866), so every Cramer
+//     attempt yields at least one negative gain → the non-negativity gate
+//     at AAR.cpp:216 rejects ALL triplets → fallback fires.
+//   - The 3 nearest speakers are all in the (nearly horizontal) y=2e-3
+//     plane, so the resulting 3×3 column matrix has det ≈ 2e-3 × (cross-
+//     product of two nearly-horizontal vectors) ≈ 0 → degenerate sub-
+//     branch at AAR.cpp:299 fires.
+static void test6_degenerate_triplet_fallback_energy_guard() {
+    // 4 speakers, all in the y=2e-3 plane (≥1e-3 → 3D dispatch path).
+    SpeakerLayout l;
+    l.name = "test_4ch_coplanar";
+    l.regularity = Regularity::IRREGULAR;
+    const float y_off = 2e-3f;
+    const float azs[] = {0.f, 90.f, 180.f, 270.f};
+    for (int i = 0; i < 4; ++i) {
+        float az = azs[i] * kPi / 180.f;
+        Speaker s;
+        s.channel = i + 1;
+        s.x = std::sin(az);
+        s.y = y_off;        // all speakers share the same y → near-coplanar
+        s.z = std::cos(az);
+        l.speakers.push_back(s);
+    }
+
+    const float az = 30.f * kPi / 180.f;
+    const float el = 60.f * kPi / 180.f; // well above the y=2e-3 plane → no in-hull triplet
+    auto gains = AlgorithmAnalyticReference::vbap_gain(l, az, el);
+
+    CHECK(all_valid(gains));
+    // Pin Σg² ≈ 1 within 1e-5 — this is the load-bearing assertion.
+    // If a future change removes the normalisation at AAR.cpp:311-320 the
+    // raw inverse-angular weights would give Σg² ≫ 1 (or ≪ 1) and this
+    // would fail loudly.
+    CHECK_NEAR(sum_sq(gains), 1.0f, 1e-5f);
+
+    // Sanity: at least one gain must be non-trivial (not the all-zero
+    // last-ditch branch at AAR.cpp:313-316).
+    int nonzero = 0;
+    for (float v : gains) if (v > 1e-6f) ++nonzero;
+    CHECK(nonzero >= 1);
+    std::printf("[PASS] test6: degenerate-triplet fallback Σg²≈1 guard (nonzero=%d, sum_sq=%.6f)\n",
+                nonzero, static_cast<double>(sum_sq(gains)));
+}
+
 int main() {
     test1_horizontal_el0();
     test2_extreme_elevation();
     test3_elevation_effect();
     test4_dimensionality_boundary();
     test5_fallback_gain_pattern();
+    test6_degenerate_triplet_fallback_energy_guard();
 
     if (failures == 0) {
         std::printf("[RESULT] PASS\n");

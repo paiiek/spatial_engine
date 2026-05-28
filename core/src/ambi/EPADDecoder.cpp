@@ -198,27 +198,32 @@ std::vector<float> EPADDecoder::build_epad_matrix(int order,
         return M;
     }
 
-    // EPAD: rescale singular values to unit total energy.
-    // sigma_hat_i = sqrt(sigma_i^2 / sum(sigma^2)) * sqrt(N)  — energy-preserving rescale.
-    // Simpler canonical: sigma_hat_i = 1/sqrt(N) for all i (uniform energy).
-    // We use: D_EPAD = V_left * diag(1/sigma_i normalized) * V_right^T
-    // Since A is symmetric PSD, eigenvalues are sigma_i^2 (of E if use_EEt: eigenvalues of E E^T).
-    // sigma_i = sqrt(max(eigval, 0)).
+    // EPAD: rescale singular values to enforce uniform per-mode energy.
+    // The encoding matrix E is K×S with rank N = min(S,K). EPAD replaces
+    // each non-zero singular value by sigma_hat = 1/sqrt(N), giving
+    // D = V * diag(1/sqrt(N)) * U^T  (where U,V are the left/right singular
+    // vectors of E in the active rank-N subspace).
     //
-    // Build D_EPAD = E^T * V_S * diag(sigma_hat / sigma^2) when use_EEt,
-    // where V_S are the eigenvectors of E E^T.
-    // Energy-preserving condition: D D^T = (1/S) I_S  (all speakers equal energy).
-    // Achieved by setting each sigma_hat = 1/sqrt(S).
+    // RANK-AWARE energy_scale (v0.8 audit P2.1 / DSP-4):
+    //   N = min(S, K)
+    //   use_EEt  branch (S ≤ K, N = S):
+    //     D · D^T = (1/N) · I_S = (1/S) · I_S        (trace = 1)
+    //   !use_EEt branch (K < S,  N = K):
+    //     D^T · D = (1/N) · I_K = (1/K) · I_K        (trace = 1, full rank in K-space)
+    //     D · D^T = (1/N) · V_K · V_K^T              (rank K, trace = 1)
+    // In both branches tr(D·D^T) = 1, i.e. the "average per-speaker energy
+    // over the active rank-N subspace is 1/S".
     //
-    // D_EPAD[s,k] = sum_i (1/(sigma_i * sqrt(S))) * V[s,i] * (E^T * V[.,i])[k]
-    //             = sum_i (eigvec_i[s] / sqrt(sigma_i^2 * S)) * sum_s2 E[k,s2]*eigvec_i[s2]
-
-    // Compute U columns (left singular vectors): U[:,i] = eigvecs[:,i] of E E^T (size S).
-    // Compute V columns (right singular vectors): V[:,i] = E^T U[:,i] / sigma_i.
-    // Then D = V * diag(sigma_hat) * U^T  where sigma_hat_i = 1/sqrt(S) (uniform energy).
+    // PRE-FIX BUG: energy_scale was hard-coded to 1/sqrt(S) in BOTH branches.
+    // In the !use_EEt (K<S) branch this gave tr(D·D^T) = K/S ≠ 1, i.e. the
+    // total decoded energy fell below 1 by the rank ratio. Switching to
+    // 1/sqrt(N) restores tr(D·D^T) = 1 while leaving the use_EEt path
+    // bit-identical (N == S when S ≤ K).
+    //
+    // References: Zotter & Frank 2012 ICSA; Politis 2018 thesis.
 
     std::vector<float> M(static_cast<size_t>(S)*K, 0.f);
-    const double energy_scale = 1.0 / std::sqrt(static_cast<double>(S));
+    const double energy_scale = 1.0 / std::sqrt(static_cast<double>(N));
 
     if (use_EEt) {
         // Left singular vecs are eigvecs of E E^T (S×S).

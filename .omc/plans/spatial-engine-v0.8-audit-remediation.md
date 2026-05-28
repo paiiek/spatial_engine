@@ -117,13 +117,13 @@
 
 ## Progress tracker (resume from first unchecked)
 - [x] **P0** flaky pre-flight — OSC/binaural sleep-barriers → event/condvar sync (commit `32bfd5a`; 95/95 ctest, 225 pytest, 20/20 `-j4` stress)
-- [ ] **P1.1** decoder-type **double-buffered** apply (2-slot + atomic acquire/release) + functional + **concurrency (TSan/relacy)** test (DSP-1/M2HOA-Q14)
-- [ ] **P1.2** **verify-and-pin** — NEW independent closed-form SN3D-constant lock test; **DO NOT modify encoder (DSP-2 INVALID)**
-- [ ] **P1.3** VBAP RT-alloc removal (caller scratch) + `<=64` speaker guard + cold-miss RT-sentinel test (DSP-3)
-- [ ] **P1 commit** (gate: clean NO_JUCE reconfigure ctest + build_rton RT-sentinel + pytest + SN3D-oracle green)
-- [ ] **P2.1** EPAD rank-aware energy scale + energy test (DSP-4)
-- [ ] **P2.2** VBAP fallback Σg²≈1 guard test (DSP-5)
-- [ ] **P2 commit**
+- [x] **P1.1** decoder-type **double-buffered** apply (2-slot + atomic acquire/release) + functional + **concurrency (TSan/relacy)** test (DSP-1/M2HOA-Q14) — commit `64352df`
+- [x] **P1.2** **verify-and-pin** — NEW independent closed-form SN3D-constant lock test; encoder UNTOUCHED (DSP-2 INVALID) — commit `64352df`
+- [x] **P1.3** VBAP RT-alloc removal (caller scratch) + `<=64` speaker guard + cold-miss RT-sentinel test (DSP-3) — commit `64352df`
+- [x] **P1 commit** `64352df` (pushed to origin/main 2026-05-28; gate green: NO_JUCE ctest + build_rton RT-sentinel + pytest + SN3D oracle)
+- [x] **P2.1** EPAD rank-aware energy scale + energy test (DSP-4) — `EPADDecoder.cpp:226` energy_scale = 1/sqrt(N); new K<S test pins tr(D·D^T)=1 + D^T·D = (1/N)·I_K (max_diag_err 1.68e-8, max_off 3.72e-9)
+- [x] **P2.2** VBAP fallback Σg²≈1 guard test (DSP-5) — `test_p_vbap3d.cpp` test6 pins sum_sq=1.0 (±1e-5) for degenerate-triplet fallback (y=2e-3 coplanar layout, el=+60°)
+- [x] **P2 commit**
 - [ ] **P3.1** VST3 state-contract test in core CI (Test-1)
 - [ ] **P3.2** ambisonic absolute-gain golden (Test-2)
 - [ ] **P3.3** FDN T60 test (Test-3)
