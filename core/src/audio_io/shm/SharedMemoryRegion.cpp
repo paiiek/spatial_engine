@@ -103,7 +103,11 @@ RegionError SharedMemoryRegion::attach(const char* name,
         }
     } else {
         // ── Regular file path (open() + mmap) ──────────────────────────
-        int oflag = O_RDWR;
+        // O_NOFOLLOW: refuse to follow a symlinked operator-supplied path
+        // (PR3-Q7 / ADR 0019 §10 defense-in-depth; mirrors the registry writer
+        // PluginInstanceRegistry.cpp). On a symlinked final component open()
+        // fails with ELOOP → ShmOpenFailed, which is the intended hardening.
+        int oflag = O_RDWR | O_NOFOLLOW;
         if (create) oflag |= O_CREAT;
         fd = ::open(name, oflag, 0600);
         if (fd < 0) return RegionError::ShmOpenFailed;

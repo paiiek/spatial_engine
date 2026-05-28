@@ -137,9 +137,9 @@
 - [x] **P4.3** CHANGELOG `[Unreleased]` (Arch-5)
 - [x] **P4 commit (partial — docs)** done out-of-band during rate-limit window (see commit below)
 - [x] **P5.1** pruned 24 stale build dirs (~5.6GB) + removed `NUL` + empty `core/src/matrix/`; kept canonical `core/build*` + `build_relacy*`; git unaffected (all ignored)
-- [ ] **P6.1** O_NOFOLLOW shm branch (Sec-1)
-- [ ] **P6.2** python dep triage (Sec-4)
-- [ ] **P6 commit**
+- [x] **P6.1** `O_NOFOLLOW` on shm regular-file branch (`SharedMemoryRegion.cpp:106`, PR3-Q7); full ctest 95/95 green
+- [ ] **P6.2 — DEFERRED** python dep triage (Sec-4): PIN-DEFER per plan — add advisory notes to requirements.txt + bump safe dev deps with ui/WebGUI gate (next-session)
+- [x] **P6.1 commit** (done out-of-band during rate-limit window)
 - [x] **P7.1 — DEFERRED** (Architect+Critic): NOT run under autopilot; supervised sprint later
 - [ ] **FINAL** full re-audit / verifier pass + memory update
 
