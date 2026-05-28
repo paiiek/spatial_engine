@@ -1,6 +1,7 @@
 // core/src/render/VBAPRenderer.cpp
 
 #include "render/VBAPRenderer.h"
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -13,6 +14,17 @@ void VBAPRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
     layout_       = layout;
     sr_           = sample_rate;
     num_speakers_ = static_cast<int>(layout.speakers.size());
+
+    // v0.8 P1.3 (DSP-3) — bound the audio-thread scratch + ramp cap. ramps_
+    // is std::array<…, 64> already; before P1.3 there was no >64 guard, so
+    // a layout with 65+ speakers would have written OOB into ramps_. The
+    // assert fires at prepareToPlay (control thread) so the audio thread
+    // never sees an oversized N.
+    assert(num_speakers_ <= 64
+           && "VBAPRenderer: layout exceeds 64-speaker cap "
+              "(ramps_/scratch fixed)");
+    gain_scratch_.assign(static_cast<size_t>(num_speakers_), 0.f);
+
     // Reset all gain ramps to 0
     for (auto& obj_ramps : ramps_)
         for (int s = 0; s < num_speakers_; ++s)
@@ -77,32 +89,47 @@ void VBAPRenderer::processBlock(
                         ring_head_ = (ring_head_ + 1) % RING_CAP;
                         --cache_size_;
                     }
-                    // NOTE: vbap_gain allocates internally (std::vector temporaries).
-                    // Cold-miss path allocates; warm-hit path (above) is alloc-free.
-                    auto computed = AlgorithmAnalyticReference::vbap_gain(
-                        layout_, objects[obj].az_rad, objects[obj].el_rad);
+                    // v0.8 P1.3 (DSP-3) — RT-safe cold-miss compute. Pre-P1.3
+                    // this called vbap_gain() which returned a std::vector
+                    // and allocated for internal temporaries (azs/idx/ux/uy/
+                    // uz/ang/cands) on the audio thread inside the
+                    // SPE_RT_NO_ALLOC_SCOPE(). The new vbap_gain_into()
+                    // writes into the caller-provided member scratch and
+                    // uses stack arrays internally (capped at 64 speakers).
+                    const int written = AlgorithmAnalyticReference::vbap_gain_into(
+                        layout_, objects[obj].az_rad, objects[obj].el_rad,
+                        gain_scratch_.data(),
+                        static_cast<int>(gain_scratch_.size()));
                     // Width fan-out: blend point-source gains with uniform spread.
                     // width=0 → pure VBAP; width=π → half uniform / half VBAP.
                     // Blend factor w ∈ [0,1]: w = width_rad / π.
                     // g_out[i] = (1-w)*g[i] + w*(1/sqrt(N))
                     // This guarantees ≥3 nonzero gains when w>0 and N≥3.
                     const float w_rad = objects[obj].width_rad;
-                    if (w_rad > 1e-4f) {
+                    if (w_rad > 1e-4f && written > 0) {
                         const float w = w_rad / 3.14159265f;  // [0,1]
-                        const float uniform = 1.0f / std::sqrt(static_cast<float>(computed.size()));
+                        const float uniform = 1.0f / std::sqrt(static_cast<float>(written));
                         float energy = 0.f;
-                        for (auto& g : computed) {
+                        for (int g_i = 0; g_i < written; ++g_i) {
+                            float& g = gain_scratch_[static_cast<size_t>(g_i)];
                             g = (1.f - w) * g + w * uniform;
                             energy += g * g;
                         }
                         // Re-normalise to energy = 1
                         if (energy > 1e-8f) {
                             const float inv_rms = 1.0f / std::sqrt(energy);
-                            for (auto& g : computed) g *= inv_rms;
+                            for (int g_i = 0; g_i < written; ++g_i)
+                                gain_scratch_[static_cast<size_t>(g_i)] *= inv_rms;
                         }
                     }
                     cache_slots_[probe].key = key;
-                    cache_slots_[probe].gains = std::move(computed); // same capacity: no realloc
+                    // Copy from scratch into the cached slot (slot.gains
+                    // already sized at prepareToPlay — no realloc).
+                    auto& slot_gains = cache_slots_[probe].gains;
+                    const int n_copy = std::min(written, static_cast<int>(slot_gains.size()));
+                    for (int g_i = 0; g_i < n_copy; ++g_i)
+                        slot_gains[static_cast<size_t>(g_i)] =
+                            gain_scratch_[static_cast<size_t>(g_i)];
                     cache_ring_[(ring_head_ + cache_size_) % RING_CAP] = probe;
                     ++cache_size_;
                     gains_ptr = &cache_slots_[probe].gains;
@@ -110,26 +137,34 @@ void VBAPRenderer::processBlock(
                 }
             }
             if (!gains_ptr) {
-                // Table 100% full (unreachable at <=50% load) — compute without caching
+                // v0.8 P1.3 — Table 100% full path was the thread_local
+                // std::vector fallback. With the cache at <=50% load by
+                // construction this branch is unreachable; if it ever did
+                // fire pre-P1.3 it allocated on the audio thread. Now we
+                // fall through to the gain_scratch_ member buffer (already
+                // populated by the linear probe above when no key matched
+                // and no empty slot was found is impossible — but defend
+                // by computing into scratch and pointing gains_ptr there).
                 ++cache_misses_;
-                static thread_local std::vector<float> tmp;
-                tmp = AlgorithmAnalyticReference::vbap_gain(
-                    layout_, objects[obj].az_rad, objects[obj].el_rad);
+                (void)AlgorithmAnalyticReference::vbap_gain_into(
+                    layout_, objects[obj].az_rad, objects[obj].el_rad,
+                    gain_scratch_.data(),
+                    static_cast<int>(gain_scratch_.size()));
                 const float w_rad2 = objects[obj].width_rad;
                 if (w_rad2 > 1e-4f) {
                     const float w2 = w_rad2 / 3.14159265f;
-                    const float uniform2 = 1.0f / std::sqrt(static_cast<float>(tmp.size()));
+                    const float uniform2 = 1.0f / std::sqrt(static_cast<float>(gain_scratch_.size()));
                     float energy2 = 0.f;
-                    for (auto& g : tmp) {
+                    for (auto& g : gain_scratch_) {
                         g = (1.f - w2) * g + w2 * uniform2;
                         energy2 += g * g;
                     }
                     if (energy2 > 1e-8f) {
                         const float inv2 = 1.0f / std::sqrt(energy2);
-                        for (auto& g : tmp) g *= inv2;
+                        for (auto& g : gain_scratch_) g *= inv2;
                     }
                 }
-                gains_ptr = &tmp;
+                gains_ptr = &gain_scratch_;
             }
         }
         const auto& gains = *gains_ptr;

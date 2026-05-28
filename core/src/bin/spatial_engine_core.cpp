@@ -589,6 +589,16 @@ int main(int argc, char** argv) {
     spe::bin::ShmTelemetryEmitter shm_telemetry;
 #endif
 
+    // v0.8 P1.1 (DSP-1 / M2HOA-Q14) — ~1 Hz control-thread tick for the
+    // ambisonic decoder-type runtime apply. The audio thread cannot do
+    // the rebuild (it allocates), so the FIFO stores the new type and
+    // this tick rebuilds + atomically publishes via the lock-free
+    // double-buffer (see AmbiDecoder.h BINDING INVARIANT — 1 Hz keeps the
+    // inactive slot quiescent ~93 audio blocks before reuse). The forwarder
+    // is a no-op when the pending type already matches the applied type,
+    // so calling it every loop iteration is cheap.
+    auto last_ambi_decoder_apply = std::chrono::steady_clock::time_point{};
+
     while (!g_quit.load() && clock::now() < deadline) {
         auto now = clock::now();
 
@@ -603,6 +613,15 @@ int main(int argc, char** argv) {
         // ADR 0018 D-5 — drive the staleness watchdog (gated to ~1 Hz inside).
         spe::bin::servicePlayerStaleWatchdog(engine, now, last_stale_check,
                                              now_unix_ms);
+
+        // v0.8 P1.1 — ~1 Hz ambisonic decoder-type apply tick. Cheap (no-op
+        // when nothing changed); rebuilds + publishes via lock-free double-
+        // buffer when /sys/ambi_decoder_type drove a new type since the
+        // last apply.
+        if (now - last_ambi_decoder_apply >= std::chrono::seconds(1)) {
+            last_ambi_decoder_apply = now;
+            engine.applyPendingAmbiDecoderChange();
+        }
 
         // ADR 0019 PR4 (D4) — shm-gated 1 Hz diagnostics tick. poll_diagnostics
         // is called from production for the first time here (PR3 left it

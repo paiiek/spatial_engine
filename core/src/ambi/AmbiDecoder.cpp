@@ -126,22 +126,44 @@ static void buildPinvMatrix(int S, int K,
 }
 
 // ---- prepare / buildDecoderForOrder ----------------------------------------
+//
+// v0.8 P1.1 — Lock-free double-buffer publish. The control thread builds
+// the new matrices into the INACTIVE slot (1 - active_slot_.load(relaxed));
+// while building, the audio thread continues to read the still-published
+// active slot. After all MAX_ORDER matrices are built, store-release on
+// active_slot_ atomically swaps which slot the audio thread will pick up
+// on its next decode() acquire-load. CONTROL THREAD ONLY (allocates).
 
 void AmbiDecoder::prepare(const geometry::SpeakerLayout& layout) {
     num_speakers_ = static_cast<int>(layout.speakers.size());
     if (num_speakers_ <= 0) return;
+
+    // Build into the INACTIVE slot. relaxed load is fine — only this
+    // (control) thread writes active_slot_, so we know our own most recent
+    // value without ordering. On first prepare(), active_slot_ is 0 →
+    // inactive_slot=1 → publish to 1 on first call. Subsequent rebuilds
+    // bounce between 0 and 1.
+    const int active   = active_slot_.load(std::memory_order_relaxed);
+    const int inactive = 1 - active;
+
     for (int order = 1; order <= MAX_ORDER; ++order)
-        buildDecoderForOrder(layout, order);
+        buildDecoderForOrder(layout, order, inactive);
+
+    // Publish: all MAX_ORDER matrices in `inactive` are now fully built.
+    // store-release pairs with the audio thread's load-acquire in decode().
+    active_slot_.store(inactive, std::memory_order_release);
 }
 
-void AmbiDecoder::buildDecoderForOrder(const geometry::SpeakerLayout& layout, int order) {
+void AmbiDecoder::buildDecoderForOrder(const geometry::SpeakerLayout& layout,
+                                       int order, int slot) {
     const int S = num_speakers_;
     const int K = kK[order - 1];
 
     std::vector<double> E;
     buildEncodingMatrixE(layout, order, E);  // S0.5 single source of truth
 
-    auto& M = decode_matrices_[static_cast<size_t>(order - 1)];
+    auto& M = decode_matrices_[static_cast<size_t>(slot)]
+                              [static_cast<size_t>(order - 1)];
 
     // 5-way dispatch. All paths produce S×K float matrix in M.
     // decode() reads M unchanged — no type_ switch there (Principle 4).
@@ -190,6 +212,22 @@ void AmbiDecoder::buildDecoderForOrder(const geometry::SpeakerLayout& layout, in
 // CONTROL THREAD ONLY responsibility: do NOT add any switch on type_ here.
 // All decoder-type-specific logic lives in prepare() / buildDecoderForOrder().
 // See HOA Decoder Diversification plan Principles 2 and 4.
+//
+// v0.8 P1.1 — Lock-free double-buffer consume.
+//
+// We load active_slot_ ACQUIRE exactly ONCE per block and pin that slot
+// for the entire block (no torn read across an in-flight swap). The
+// store-release in prepare() synchronises-with this acquire so all matrix
+// bytes published by the control thread are visible.
+//
+// Click-free choice: 1-BLOCK HARD SWITCH on the block boundary. The
+// existing setOrder() flip already changes the active K mid-block-period
+// the same way (atomic relaxed read at top of decode), and the algorithm
+// dispatch (VBAP/DBAP/WFS/Ambi) is gated by per-renderer activity flags —
+// the engine has no architectural smoothness contract on decoder type
+// changes. A full crossfade was deemed unnecessary churn; if a future
+// listening test wants it, mirror the GainRamp pattern used in
+// VBAPRenderer.
 
 void AmbiDecoder::decode(int order, const float* const* sh_planar,
                           int num_samples, float* out_interleaved) const noexcept
@@ -197,7 +235,12 @@ void AmbiDecoder::decode(int order, const float* const* sh_planar,
     if (order < 1 || order > MAX_ORDER) order = 1;
     const int S = num_speakers_;
     const int K = kK[order - 1];
-    const float* M = decode_matrices_[static_cast<size_t>(order - 1)].data();
+    // Acquire pairs with release in prepare(). Single read per block —
+    // even if the control thread swaps mid-block (next block sees new
+    // slot), this block's S×K matrix pointer remains stable.
+    const int slot = active_slot_.load(std::memory_order_acquire);
+    const float* M = decode_matrices_[static_cast<size_t>(slot)]
+                                     [static_cast<size_t>(order - 1)].data();
 
     std::memset(out_interleaved, 0,
                 sizeof(float) * static_cast<size_t>(num_samples) * static_cast<size_t>(S));

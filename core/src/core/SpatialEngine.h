@@ -264,6 +264,21 @@ public:
     // or on a dedicated control timer in production).
     void updateLtcChase() noexcept                { ltc_chase_.update(); }
 
+    // v0.8 P1.1 (DSP-1 / M2HOA-Q14) — control-thread forwarder for the
+    // ambisonic decoder-type runtime apply. The audio-thread FIFO drain
+    // stores the new type via ambisonic_.setDecoderType() (atomic), but
+    // the actual matrix rebuild (which ALLOCATES) must happen here on the
+    // control thread. The rebuild publishes the new matrices via the
+    // AmbiDecoder lock-free double-buffer (see core/src/ambi/AmbiDecoder.h
+    // BINDING INVARIANT). MUST be called from a non-RT context — e.g. the
+    // ~1 Hz control tick in core/src/bin/spatial_engine_core.cpp. Calling
+    // it faster than ~one-per-audio-block would violate the 2-slot
+    // timing-slack invariant; the production cadence (1 Hz) is ~93 audio
+    // blocks of margin at 512/48k.
+    void applyPendingAmbiDecoderChange() {
+        ambisonic_.applyPendingDecoderTypeChange();
+    }
+
     bool getLtcCurrentTimecode(spe::sync::Timecode& out) const noexcept {
         return ltc_chase_.getCurrentTimecode(out);
     }

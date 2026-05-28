@@ -3,10 +3,31 @@
 // Converts K-channel B-format (ACN, K=(order+1)²) to N-speaker output.
 // Supports 5 decoder algorithms selectable via DecoderType (default PINV).
 // RT-safe: no allocation in decode(). All matrices pre-allocated in prepare().
+//
+// v0.8 audit P1.1 (DSP-1 / M2HOA-Q14) — runtime decoder-type switch via
+// LOCK-FREE DOUBLE-BUFFER. The pre-P1.1 layout was a single
+// std::array<std::vector<float>, MAX_ORDER>; calling prepare() from a
+// control-tick while the audio thread was inside decode() would reallocate
+// the buffer the audio thread was mid-read on (use-after-free / torn read).
+// The fix: two slots, each holding ALL MAX_ORDER decode matrices, with a
+// single atomic<int> active_slot_ published store-release on the control
+// thread and load-acquire once per block on the audio thread.
+//
+// BINDING INVARIANT — the 2-slot scheme is safe ONLY because the control-
+// thread rebuild cadence (~1 Hz) is ≥1 audio-block-period (~10.7 ms @
+// 512/48k) slower than the audio thread. The inactive slot is quiescent
+// ~93 blocks before the next reuse. If a future change ever drives the
+// apply rate faster than one-per-block, swap to an explicit quiescence
+// handshake (audio publishes last-consumed slot index; control waits until
+// the to-be-rebuilt slot ≠ last-consumed). The concurrency test
+// (build_relacy_off_rton) MUST drive RAPID back-to-back switches (faster
+// than the production 1 Hz tick) so it would FAIL if this slack is ever
+// removed — otherwise the test passes vacuously.
 
 #pragma once
 #include "geometry/SpeakerLayout.h"
 #include <array>
+#include <atomic>
 #include <vector>
 
 namespace spe::ambi {
@@ -70,10 +91,19 @@ public:
 private:
     int         num_speakers_ = 0;
     DecoderType type_         = DecoderType::PINV;
-    // decode_matrices_[order-1][s * K + k]; K = (order+1)².
-    std::array<std::vector<float>, MAX_ORDER> decode_matrices_;
 
-    void buildDecoderForOrder(const geometry::SpeakerLayout& layout, int order);
+    // v0.8 P1.1 — DOUBLE-BUFFER. 2 slots, each holds ALL MAX_ORDER
+    // decode matrices (NOT a per-order index, see BINDING INVARIANT above:
+    // one block must NOT mix order-2 from a new slot and order-3 from the
+    // old). decode_matrices_[slot][order-1][s * K + k]; K = (order+1)².
+    // The control thread builds the new matrices into the INACTIVE slot
+    // (1 - active_slot_), then publishes via store-release on active_slot_.
+    // The audio thread loads active_slot_ acquire ONCE per decode() block.
+    std::array<std::array<std::vector<float>, MAX_ORDER>, 2> decode_matrices_;
+    std::atomic<int> active_slot_{0};
+
+    void buildDecoderForOrder(const geometry::SpeakerLayout& layout,
+                              int order, int slot);
 };
 
 } // namespace spe::ambi

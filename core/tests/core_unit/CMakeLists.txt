@@ -292,6 +292,49 @@ add_executable(test_p_ambi test_p_ambi.cpp)
 target_link_libraries(test_p_ambi PRIVATE spe_core)
 add_test(NAME p_ambi COMMAND test_p_ambi)
 
+# v0.8 audit P1.2 — SN3D closed-form peak oracle. INDEPENDENT verification
+# (constants typed from the SN3D definition, NOT copied from
+# AmbisonicEncoder.cpp). Pins the m≠0 peak values so a future "fix" that
+# rewrites the encoder to maxN (peak=1) fails LOUDLY.
+add_executable(test_sn3d_constants test_sn3d_constants.cpp)
+target_link_libraries(test_sn3d_constants PRIVATE spe_core)
+add_test(NAME sn3d_constants COMMAND test_sn3d_constants)
+
+# v0.8 audit P1.1 — functional test: runtime /sys/ambi_decoder_type switch
+# actually changes the live decode matrix (M2HOA-Q14). Drives the control-
+# tick forwarder path through AmbisonicRenderer.
+add_executable(test_ambi_decoder_type_runtime_apply
+    test_ambi_decoder_type_runtime_apply.cpp)
+target_link_libraries(test_ambi_decoder_type_runtime_apply PRIVATE spe_core)
+add_test(NAME ambi_decoder_type_runtime_apply
+    COMMAND test_ambi_decoder_type_runtime_apply)
+
+# v0.8 audit P1.1 — concurrency stress test: RAPID back-to-back decoder-
+# type rebuilds against a concurrent decode() loop. Validates the lock-
+# free double-buffer (no UAF / torn read) and exercises the BINDING
+# timing-slack invariant (switches faster than 1 Hz → would FAIL if the
+# slack were removed → no vacuous pass).
+add_executable(test_ambi_decoder_type_swap_concurrent
+    test_ambi_decoder_type_swap_concurrent.cpp)
+target_link_libraries(test_ambi_decoder_type_swap_concurrent
+    PRIVATE spe_core Threads::Threads)
+add_test(NAME ambi_decoder_type_swap_concurrent
+    COMMAND test_ambi_decoder_type_swap_concurrent)
+# 200k decode + 50k rebuild iterations; ~52s on an unloaded host.
+# 120s timeout prevents flakes under parallel ctest -j load.
+set_tests_properties(ambi_decoder_type_swap_concurrent PROPERTIES TIMEOUT 120)
+
+# v0.8 audit P1.3 (DSP-3) — VBAP cold-miss RT-sentinel. Only meaningful
+# under SPATIAL_ENGINE_RT_ASSERTS=ON (build_rton). Forces a never-seen
+# direction through the audio-thread cold-miss path inside an explicit
+# SPE_RT_NO_ALLOC_SCOPE and asserts rt_alloc_violations()==0. Mirrors
+# p1_rt_no_alloc / shared_ring_backend_rt_sentinel gating.
+if(SPATIAL_ENGINE_RT_ASSERTS)
+    add_executable(test_vbap_cold_miss_rt_safe test_vbap_cold_miss_rt_safe.cpp)
+    target_link_libraries(test_vbap_cold_miss_rt_safe PRIVATE spe_core)
+    add_test(NAME vbap_cold_miss_rt_safe COMMAND test_vbap_cold_miss_rt_safe)
+endif()
+
 # v1c: BinauralMonitor pure-C++ HRTF pipeline tests
 add_executable(test_p_binaural_stub test_p_binaural_stub.cpp)
 target_link_libraries(test_p_binaural_stub PRIVATE spe_core)

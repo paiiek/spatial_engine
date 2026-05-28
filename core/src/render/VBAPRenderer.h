@@ -55,6 +55,14 @@ private:
     int cache_size_ = 0;
     uint64_t cache_hits_   = 0;
     uint64_t cache_misses_ = 0;
+
+    // v0.8 P1.3 (DSP-3) — audio-thread scratch for the cold-cache-miss VBAP
+    // compute. Sized at prepareToPlay() to num_speakers_; never reallocated
+    // afterwards. Replaces the pre-P1.3 std::vector temporaries inside
+    // AlgorithmAnalyticReference::vbap_gain() that allocated on the audio
+    // thread inside SPE_RT_NO_ALLOC_SCOPE(). Capacity is bounded by the
+    // fixed ramps_[64] cap above; prepareToPlay() asserts num_speakers ≤ 64.
+    std::vector<float> gain_scratch_;
 };
 
 } // namespace spe::render
