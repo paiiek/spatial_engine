@@ -22,6 +22,7 @@ a missing chromium binary skips at launch (mirrors test_coord_precision.py).
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -32,6 +33,13 @@ playwright_async = pytest.importorskip(
 from playwright.async_api import async_playwright, Error as PWError  # noqa: E402
 
 pytestmark = [pytest.mark.playwright, pytest.mark.asyncio]
+
+
+def _safe_json(s):
+    try:
+        return json.loads(s)
+    except (ValueError, TypeError):
+        return None
 
 
 # Spy that wraps the canvas 2d drawing primitives and counts invocations.
@@ -116,6 +124,40 @@ async def test_dashboard_canvas_mounts_and_draws_on_metrics(uvicorn_server: str)
             # (3) reset-demote button exists in the DOM.
             btn = await page.query_selector("#btn-reset-demote")
             assert btn is not None, "#btn-reset-demote not found in dashboard DOM"
+
+            # (4) AC6: clicking the reset button sends a binaural_reset_demote
+            # command over the /ws control plane. Spy on WebSocket.prototype.send
+            # (the real transport) so we observe the genuine click → internal
+            # ctrlSend → ws.send path against the live uvicorn /ws endpoint.
+            await page.evaluate(
+                """() => {
+                  window.__wsSent = [];
+                  const orig = WebSocket.prototype.send;
+                  WebSocket.prototype.send = function (data) {
+                    try { window.__wsSent.push(data); } catch (e) {}
+                    return orig.call(this, data);
+                  };
+                }"""
+            )
+            # The control /ws socket connects asynchronously after init().
+            # Drop the command until it is OPEN, so wait for ctrlSend to succeed.
+            await page.wait_for_function(
+                "() => window.__dashboard && window.__dashboard.ctrlSend"
+            )
+            await page.click("#btn-reset-demote")
+            await page.wait_for_function(
+                "() => (window.__wsSent || []).some("
+                "p => { try { return JSON.parse(p).type === 'binaural_reset_demote'; }"
+                " catch (e) { return false; } })",
+                timeout=5000,
+            )
+            sent = await page.evaluate("() => window.__wsSent")
+            parsed = [
+                p for p in (_safe_json(s) for s in sent) if p is not None
+            ]
+            assert {"type": "binaural_reset_demote"} in parsed, (
+                f"reset button must send binaural_reset_demote over /ws, got: {sent!r}"
+            )
         finally:
             await context.close()
             await browser.close()

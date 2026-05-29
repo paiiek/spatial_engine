@@ -131,3 +131,23 @@ def test_dispatch_noise_both(recorder):
 def test_dispatch_obj_pos_out_of_range(recorder):
     webgui_server._dispatch_to_osc({"type": "obj_pos", "n": 999, "azim": 0.0, "elev": 0.0, "dist": 0.0})
     assert recorder.calls == []
+
+
+# --- AC6: binaural reset-demote button end-to-end ---------------------------
+
+def test_dispatch_binaural_reset_demote(recorder):
+    """AC6: dashboard reset button → /sys/binaural_reset_demote ,i 1 on 9100."""
+    webgui_server._dispatch_to_osc({"type": "binaural_reset_demote"})
+    assert recorder.calls == [("/sys/binaural_reset_demote", (1,))]
+
+
+def test_dispatch_binaural_reset_demote_passes_through_ai_mode(monkeypatch):
+    """Control-plane command: not gated by the ADR 0013 AI-mode position guard."""
+    rec = _Recorder()
+    monkeypatch.setattr(webgui_server, "osc_send_fn", rec)
+    monkeypatch.setattr(webgui_server, "_bridge_mode", "ai")
+    webgui_server._dispatch_to_osc({"type": "binaural_reset_demote"})
+    assert rec.calls == [("/sys/binaural_reset_demote", (1,))], (
+        f"binaural_reset_demote is control-plane and must pass through AI mode, "
+        f"got: {rec.calls}"
+    )

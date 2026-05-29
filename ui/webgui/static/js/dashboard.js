@@ -162,17 +162,52 @@
     if (p99Chart) p99Chart.render();
   }
 
+  // --- Control-plane socket (/ws) for outbound commands (A-M5) -------------
+  // /ws/metrics is push-only; control commands (e.g. binaural_reset_demote)
+  // must go over the /ws control plane. Minimal own connection mirroring the
+  // ws_client.js exponential-back-off idiom (dashboard.html does NOT load the
+  // main-UI ws_client.js).
+  let ctrlWs = null;
+  let ctrlRetryDelay = 500;
+  let ctrlReconnectTimer = null;
+
+  function ctrlWsUrl() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    return `${proto}://${location.host}/ws`;
+  }
+
+  function ctrlConnect() {
+    if (ctrlWs && (ctrlWs.readyState === WebSocket.OPEN || ctrlWs.readyState === WebSocket.CONNECTING)) return;
+    ctrlWs = new WebSocket(ctrlWsUrl());
+    ctrlWs.onopen = () => { ctrlRetryDelay = 500; };
+    ctrlWs.onerror = (e) => console.warn("[dashboard] ctrl ws error", e);
+    ctrlWs.onclose = () => {
+      if (ctrlReconnectTimer) return;
+      ctrlReconnectTimer = setTimeout(() => {
+        ctrlReconnectTimer = null;
+        ctrlRetryDelay = Math.min(ctrlRetryDelay * 2, MAX_DELAY);
+        ctrlConnect();
+      }, ctrlRetryDelay);
+    };
+  }
+
+  function ctrlSend(payload) {
+    if (!ctrlWs || ctrlWs.readyState !== WebSocket.OPEN) {
+      console.warn("[dashboard] ctrl ws not connected, drop:", payload);
+      return;
+    }
+    ctrlWs.send(JSON.stringify(payload));
+  }
+
+  function onResetDemote() {
+    ctrlSend({ type: "binaural_reset_demote" });
+  }
+
   // --- Reset-demote button (DOM placed in A-M4; behavior wired in A-M5) -----
   function wireResetButton() {
     const btn = el("btn-reset-demote");
     if (!btn) return;
-    btn.addEventListener("click", () => {
-      // A-M5 wires the WS send. Placeholder: send on the metrics socket is
-      // not the control plane, so A-M5 will route via the /ws control socket.
-      if (window.__dashboard && typeof window.__dashboard.onResetDemote === "function") {
-        window.__dashboard.onResetDemote();
-      }
-    });
+    btn.addEventListener("click", onResetDemote);
   }
 
   // --- Boot ----------------------------------------------------------------
@@ -220,6 +255,7 @@
     renderCharts();
     wireResetButton();
     connect();
+    ctrlConnect();
   }
 
   // Expose a small surface for the playwright smoke test (and A-M5): inject a
@@ -227,6 +263,10 @@
   window.__dashboard = {
     handleMessage,
     connect,
+    onResetDemote,
+    // Expose ctrlSend so the playwright smoke can spy on outbound /ws sends
+    // without a live engine.
+    ctrlSend: (payload) => ctrlSend(payload),
     get charts() {
       return { cpu: cpuChart, xrun: xrunChart, p99: p99Chart };
     },

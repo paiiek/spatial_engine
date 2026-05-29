@@ -367,6 +367,12 @@ def _dispatch_to_osc(msg: dict) -> dict | None:
             osc_send_fn(f"/noise/{ch}/type", str(ntype))
         if osc_send_fn and ngain is not None:
             osc_send_fn(f"/noise/{ch}/gain", float(ngain))
+    elif mtype == "binaural_reset_demote":
+        # Control-plane only (not in _POSITION_MTYPES) → passes through in any
+        # bridge mode. Engine decodes /sys/binaural_reset_demote ,i 1 →
+        # CommandTag::SysBinauralResetDemote (CommandDecoder.cpp:429).
+        if osc_send_fn:
+            osc_send_fn("/sys/binaural_reset_demote", 1)
     else:
         logger.debug("Unknown message type: %s", mtype)
 
