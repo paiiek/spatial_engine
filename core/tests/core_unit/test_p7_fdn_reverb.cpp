@@ -64,24 +64,32 @@ static int test_fdn_idle_denormal() {
 
 // ---------------------------------------------------------------------------
 // p7_fdn_decay
-// Feed impulse; collect RMS per block for 32 blocks.
-// RMS should be monotonically non-increasing after the first block.
+// Feed impulse; collect RMS per block for kBlocks blocks at kBlock=4096.
+// kBlock=4096 (~0.085 s) > D_max=3001 samples so each block window contains
+// at least one full pass through every delay line — early-reflection
+// transients are smoothed out within block 0, and the per-block RMS series
+// is monotonically non-increasing thereafter. (Pre-DSP-6 the FDN had a
+// 1-sample effective delay; this test passed vacuously because the signal
+// decayed within one 64-sample block. The post-fix FDN has the intended
+// D_i-sample delays and produces an early-reflection cluster that violates
+// monotone-per-64-sample-block — see open-questions.md DSP-6 / P2.3.)
 // ---------------------------------------------------------------------------
 static int test_fdn_decay() {
     spe::reverb::FdnReverb fdn;
-    fdn.prepareToPlay(48000.0, 64);
+    fdn.prepareToPlay(48000.0, 4096);
+    fdn.setFeedback(0.5f);   // short T60 keeps the test brisk
+    fdn.setDamping(0.f);     // isolate delay-line decay; no LP smear
 
-    const int kBlock = 64;
-    const int kBlocks = 32;
+    const int kBlock = 4096;
+    const int kBlocks = 16;
     std::vector<float> buf(kBlock, 0.f);
 
-    // Impulse block.
+    // Impulse block — contains the early-reflection cluster (D_min ≈ 1499 to
+    // D_max ≈ 3001 samples ≪ 4096), so block-0 RMS captures the peak.
     buf[0] = 1.f;
     fdn.process(buf.data(), kBlock);
     float prevRMS = blockRMS(buf.data(), kBlock);
 
-    // Track whether RMS ever goes up significantly (allow tiny floating-point noise).
-    // Accept monotone within a generous 5% tolerance.
     constexpr float kTol = 1.05f;
     int violations = 0;
     for (int b = 1; b < kBlocks; ++b) {

@@ -252,12 +252,11 @@ add_executable(test_p7_fdn_reverb test_p7_fdn_reverb.cpp)
 target_link_libraries(test_p7_fdn_reverb PRIVATE spe_core)
 add_test(NAME p7_fdn_reverb COMMAND test_p7_fdn_reverb)
 
-# v0.8 audit P3 — independent-oracle test additions (P3.2, P3.4).
-# Both verify closed-form expected values derived from textbook formulas,
+# v0.8 audit P3 — independent-oracle test additions (P3.2, P3.3, P3.4).
+# All verify closed-form expected values derived from textbook formulas,
 # NOT from the code under test. P3.7 extends test_p4_flood_malformed in-place.
-# P3.3 (FDN T60) is DEFERRED: the oracle exposed DSP-6 (FdnReverb read-pointer
-# bug — effective delay is 1 sample regardless of kBaseDelaysSamples). Filed in
-# open-questions.md; will land as P2.3 DSP fix + reinstated T60 test.
+# P3.3 (FDN T60) landed in P2.3 alongside the DSP-6 read-pointer fix; the
+# oracle would fail by ~100× against the pre-fix code.
 
 # P3.2 — SN3D absolute-gain golden vector (encoder × SAMPLING decoder oracle).
 add_executable(test_p_ambi_absolute_gain_golden
@@ -270,6 +269,12 @@ add_test(NAME p_ambi_absolute_gain_golden
 add_executable(test_p_hrtf_lookup_interp test_p_hrtf_lookup_interp.cpp)
 target_link_libraries(test_p_hrtf_lookup_interp PRIVATE spe_core)
 add_test(NAME p_hrtf_lookup_interp COMMAND test_p_hrtf_lookup_interp)
+
+# P3.3 — FDN T60 accuracy oracle (closed-form T60 = -3·D_mean/(sr·log10(g))).
+# Sequenced with the DSP-6 fix in src/reverb/FdnReverb.cpp (see commit log).
+add_executable(test_p7_fdn_t60_accuracy test_p7_fdn_t60_accuracy.cpp)
+target_link_libraries(test_p7_fdn_t60_accuracy PRIVATE spe_core)
+add_test(NAME p7_fdn_t60_accuracy COMMAND test_p7_fdn_t60_accuracy)
 
 # ADM-OSC tests
 add_executable(test_p_adm_osc test_p_adm_osc.cpp)

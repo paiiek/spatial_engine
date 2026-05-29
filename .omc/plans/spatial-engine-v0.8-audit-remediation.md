@@ -126,7 +126,7 @@
 - [x] **P2 commit**
 - [ ] **P3.1** VST3 state-contract test in core CI (Test-1)
 - [x] **P3.2** ambisonic absolute-gain golden (Test-2) — `test_p_ambi_absolute_gain_golden.cpp`; 6-spk octahedral SAMPLING oracle, 3-way cross-check ±1e-5; bf0b266
-- [ ] **P3.3** FDN T60 test (Test-3) — DEFERRED: DSP-6 exposes FdnReverb read-pointer bug (effective delay=1 sample); see open-questions.md DSP-6; T60 test authored but held for P2.3 fix
+- [x] **P3.3** FDN T60 test (Test-3) — landed in **P2.3** (one-line DSP-6 fix `FdnReverb.cpp:90-99 readPos = writePos` + `test_p7_fdn_t60_accuracy.cpp` peak-RMS oracle ±30 % tol + `test_p7_fdn_decay` rewritten for kBlock=4096 to absorb early-reflection cluster). 101/101 ctest, 225/4 pytest.
 - [x] **P3.4** HrtfLookup interpolation test (Test-4) — `test_p_hrtf_lookup_interp.cpp`; NN oracle vs analytic blend, brute-force + KdTree3D parity; bf0b266
 - [ ] **P3.5** vst3_bind_collision correctness + RUN_SERIAL (Test-5)
 - [ ] **P3.6** OSC sleep-barrier → event sync (Test-6)

@@ -86,12 +86,17 @@ void FdnReverb::process(float* inOut, int numSamples) noexcept {
         const float input = inOut[n];
 
         // Read delay-line outputs.
+        // dl.writePos always sits in [0, dl.length) and the next write will
+        // overwrite that slot; before that overwrite, buf[writePos] is the
+        // sample written dl.length iterations ago — the oldest in the ring,
+        // i.e. a true D_i-sample delay. (Pre-fix the read was at writePos-1,
+        // which collapsed every line to a 1-sample delay regardless of length
+        // and produced T60 ~100× smaller than the kBaseDelaysSamples implied —
+        // see open-questions.md DSP-6 / commit bf0b266 for the diagnosis.)
         float delayOut[kLines];
         for (int i = 0; i < kLines; ++i) {
             auto& dl = lines_[i];
-            int readPos = dl.writePos - 1;
-            if (readPos < 0) readPos += dl.length;
-            delayOut[i] = dl.buf[readPos];
+            delayOut[i] = dl.buf[dl.writePos];
         }
 
         // Hadamard mix (normalized by 1/4).

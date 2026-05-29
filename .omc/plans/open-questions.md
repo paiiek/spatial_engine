@@ -191,7 +191,7 @@ Round-2 Critic R1 review applied 4 CRITICAL + 4 MAJOR + 2 MINOR fixes. M2HOA-Q i
 
 ## v0.8 audit P3 spinoff — 2026-05-29
 
-- [ ] **DSP-6 (v0.8 audit P3.3 spinoff, 2026-05-29) — FdnReverb effective delay is 1 sample regardless of `kBaseDelaysSamples[i]`**
+- [x] **DSP-6 (v0.8 audit P3.3 spinoff, 2026-05-29) — FdnReverb effective delay is 1 sample regardless of `kBaseDelaysSamples[i]`** — **RESOLVED 2026-05-29 by P2.3.** `FdnReverb.cpp:90-99` now reads `delayOut[i] = dl.buf[dl.writePos]` (oldest slot pre-overwrite), restoring the intended D_i-sample delay. T60 oracle reinstated as `test_p7_fdn_t60_accuracy` (peak-RMS reference, ±30 % tolerance) — measured T60 for `feedback ∈ {0.5, 0.7, 0.9}` matches D_mean formula within 0.6–15.4 %. `test_p7_fdn_decay` rewritten with kBlock=4096 to absorb the early-reflection cluster (the broken pre-fix code passed it only because the signal decayed within one 64-sample block). NO_JUCE ctest 101/101 green, pytest 225/4-skip unchanged.
 
   While implementing the P3.3 T60 accuracy oracle test, the closed-form expected T60 (derived from configured `feedback` and mean delay length via `T60 = -3·D_mean/(fs·log10(g))`) mismatched the measured T60 by 100×+. Root cause: `FdnReverb.cpp:92` reads `readPos = dl.writePos - 1`, i.e. the most-recently-written sample, instead of `readPos = dl.writePos` (which after the `writePos++` / wrap-around increment points to the OLDEST sample, giving a true `dl.length`-sample delay). The `dl.length` field controls buffer allocation only — it is never used as the read offset. As a result the FDN acts as a 1-sample-delay feedback loop with Hadamard mixing: it produces amplitude decay (feedback < 1) but NOT the dense reverberant tail a feedback delay network is designed to produce.
 
