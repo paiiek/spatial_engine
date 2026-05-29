@@ -8,9 +8,19 @@
 //   • read steady_clock (vDSO on Linux — no syscall, no alloc),
 //   • update O(1) scalar estimators (EWMA mean, peak tracker, P² p99),
 //   • relaxed store of three scalar atomics that the control thread loads.
-// There is NO array, NO reservoir, NO sort, NO double-buffer — hence no
-// torn-read window and no cross-thread data race (single-value relaxed
-// atomics only). See plan §3 RT guards + ADR DD-B (B1, scalar estimator).
+// There is NO array, NO reservoir, NO sort, NO double-buffer.
+//
+// Concurrency contract (review CONCERN-1): the "no data race" claim applies to
+// the PUBLISHED scalar atomics (cpu_pct_q_/peak_pct_q_/p99_us_q_), which the
+// control thread loads relaxed while the audio thread stores them relaxed —
+// single-value, no torn-read window. The estimator INTERNALS (ewma/peak/P²
+// markers below) are plain audio-thread-local scalars, NOT atomic. They are
+// safe ONLY because recordBlockStart/End run exclusively on the audio thread
+// and reset() runs on the control thread under the backend prepare/callback
+// exclusion contract — i.e. reset() MUST NOT overlap recordBlockStart/End
+// (prepareToPlay is called while the audio callback is stopped). If that
+// precondition is violated the internals race. See plan §3 RT guards + ADR
+// DD-B (B1, scalar estimator).
 //
 // CPU% = block_wall_us / block_budget_us × 100, where
 //   block_budget_us = num_frames / sample_rate × 1e6.
@@ -108,9 +118,9 @@ private:
     }
 
     inline std::uint32_t p99Estimate() const noexcept {
-        // Before the P² markers are warm (< 5 samples) the running max in
-        // q_[count_-1] is the best estimate; once warm, marker 3 (0-based) is
-        // the p99 height.
+        // Before the P² markers are warm (< 5 samples) we return the LAST
+        // inserted sample (q_[count_-1], pre-sort warmup) — NOT a running max;
+        // once warm, marker 3 (0-based) is the p99 height.
         double est = (count_ >= 5) ? q_[3]
                                    : (count_ > 0 ? q_[count_ - 1] : 0.0);
         if (est < 0.0) est = 0.0;

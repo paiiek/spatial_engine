@@ -4,6 +4,7 @@
 #include "audio_io/AudioCallback.h"
 #include "core/Constants.h"
 #include "core/SpatialEngine.h"
+#include "bin/MetricsEmit.h"
 #include "bin/PlayerStaleWatchdog.h"
 #include "geometry/LayoutLoader.h"
 #include "ipc/CommandDecoder.h"
@@ -642,25 +643,17 @@ int main(int argc, char** argv) {
         if (now - last_metrics_emit >= std::chrono::seconds(1)) {
             last_metrics_emit = now;
             auto& obs = engine.observabilityCounters();
-            char kv[64];
-            std::snprintf(kv, sizeof(kv), "cpu_pct=%u",
-                          obs.cpu_pct_audio_thread.load(std::memory_order_relaxed));
-            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
-            std::snprintf(kv, sizeof(kv), "cpu_peak_pct=%u",
-                          engine.cpuMeter().peakPct());
-            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
-            std::snprintf(kv, sizeof(kv), "p99_us=%u",
-                          obs.per_block_time_p99_us.load(std::memory_order_relaxed));
-            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
-            std::snprintf(kv, sizeof(kv), "xrun_count=%llu",
-                          static_cast<unsigned long long>(driver->xrunCount()));
-            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
-            std::snprintf(kv, sizeof(kv), "engine_overrun_count=%llu",
-                          static_cast<unsigned long long>(engine.engineOverrunCount()));
-            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
-            std::snprintf(kv, sizeof(kv), "binaural_demote_count=%u",
-                          engine.binauralIsRuntimeDemoted() ? 1u : 0u);
-            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
+            // Shared 6-field emit (review CONCERN-2): identical builder as the
+            // e2e test exercises. Loads the scalar atomics / device counter,
+            // then formats the ",s" key=value wire messages.
+            spe::bin::emitSysMetrics(
+                engine.oscBackend(),
+                obs.cpu_pct_audio_thread.load(std::memory_order_relaxed),
+                engine.cpuMeter().peakPct(),
+                obs.per_block_time_p99_us.load(std::memory_order_relaxed),
+                static_cast<std::uint64_t>(driver->xrunCount()),
+                static_cast<std::uint64_t>(engine.engineOverrunCount()),
+                engine.binauralIsRuntimeDemoted() ? 1u : 0u);
         }
 
         // ADR 0019 PR4 (D4) — shm-gated 1 Hz diagnostics tick. poll_diagnostics

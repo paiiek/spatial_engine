@@ -1026,7 +1026,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     // normal fall-through exit, fold it into the EWMA/peak/P² estimators, and
     // publish the scalar results into the single-owner ObservabilityCounters.
     // O(1) + relaxed scalar atomic stores only — no alloc/lock/syscall.
-    cpu_meter_.recordBlockEnd(block.num_frames, block.sample_rate);
+    // Use the engine's canonical sample_rate_ (set in prepareToPlay) for the
+    // block budget, matching the rest of audioBlock (NIT-2). Under all current
+    // backends block.sample_rate == sample_rate_; the member is authoritative.
+    cpu_meter_.recordBlockEnd(block.num_frames, sample_rate_);
     obs_counters_.cpu_pct_audio_thread.store(cpu_meter_.cpuPct(),
                                              std::memory_order_relaxed);
     obs_counters_.per_block_time_p99_us.store(cpu_meter_.p99Us(),

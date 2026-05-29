@@ -11,19 +11,24 @@
 //      overrun guard must bump engine_overrun_count without taking a wall
 //      sample.
 //   5. Handshake client → engine so the reply peer is captured.
-//   6. Emit /sys/metrics exactly as core/src/bin/spatial_engine_core.cpp's
-//      1 Hz tick does (one ,s key=value message per field — the production
-//      emit code path under test).
+//   6. Emit /sys/metrics via spe::bin::emitSysMetrics() — the SAME shared
+//      builder the binary's 1 Hz tick calls (review CONCERN-2). One ,s
+//      key=value message per field; the production formatting code path is
+//      genuinely under test, not a reimplementation.
 //   7. recvfrom() each message, parse "key=value", assert field presence +
-//      value ranges (cpu_pct∈[0,100], p99_us≥0, xrun_count present) and that
-//      engine_overrun_count > 0.
+//      value ranges (cpu_pct∈[0,100], p99_us≥0) and that engine_overrun_count
+//      > 0 and that xrun_count reflects the injected backend xrun value.
+//   8. Emit a second time with a LARGER injected xrun value and assert
+//      xrun_count is monotonic non-decreasing (AC1 xrun_count monotonic /
+//      = driver->xrunCount()).
 //
 // We construct the engine + emit directly (not via the binary) so the test is
-// hermetic. The emit field formatting is intentionally identical to the
-// binary's so the wire shape is exercised.
+// hermetic, but the emit goes through the shared helper so the wire shape and
+// field formatting are the actual production code.
 
 #include "core/SpatialEngine.h"
 #include "audio_io/AudioCallback.h"
+#include "bin/MetricsEmit.h"
 #include "ipc/Command.h"
 #include "core/Constants.h"
 #include "util/RtAssertNoAlloc.h"
@@ -38,6 +43,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -200,104 +206,120 @@ int main() {
         return 1;
     }
 
-    // 6. Emit /sys/metrics — IDENTICAL field formatting to the binary's tick.
+    // 6/7. Emit /sys/metrics via the SHARED production builder and validate.
+    //
+    // We drive the same spe::bin::emitSysMetrics() the binary's 1 Hz tick calls
+    // (review CONCERN-2). The backend xrun_count is INJECTED here (the null
+    // backend has no device counter) so we can assert AC1: xrun_count reflects
+    // the passed-in driver xrun value, and is monotonic non-decreasing across
+    // emits.
     auto& obs = engine.observabilityCounters();
-    char kvbuf[64];
-    std::snprintf(kvbuf, sizeof(kvbuf), "cpu_pct=%u",
-                  obs.cpu_pct_audio_thread.load(std::memory_order_relaxed));
-    engine.oscBackend().sendReply("/sys/metrics", ",s", kvbuf);
-    std::snprintf(kvbuf, sizeof(kvbuf), "cpu_peak_pct=%u", engine.cpuMeter().peakPct());
-    engine.oscBackend().sendReply("/sys/metrics", ",s", kvbuf);
-    std::snprintf(kvbuf, sizeof(kvbuf), "p99_us=%u",
-                  obs.per_block_time_p99_us.load(std::memory_order_relaxed));
-    engine.oscBackend().sendReply("/sys/metrics", ",s", kvbuf);
-    std::snprintf(kvbuf, sizeof(kvbuf), "xrun_count=%llu", 0ull);  // null backend: no device
-    engine.oscBackend().sendReply("/sys/metrics", ",s", kvbuf);
-    std::snprintf(kvbuf, sizeof(kvbuf), "engine_overrun_count=%llu",
-                  static_cast<unsigned long long>(engine.engineOverrunCount()));
-    engine.oscBackend().sendReply("/sys/metrics", ",s", kvbuf);
-    std::snprintf(kvbuf, sizeof(kvbuf), "binaural_demote_count=%u",
-                  engine.binauralIsRuntimeDemoted() ? 1u : 0u);
-    engine.oscBackend().sendReply("/sys/metrics", ",s", kvbuf);
 
-    // 7. Drain the 6 messages and validate.
-    bool seen_cpu = false, seen_peak = false, seen_p99 = false,
-         seen_xrun = false, seen_overrun = false, seen_demote = false;
-    long long overrun_val = -1;
+    // emitAndDrain: emit the 6 fields with the given injected backend xrun,
+    // drain + parse the 6 messages into out_fields (key -> parsed value).
+    // Returns false (and prints a FAIL line) on any wire/parse error.
+    auto emitAndDrain = [&](std::uint64_t backend_xrun,
+                            std::map<std::string, long long>& out_fields) -> bool {
+        spe::bin::emitSysMetrics(
+            engine.oscBackend(),
+            obs.cpu_pct_audio_thread.load(std::memory_order_relaxed),
+            engine.cpuMeter().peakPct(),
+            obs.per_block_time_p99_us.load(std::memory_order_relaxed),
+            backend_xrun,
+            static_cast<std::uint64_t>(engine.engineOverrunCount()),
+            engine.binauralIsRuntimeDemoted() ? 1u : 0u);
 
-    for (int i = 0; i < 6; ++i) {
-        uint8_t rx[256] = {0};
-        struct sockaddr_in from{};
-        socklen_t fromlen = sizeof(from);
-        ssize_t n = ::recvfrom(client.fd, rx, sizeof(rx), 0,
-                               reinterpret_cast<struct sockaddr*>(&from), &fromlen);
-        if (n <= 0) {
-            std::fprintf(stderr, "FAIL: only received %d /sys/metrics messages\n", i);
-            engine.releaseResources();
-            ::close(client.fd);
-            return 1;
-        }
-        const std::string kv = parseMetricsKv(rx, n);
-        if (kv.empty()) {
-            std::fprintf(stderr, "FAIL: msg %d not a /sys/metrics ,s packet\n", i);
-            engine.releaseResources();
-            ::close(client.fd);
-            return 1;
-        }
-        std::string key; long long val = 0;
-        if (!splitKv(kv, key, val)) {
-            std::fprintf(stderr, "FAIL: malformed kv '%s'\n", kv.c_str());
-            engine.releaseResources();
-            ::close(client.fd);
-            return 1;
-        }
-        if (key == "cpu_pct") {
-            seen_cpu = true;
-            if (val < 0 || val > 100) {
-                std::fprintf(stderr, "FAIL: cpu_pct=%lld out of [0,100]\n", val);
-                engine.releaseResources(); ::close(client.fd); return 1;
+        out_fields.clear();
+        for (int i = 0; i < 6; ++i) {
+            uint8_t rx[256] = {0};
+            struct sockaddr_in from{};
+            socklen_t fromlen = sizeof(from);
+            ssize_t n = ::recvfrom(client.fd, rx, sizeof(rx), 0,
+                                   reinterpret_cast<struct sockaddr*>(&from), &fromlen);
+            if (n <= 0) {
+                std::fprintf(stderr, "FAIL: only received %d /sys/metrics messages\n", i);
+                return false;
             }
-        } else if (key == "cpu_peak_pct") {
-            seen_peak = true;
-            if (val < 0 || val > 100) {
-                std::fprintf(stderr, "FAIL: cpu_peak_pct=%lld out of [0,100]\n", val);
-                engine.releaseResources(); ::close(client.fd); return 1;
+            const std::string kv = parseMetricsKv(rx, n);
+            if (kv.empty()) {
+                std::fprintf(stderr, "FAIL: msg %d not a /sys/metrics ,s packet\n", i);
+                return false;
             }
-        } else if (key == "p99_us") {
-            seen_p99 = true;
-            if (val < 0) {
-                std::fprintf(stderr, "FAIL: p99_us=%lld < 0\n", val);
-                engine.releaseResources(); ::close(client.fd); return 1;
+            std::string key; long long val = 0;
+            if (!splitKv(kv, key, val)) {
+                std::fprintf(stderr, "FAIL: malformed kv '%s'\n", kv.c_str());
+                return false;
             }
-        } else if (key == "xrun_count") {
-            seen_xrun = true;
-        } else if (key == "engine_overrun_count") {
-            seen_overrun = true;
-            overrun_val = val;
-        } else if (key == "binaural_demote_count") {
-            seen_demote = true;
+            out_fields[key] = val;
         }
-    }
+        return true;
+    };
 
-    if (!(seen_cpu && seen_peak && seen_p99 && seen_xrun && seen_overrun && seen_demote)) {
-        std::fprintf(stderr,
-                     "FAIL: missing field(s): cpu=%d peak=%d p99=%d xrun=%d "
-                     "overrun=%d demote=%d\n",
-                     seen_cpu, seen_peak, seen_p99, seen_xrun, seen_overrun, seen_demote);
+    auto fail = [&]() -> int {
         engine.releaseResources();
         ::close(client.fd);
         return 1;
+    };
+
+    // First emit: inject a NONZERO backend xrun so xrun_count is exercised.
+    const std::uint64_t kXrun1 = 7;
+    std::map<std::string, long long> f1;
+    if (!emitAndDrain(kXrun1, f1)) return fail();
+
+    static const char* kRequired[] = {
+        "cpu_pct", "cpu_peak_pct", "p99_us",
+        "xrun_count", "engine_overrun_count", "binaural_demote_count"};
+    for (const char* k : kRequired) {
+        if (f1.find(k) == f1.end()) {
+            std::fprintf(stderr, "FAIL: missing field '%s'\n", k);
+            return fail();
+        }
     }
-    if (overrun_val <= 0) {
-        std::fprintf(stderr, "FAIL: engine_overrun_count=%lld (expected > 0)\n", overrun_val);
-        engine.releaseResources();
-        ::close(client.fd);
-        return 1;
+    if (f1["cpu_pct"] < 0 || f1["cpu_pct"] > 100) {
+        std::fprintf(stderr, "FAIL: cpu_pct=%lld out of [0,100]\n", f1["cpu_pct"]);
+        return fail();
+    }
+    if (f1["cpu_peak_pct"] < 0 || f1["cpu_peak_pct"] > 100) {
+        std::fprintf(stderr, "FAIL: cpu_peak_pct=%lld out of [0,100]\n", f1["cpu_peak_pct"]);
+        return fail();
+    }
+    if (f1["p99_us"] < 0) {
+        std::fprintf(stderr, "FAIL: p99_us=%lld < 0\n", f1["p99_us"]);
+        return fail();
+    }
+    if (f1["engine_overrun_count"] <= 0) {
+        std::fprintf(stderr, "FAIL: engine_overrun_count=%lld (expected > 0)\n",
+                     f1["engine_overrun_count"]);
+        return fail();
+    }
+    // AC1: xrun_count == injected backend xrun value.
+    if (f1["xrun_count"] != static_cast<long long>(kXrun1)) {
+        std::fprintf(stderr, "FAIL: xrun_count=%lld != injected %llu\n",
+                     f1["xrun_count"], static_cast<unsigned long long>(kXrun1));
+        return fail();
+    }
+
+    // Second emit: inject a LARGER backend xrun and assert monotonic
+    // non-decrease + exact match (AC1 xrun_count monotonic / = driver value).
+    const std::uint64_t kXrun2 = 12;
+    std::map<std::string, long long> f2;
+    if (!emitAndDrain(kXrun2, f2)) return fail();
+    if (f2["xrun_count"] != static_cast<long long>(kXrun2)) {
+        std::fprintf(stderr, "FAIL: 2nd xrun_count=%lld != injected %llu\n",
+                     f2["xrun_count"], static_cast<unsigned long long>(kXrun2));
+        return fail();
+    }
+    if (f2["xrun_count"] < f1["xrun_count"]) {
+        std::fprintf(stderr, "FAIL: xrun_count not monotonic (%lld -> %lld)\n",
+                     f1["xrun_count"], f2["xrun_count"]);
+        return fail();
     }
 
     engine.releaseResources();
     ::close(client.fd);
-    std::printf("PASS test_p_sys_metrics_extended (6 /sys/metrics fields, "
-                "engine_overrun_count=%lld)\n", overrun_val);
+    std::printf("PASS test_p_sys_metrics_extended (6 /sys/metrics fields via "
+                "shared emitSysMetrics; engine_overrun_count=%lld; "
+                "xrun_count %lld->%lld monotonic)\n",
+                f1["engine_overrun_count"], f1["xrun_count"], f2["xrun_count"]);
     return 0;
 }
