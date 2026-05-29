@@ -203,6 +203,15 @@ PySide6 `NoisePanel` 또는 WebSocket `type: "noise"` 메시지로 채널별 whi
 | `/noise/{ch}/type` | `,s "white"\|"pink"` | 채널별 노이즈 종류 |
 | `/noise/{ch}/gain` | `,f gain_db` | 채널별 게인 (≤ -60 dB → 무음) |
 
+### 실시간 메트릭 대시보드 (`/dashboard`)
+
+브라우저에서 `http://<서버-IP>:8000/dashboard` 접속 — 엔진 텔레메트리 시각화 대시보드 (v0.9 Lane A, 자세한 채널 명세는 ADR 0020 + `docs/TESTING.md` §A).
+
+- 엔진이 1Hz 로 방출하는 `/sys/metrics` 를 `osc_bridge` 가 분류 → 서버 `/ws/metrics` WebSocket 으로 push → self-hosted canvas 미니차트로 렌더 (외부 CDN 의존 0).
+- 패널: 엔진 상태 바 / CPU avg·peak·p99·xrun 차트 (60초 롤링) / Binaural demote 상태 + 리셋 버튼 / 경고 로그 (최근 50) / object-activity 그리드 (정적 스캐폴드).
+- **리셋 버튼**: binaural runtime demote 를 `/sys/binaural_reset_demote ,i 1` 로 해제.
+- 메트릭 의미·테스트 실행은 `docs/TESTING.md` §A 참조.
+
 ### vid2spatial 브리지 제어
 
 헤더 우측의 `vid2spatial [시작] [정지]` 버튼:

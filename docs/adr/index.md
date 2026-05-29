@@ -21,6 +21,7 @@ Architecture Decision Records for the Spatial Engine. Confirm a record's authori
 | 0017 | `0017-runtime-demote-telemetry.md` | Runtime demote telemetry | see file |
 | 0018 | `0018-phase-b-sync-handlers.md` | Phase B sync handlers | Accepted (shipped `9311902`) |
 | 0019 | `0019-phase-c-pcm-ipc-shm-ring.md` | Phase C PCM IPC (shm ring) | Accepted (shipping; PR1–PR5 merged, PR6/PR7 remain) |
+| 0020 | `0020-sys-metrics-channel.md` | `/sys/metrics` 1 Hz telemetry channel | Accepted (shipped v0.9 Lane A) |
 | — | `vid2spatial_osc_contract.md` | vid2spatial OSC contract (reference) | reference doc |
 
 ## Numbering notes

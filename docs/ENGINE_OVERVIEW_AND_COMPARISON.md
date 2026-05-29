@@ -172,7 +172,7 @@ ADR 인덱스: `docs/adr/index.md`.
 5. **HRTF 데이터셋이 KEMAR 단독** — 상용은 보통 SADIE / IRCAM Listen / CIPIC 등 다중 데이터셋 제공. SOFA loader 는 일반화 가능.
 6. **Atmos 인증 안 됨** — Dolby Atmos 워크플로우와 직접 호환 안 됨 (BWF ADM 포맷은 공유하나 metadata 매핑 차이).
 7. **MPEG-H 미지원** — ATSC 3.0 / 차세대 방송 워크플로우 미진입.
-8. **Real-time monitoring UI 부재** — 텔레메트리 채널은 있는데 시각화 대시보드 없음.
+8. **Real-time monitoring UI — 기본 대시보드 제공** (v0.9 Lane A) — WebGUI `/dashboard` 라우트가 self-hosted canvas 미니차트(외부 CDN 0)로 엔진 텔레메트리를 시각화한다. 엔진이 1Hz 로 방출하는 `/sys/metrics`(cpu_pct/cpu_peak_pct/p99_us/xrun_count/engine_overrun_count/binaural_demote_count, `,s` key=value — ADR 0020) 를 `osc_bridge` 가 분류해 `/ws/metrics` 로 push, CPU avg/peak·xrun Δ·p99 차트 + 경고 로그 + binaural demote 리셋 버튼을 렌더. **범위 한정**: 텔레메트리는 1Hz 갱신(서브-초 트레이스 아님), cpu_peak_pct 는 [0,100] 클램프, binaural_demote_count 는 0/1 sticky 플래그(누적 카운트 아님), object-activity 그리드는 정적 스캐폴드(라이브 배선 미완). 상용 컨트롤러급 분석/스냅샷 워크플로우는 여전히 미숙(#4 참조).
 
 ---
 

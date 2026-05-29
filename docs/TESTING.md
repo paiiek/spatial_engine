@@ -181,6 +181,65 @@ xdg-open http://localhost:8000  # 또는 직접 접속
 
 ---
 
+## A. 실시간 메트릭 대시보드 (v0.9 Lane A)
+
+WebGUI 에 엔진 텔레메트리 시각화 대시보드가 추가되었습니다. 채널 명세는 [ADR 0020](adr/0020-sys-metrics-channel.md), README [WebGUI 사용법](../README.md#webgui-사용법) 참조.
+
+### A.1 접근 방법
+
+```bash
+# 엔진 + WebGUI 서버를 §3 절차대로 띄운 뒤
+xdg-open http://localhost:8000/dashboard   # 또는 직접 접속
+```
+
+- **`/dashboard`** — FastAPI `@app.get("/dashboard")` 가 `static/dashboard.html` 서빙. 외부 CDN 의존 0 (self-hosted canvas 미니차트, `static/js/{minichart,dashboard}.js` 만 로드).
+- **`/ws/metrics`** — 대시보드 전용 WebSocket push 채널. 구독 즉시 last-snapshot 1개 수신(latest-wins) 후 1Hz broadcast. 기존 `/ws`(positional/제어용)와 분리.
+- 데이터 흐름: 엔진 1Hz `/sys/metrics` → `osc_bridge.py` 분류 → `server.py` `MetricsHub`(최신 snapshot 단일 슬롯) → `/ws/metrics` fan-out → canvas 차트.
+
+### A.2 메트릭 의미
+
+엔진은 `/sys/metrics` 를 1Hz 로 `,s` key=value 6필드로 방출합니다 (ADR 0020):
+
+| 필드 | 의미 |
+|---|---|
+| `cpu_pct` | per-block wall time 의 EWMA(α=0.1) — block deadline 대비 % (`block_wall_us / block_budget_us × 100`). wall 기반이라 OS 프리엠션 포함(약간 비관적). |
+| `cpu_peak_pct` | 마지막 `reset()` 이후 관측된 최악 per-block CPU%. **[0,100] 클램프** (A9-Q8 — 대시보드에서 별도 라인). |
+| `p99_us` | per-block wall time p99 (µs). 스칼라 P² 러닝 추정기(O(1), 저장 샘플 없음) — 운영용 추정값(정확 분위수 아님). |
+| `xrun_count` | 백엔드 under/overrun 단조증가 카운트(`driver->xrunCount()`). |
+| `engine_overrun_count` | **별도 카운트** — `MAX_BLOCK` 초과로 엔진이 거부한 블록 수. 백엔드 `xrun_count` 와 구별. |
+| `binaural_demote_count` | **sticky 0/1 런타임-demote 플래그**(`binauralIsRuntimeDemoted()`) — 누적 카운트가 아님. 리셋 버튼 → `/sys/binaural_reset_demote ,i 1`. |
+
+> **알아둘 점**: `xrun_count`(백엔드 레이어) 와 `engine_overrun_count`(엔진 `MAX_BLOCK` 거부) 는 서로 다른 카운터입니다. object-activity 그리드는 현재 정적 스캐폴드(라이브 배선 미완).
+
+### A.3 새 테스트 실행
+
+엔진 측 (NO_JUCE / RT-asserts ctest — §1.1/§1.2 빌드에 포함):
+
+```bash
+# /sys/metrics e2e (필드명·값 범위·xrun 반영, AC2 alloc=0 via rt_alloc_violations())
+ctest --test-dir core/build -R test_p_sys_metrics_extended --output-on-failure
+
+# CpuMeter record latency 마이크로벤치 (AC2b — median ≪ 5.0 µs budget)
+ctest --test-dir core/build -R bench_cpumeter_record_latency --output-on-failure
+```
+
+WebGUI 측 (pytest — §1.4 에 포함):
+
+```bash
+# osc_bridge /sys/metrics + /sys/warning 분류 (raw fallthrough 보존)
+python3 -m pytest ui/webgui/tests/test_osc_bridge_dashboard.py -q
+
+# /ws/metrics 구독·broadcast·latest-wins snapshot + reset-demote dispatch
+python3 -m pytest ui/webgui/tests/test_metrics_ws.py -q
+
+# /dashboard headless smoke (canvas mount + draw-on-metrics + reset 버튼 — playwright)
+python3 -m pytest ui/webgui/tests/playwright/test_dashboard_smoke.py -q
+```
+
+**기대치:** `ui/webgui/tests/` 전체 60 passed (A-M2~A-M5 누적). playwright 미설치 시 smoke 는 skip.
+
+---
+
 ## 4. VST3 호스트 (DAW) 테스트
 
 ```bash
