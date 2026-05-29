@@ -133,12 +133,12 @@
 - [x] **P3.7** OSC malformed extra cases (Test-7) — extended `test_p4_flood_malformed.cpp`: truncated type-tag, unknown type byte 'q', misaligned padding; all 3 cases + FSM-integrity probe; bf0b266
 - [ ] **P3 commit** (partial landed bf0b266 — P3.1/P3.5 remain; P3.3 held for P2.3)
 - [x] **P4.1 (partial)** ADR 0018/0019 Proposed→Accepted + 0006a H1 dedup + `docs/adr/index.md`. **DEFERRED:** the `0006a→0007` file rename (risk: inbound refs — supervised) + full per-file status fill-in.
-- [ ] **P4.2 — DEFERRED** open-questions reconcile (Arch-4): partly depends on P1 (close M2HOA-Q14 after P1.1); do the ADM-OSC C3-Q* shipped-cohort close + triage after P1.
+- [x] **P4.2 (partial — Arch-4 cohort closes)** open-questions reconcile: C3-Q1..Q10 cohort closed retrospectively (all shipped v0.2.0; CommandDecoder.cpp:179+ A-β + `--osc-dialect` legacy default + bridge-layer dist normalisation); M2HOA-Q14 closed by v0.8 P1.1 (`64352df` lock-free double-buffer). Remaining open-questions (88 entries — v07-Q1..Q7, v03-Q4/Q7, M2HOA-Q12/Q13/Q15, V07/V08, WGUI-Q11/Q12, PR1..PR5 vendor/sec questions) untouched — out-of-scope triage left for v0.9 reconcile.
 - [x] **P4.3** CHANGELOG `[Unreleased]` (Arch-5)
 - [x] **P4 commit (partial — docs)** done out-of-band during rate-limit window (see commit below)
 - [x] **P5.1** pruned 24 stale build dirs (~5.6GB) + removed `NUL` + empty `core/src/matrix/`; kept canonical `core/build*` + `build_relacy*`; git unaffected (all ignored)
 - [x] **P6.1** `O_NOFOLLOW` on shm regular-file branch (`SharedMemoryRegion.cpp:106`, PR3-Q7); full ctest 95/95 green
-- [ ] **P6.2 — DEFERRED** python dep triage (Sec-4): PIN-DEFER per plan — add advisory notes to requirements.txt + bump safe dev deps with ui/WebGUI gate (next-session)
+- [x] **P6.2 (notes-only — PIN-DEFER per plan)** advisory blocks added to `requirements.txt` (starlette via fastapi coupling) + `requirements-dev.txt` (urllib3 / idna / pytest dev-only transitives). Pin bumps EXPLICITLY deferred to a supervised pass with full WebGUI playwright re-run; no version-string changes in this commit.
 - [x] **P6.1 commit** (done out-of-band during rate-limit window)
 - [x] **P7.1 — DEFERRED** (Architect+Critic): NOT run under autopilot; supervised sprint later
 - [ ] **FINAL** full re-audit / verifier pass + memory update

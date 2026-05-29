@@ -18,3 +18,19 @@ uvicorn[standard]>=0.27   # [standard] bundles the websockets impl FastAPI's WS 
 pydantic>=2.0
 python-osc>=1.8,<2.0
 pyyaml>=6.0               # vid2spatial bridge config (bridge/vid2spatial_osc.py)
+
+# ── Security advisory notes (v0.8 audit P6.2, 2026-05-29) ────────────────
+# starlette: pulled in transitively via `fastapi>=0.110`. GitHub Dependabot
+# / OSV advisories flag versions <0.36 (CVE-2024-47874 multipart parser DoS).
+# We do NOT pin starlette directly here — fastapi controls its starlette
+# version, and a manual `starlette>=1.x` pin will conflict with FastAPI's
+# resolved range. Mitigation: track FastAPI minor releases (0.115+ already
+# requires starlette>=0.40); next supervised WebGUI-test pass should bump
+# `fastapi>=0.115` and re-run the full ui/webgui/tests harness before
+# landing. Filed as v0.8 P6.2-DEFER.
+#
+# urllib3 / idna: dev-only transitives via requests/playwright (not runtime).
+# See requirements-dev.txt for the dev-deps advisory bumps once vetted.
+#
+# DO NOT blindly bump these under autopilot — the WebGUI test harness must
+# certify before any upgrade lands on main.

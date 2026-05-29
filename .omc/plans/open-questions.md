@@ -15,16 +15,18 @@
 
 ## spatial-engine-phaseC3-adm-osc-compat - 2026-05-09
 
-- [ ] C3-Q1 (Decision A): Architect/Critic ratification — confirm A-β (extend `CommandDecoder` in-place) over A-α (separate handler) — Affects file layout and ADR-0003 single-schema invariant; A-α would split listeners on port 9100.
-- [ ] C3-Q2 (Decision B): Confirm verbatim coexistence of `/obj/...` and `/adm/obj/...` (B-α) with no alias map — Affects user-visible "last write wins" semantics when both prefixes hit the same `obj_id`.
-- [ ] C3-Q3 (Decision C): VST3 plugin ADM-OSC scope — ratify deferral to Phase C4 (C-β) — Affects DAW (Pro Tools / Logic) users who cannot connect consoles directly to the plugin instance.
-- [ ] C3-Q4 (S1 scope): Which ADM-OSC v1.0 addresses are "v0 must-have" vs "deferred"? Candidate must-haves: `/adm/obj/N/{azim,elev,dist,aed,xyz,x,y,z,gain,mute,active,name,w}`. Candidate deferrals: `/adm/scene/*`, `/adm/config/*`, divergence/spread variants. — Drives CSV fixture row count (S1) and S2 CommandTag additions.
-- [ ] C3-Q5 (Default dialect): `--osc-dialect` default — `legacy` (preserves all current tests verbatim, proposed) vs `adm` (forces test updates but signals strategic direction) — Affects every existing test that asserts wire-format byte equality.
-- [ ] C3-Q6 (Spec pin): Pin to a specific `immersive-audio-live/ADM-OSC` git commit hash in ADR 0006, or track HEAD? — Affects long-term maintenance burden vs spec-evolution responsiveness.
-- [ ] C3-Q7 (Vendor capture acquisition): Synthetic fixtures (proposed) vs real captures from L-ISA / Spat Revolution / d&b demos — real captures require vendor-cooperation outreach. — Affects S5 acceptance fidelity.
-- [ ] C3-Q8 (Distance unit): ADM-OSC spec says `dist` is normalised `[0..1]` but vendors disagree (L-ISA uses absolute metres). Should our decoder treat the ambiguity at the bridge layer (proposed) or expose a `--adm-dist-units {normalised|metres}` runtime flag? — Affects core decoder cleanliness.
-- [ ] C3-Q9 (Coalescer placement): Per-object `ObjMove` coalescer in `OSCBackend` `CommandSink` lambda (proposed) vs in `StateModel` (Pre-mortem 3 mitigation) — Affects RT-thread coupling and where dropped-cmd metric is exposed.
-- [ ] C3-Q10 (Schema-version handshake bypass for ADM): Decoder already sets `cmd.seq=0; cmd.id=0` for ADM packets at `CommandDecoder.cpp:329-330` — does `StateModel` need a code change to accept seq=0 from ADM-tagged commands? — Affects compatibility with consoles that never send `/sys/handshake`.
+> **C3-Q1..Q10 cohort CLOSED via shipping in v0.2.0** (2026-05-10). ADM-OSC v1.0 dialect landed in `core/src/ipc/CommandDecoder.cpp:179+` as the A-β in-place extension; `--osc-dialect {legacy,adm}` CLI selector with `legacy` default ships in `core/src/bin/spatial_engine_core.cpp:391+`. v0.8 audit P4.2 (2026-05-29) closes the cohort with retrospective decisions below.
+
+- [x] C3-Q1 — **CLOSED v0.2.0**: A-β shipped (extended `CommandDecoder` in-place; no separate listener). See `CommandDecoder.cpp:179+`.
+- [x] C3-Q2 — **CLOSED v0.2.0**: B-α shipped (verbatim coexistence of `/obj/...` and `/adm/obj/...`, no alias map; last-write-wins on shared `obj_id`).
+- [x] C3-Q3 — **CLOSED v0.2.0**: C-β shipped (VST3 ADM-OSC deferred). VST3 still uses legacy `/obj/...` only as of v0.7.0.
+- [x] C3-Q4 — **CLOSED v0.2.0**: v0 must-haves shipped — `/adm/obj/N/{azim,elev,dist,aed,xyz,gain,mute,name}`; deferrals (`/adm/scene/*`, `/adm/config/*`, divergence/spread) remain unimplemented.
+- [x] C3-Q5 — **CLOSED v0.2.0**: `legacy` default shipped (preserves wire-byte-equality tests). CLI flag `--osc-dialect adm` opts in.
+- [x] C3-Q6 — **CLOSED v0.2.0** (HEAD-tracking): ADR 0006 cites the spec by URL without a pin. Re-evaluate at v1.x when consumer load justifies stability tradeoff.
+- [x] C3-Q7 — **CLOSED via deferral**: synthetic fixtures shipped at S1. Real vendor captures = v03-Q4 60-day track, still open.
+- [x] C3-Q8 — **CLOSED v0.2.0**: bridge-layer normalisation chosen — decoder treats `dist ∈ [0..1]` as canonical; metres-mode vendors (L-ISA) handled by adm_player → bridge transform.
+- [x] C3-Q9 — **CLOSED v0.2.0**: `OSCBackend` `CommandSink` placement shipped (proposed). Dropped-cmd metric surfaced via `/sys/warning`.
+- [x] C3-Q10 — **CLOSED v0.2.0**: `StateModel` accepts `seq=0` from ADM-tagged commands (decoder convention at `CommandDecoder.cpp:329-330` preserved). No StateModel code change required.
 
 ## spatial-engine-v1 - 2026-05-01
 
@@ -104,7 +106,7 @@ Round-2 Critic R1 review applied 4 CRITICAL + 4 MAJOR + 2 MINOR fixes. M2HOA-Q i
 - [ ] M2HOA-Q10 (unchanged): Decoder N>3 parity gap vs Spat Rev N=7 — separate "MAX_ORDER bump" plan deferred. Round-2 Critic A9 reframe: 5/5 score is **algorithm-count parity at N=3**, not full parity.
 - [ ] M2HOA-Q12 (unchanged): per-bus decoder selection (Spat per-bus pattern) deferred to Phase B/C.
 - [ ] M2HOA-Q13 (unchanged): EPAD vs AllRAD irregular-layout overlap — measurement + benchmark CSV.
-- [ ] **M2HOA-Q14 (Round-2 NEW, Critic A6 plumbing):** `AmbisonicRenderer::applyPendingDecoderTypeChange()` — should it be invoked by `SpatialEngine` per command tick, per processBlock boundary, or per parameter-change event? Recommended: control-thread tick boundary (mirrors `algo_swap` crossfade pattern at `core/tests/core_unit/test_p3_algoswap_crossfade.cpp`). Lock decision in S4.5 implementation.
+- [x] **M2HOA-Q14 — RESOLVED 2026-05-28 by v0.8 audit P1.1 (commit `64352df`).** Decision: invoke via `SpatialEngine::applyPendingAmbiDecoderChange()` from a new ~1 Hz control tick in `core/src/bin/spatial_engine_core.cpp:592-660`, behind a lock-free double-buffer in `AmbiDecoder::decode_matrices_` (2 slots × MAX_ORDER, `std::atomic<int> active_slot_` publishing). The naive "just call from a tick" approach was a UAF (Critic C2) because the original `decode_matrices_` was non-atomic single-buffered; the published design separates rebuild (control thread, allocating) from read (audio thread, load-acquire once per block). Concurrency test `test_p_ambi_decoder_double_buffer_race` (relacy + std::thread stress) drives rapid back-to-back switches faster than the 1 Hz production cadence so the slack invariant cannot be silently regressed.
 - [ ] **M2HOA-Q15 (Round-2 NEW, Critic Appendix B3):** RT-safe guard comment block at `AmbiDecoder.cpp:142` decode entry — confirm wording with reviewer before commit. Block prevents future engineers from adding `switch (type_)` inside `decode()`. Treated as load-bearing documentation per Principle 2.
 
 ## spatial-engine-phaseC4-and-v0.2-release - 2026-05-10

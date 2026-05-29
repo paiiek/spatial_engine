@@ -22,3 +22,16 @@ pytest-asyncio
 # Python binding chosen over Node CLI to keep harness in same language
 # as the rest of the WebGUI test stack (pytest + asyncio).
 playwright>=1.45
+
+# ── Security advisory notes (v0.8 audit P6.2, 2026-05-29) ────────────────
+# Dev-only transitives flagged by OSV / Dependabot:
+#   * urllib3 — CVE-2024-37891 (<2.2.2): redirect Proxy-Authorization leak.
+#   * idna    — CVE-2024-3651 (<3.7): quadratic-complexity encode DoS.
+#   * pytest  — Several CVE-2024-* in pytest <8.2 around tmp-path handling.
+# All three reach the tree via `requests` / `playwright` / `pytest`,
+# NEVER imported from production code (verified — none of `core/`,
+# `ui/webgui/server.py`, `ui/webgui/osc_bridge.py`, `bridge/`, or
+# `ui/spatial_engine_ui/` import them at runtime). Pin-bumping is safe
+# in principle but blocked on the WebGUI test harness running green
+# afterward; v0.8 P6.2 records the advisory and defers the bump to a
+# supervised pass with full pytest + playwright re-run.
