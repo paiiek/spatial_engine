@@ -125,13 +125,13 @@
 - [x] **P2.2** VBAP fallback Σg²≈1 guard test (DSP-5) — `test_p_vbap3d.cpp` test6 pins sum_sq=1.0 (±1e-5) for degenerate-triplet fallback (y=2e-3 coplanar layout, el=+60°)
 - [x] **P2 commit**
 - [ ] **P3.1** VST3 state-contract test in core CI (Test-1)
-- [ ] **P3.2** ambisonic absolute-gain golden (Test-2)
-- [ ] **P3.3** FDN T60 test (Test-3)
-- [ ] **P3.4** HrtfLookup interpolation test (Test-4)
+- [x] **P3.2** ambisonic absolute-gain golden (Test-2) — `test_p_ambi_absolute_gain_golden.cpp`; 6-spk octahedral SAMPLING oracle, 3-way cross-check ±1e-5; bf0b266
+- [ ] **P3.3** FDN T60 test (Test-3) — DEFERRED: DSP-6 exposes FdnReverb read-pointer bug (effective delay=1 sample); see open-questions.md DSP-6; T60 test authored but held for P2.3 fix
+- [x] **P3.4** HrtfLookup interpolation test (Test-4) — `test_p_hrtf_lookup_interp.cpp`; NN oracle vs analytic blend, brute-force + KdTree3D parity; bf0b266
 - [ ] **P3.5** vst3_bind_collision correctness + RUN_SERIAL (Test-5)
 - [ ] **P3.6** OSC sleep-barrier → event sync (Test-6)
-- [ ] **P3.7** OSC malformed extra cases (Test-7)
-- [ ] **P3 commit**
+- [x] **P3.7** OSC malformed extra cases (Test-7) — extended `test_p4_flood_malformed.cpp`: truncated type-tag, unknown type byte 'q', misaligned padding; all 3 cases + FSM-integrity probe; bf0b266
+- [ ] **P3 commit** (partial landed bf0b266 — P3.1/P3.5 remain; P3.3 held for P2.3)
 - [x] **P4.1 (partial)** ADR 0018/0019 Proposed→Accepted + 0006a H1 dedup + `docs/adr/index.md`. **DEFERRED:** the `0006a→0007` file rename (risk: inbound refs — supervised) + full per-file status fill-in.
 - [ ] **P4.2 — DEFERRED** open-questions reconcile (Arch-4): partly depends on P1 (close M2HOA-Q14 after P1.1); do the ADM-OSC C3-Q* shipped-cohort close + triage after P1.
 - [x] **P4.3** CHANGELOG `[Unreleased]` (Arch-5)
