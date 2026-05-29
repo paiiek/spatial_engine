@@ -252,6 +252,25 @@ add_executable(test_p7_fdn_reverb test_p7_fdn_reverb.cpp)
 target_link_libraries(test_p7_fdn_reverb PRIVATE spe_core)
 add_test(NAME p7_fdn_reverb COMMAND test_p7_fdn_reverb)
 
+# v0.8 audit P3 — independent-oracle test additions (P3.2, P3.4).
+# Both verify closed-form expected values derived from textbook formulas,
+# NOT from the code under test. P3.7 extends test_p4_flood_malformed in-place.
+# P3.3 (FDN T60) is DEFERRED: the oracle exposed DSP-6 (FdnReverb read-pointer
+# bug — effective delay is 1 sample regardless of kBaseDelaysSamples). Filed in
+# open-questions.md; will land as P2.3 DSP fix + reinstated T60 test.
+
+# P3.2 — SN3D absolute-gain golden vector (encoder × SAMPLING decoder oracle).
+add_executable(test_p_ambi_absolute_gain_golden
+    test_p_ambi_absolute_gain_golden.cpp)
+target_link_libraries(test_p_ambi_absolute_gain_golden PRIVATE spe_core)
+add_test(NAME p_ambi_absolute_gain_golden
+    COMMAND test_p_ambi_absolute_gain_golden)
+
+# P3.4 — HrtfLookup NN oracle: midpoint direction matches closed-form NN endpoint.
+add_executable(test_p_hrtf_lookup_interp test_p_hrtf_lookup_interp.cpp)
+target_link_libraries(test_p_hrtf_lookup_interp PRIVATE spe_core)
+add_test(NAME p_hrtf_lookup_interp COMMAND test_p_hrtf_lookup_interp)
+
 # ADM-OSC tests
 add_executable(test_p_adm_osc test_p_adm_osc.cpp)
 target_link_libraries(test_p_adm_osc PRIVATE spe_core)
