@@ -2,8 +2,13 @@
 
 실시간 객체 기반 몰입형 오디오 렌더링 엔진. 공연·전시 현장용.
 
-C++ 렌더 코어 + FastAPI WebGUI + vid2spatial 영상 추적 브리지.  
+C++ 렌더 코어 + FastAPI WebGUI + vid2spatial 영상 추적 브리지.
 OSC/UDP를 통해 모든 컴포넌트가 연결됩니다.
+
+**핵심 문서**:
+- [`docs/TESTING.md`](docs/TESTING.md) — 자동 테스트 + 수동 smoke (adm_player → shm → engine) + WebGUI/VST3 검증
+- [`docs/ENGINE_OVERVIEW_AND_COMPARISON.md`](docs/ENGINE_OVERVIEW_AND_COMPARISON.md) — 전체 기능 인벤토리, L-ISA/Spat/Atmos 비교, v0.9–v1.x 로드맵
+- [`.omc/plans/spatial-engine-v0.8-status-overview.md`](.omc/plans/spatial-engine-v0.8-status-overview.md) — 시점별 엔지니어링 스냅샷
 
 ---
 
@@ -401,35 +406,72 @@ Phase C 에서 Steinberg vst3sdk 외부 클론과 함께 통합 예정.
 
 ## 테스트
 
-### C++ 테스트 (34개)
+> **전체 테스트 가이드는 [`docs/TESTING.md`](docs/TESTING.md)** 를 참고하세요. 아래는 요약입니다.
+
+### C++ 테스트 (101개) — NO_JUCE 게이트
 
 ```bash
 cd core/build
+cmake .. -DSPATIAL_ENGINE_NO_JUCE=ON && make -j$(nproc)
 ctest --output-on-failure
-# → 100% tests passed
+# → 100% tests passed, 0 tests failed out of 101 (≈ 60s)
 ```
 
-### Python 테스트 (149개)
+추가 게이트:
+- **RT-no-alloc sentinel**: `core/build_rton` (`-DSPATIAL_ENGINE_RT_ASSERTS=ON`) → 101/101
+- **Relacy 합성 race**: `core/build_relacy` (`-DSPATIAL_ENGINE_BUILD_RELACY_TESTS=ON`) → 1024 iter 그린
+- VST3 게이트는 `core/build_vst3` (현재 supervised; CI 미포함)
+
+### Python 테스트 (225 passed, 4 skipped)
 
 ```bash
-python3 -m pytest ui/ bridge/ -q
-# → 149 passed, 3 skipped
+pip install -r requirements.txt -r requirements-dev.txt
+python3 -m pytest
+# → 225 passed, 4 skipped in ~140s
 ```
 
 세부:
-- `ui/tests/` — PySide6 컴포넌트 (드래그 코알레서, 매트릭스 동기, scene 패널, transport 패널, **ObjectInspector DSP 라우팅**, MIDI 브리지 등)
-- `ui/webgui/tests/` — FastAPI 서버 + WS 디스패처 (transport / obj_algo / obj_dsp / noise) + 600Hz throughput + p99 RTT < 20 ms 게이트
-- `bridge/tests/` — vid2spatial 좌표 변환, AzMAE baseline.json 회귀 가드, 모드 전환 p95 < 100 ms / p99 < 500 ms
+- `ui/tests/` (15) — PySide6 컴포넌트 (드래그 코알레서, 매트릭스 동기, scene/transport 패널, **ObjectInspector DSP 라우팅**, MIDI 브리지)
+- `ui/webgui/tests/` (204) — FastAPI 서버 + WS 디스패처 (transport / obj_algo / obj_dsp / noise) + 600Hz throughput + p99 RTT < 20 ms 게이트
+- `tests/{e2e,soak_harness,latency_harness,accuracy_harness}/` — IR loader, OSC 경고 채널, Phase B 핸드셰이크, HRTF ITD 정확도
 
-### 엔드투엔드 오디오 검증
+### Standalone smoke — 외부 wav 입력 (adm_player → shm → engine)
+
+엔진 단독은 wav 직접 입력 옵션이 없습니다. 정식 경로는 **`adm_player` (sidecar producer) → POSIX shm ring → engine**:
 
 ```bash
-# 엔진 실행 + 5오브젝트 데모
+# 같은 셸에서 producer 와 consumer 동시 실행 — bash 세션 종료 시 shm 도 unlink 됨
+rm -f /dev/shm/spe-smoke
+cd /home/seung/mmhoa/adm_player/dreamscape && \
+  python3 -u -m adm_player ./01.wav \
+    --sink ipc://spe-smoke --block-size 256 --ring-frames 8192 \
+    --osc-host 127.0.0.1 --osc-port 9100 > /tmp/adm_player.log 2>&1 &
+PROD=$!
+for i in 1 2 3 4 5; do [ -e /dev/shm/spe-smoke ] && break; sleep 1; done
+cd /home/seung/mmhoa/spatial_engine/core/build && \
+  timeout 14 ./spatial_engine_core \
+    --input-backend shm:/spe-smoke --block 256 \
+    --channels 38 --rate 48000 \
+    --layout /home/seung/mmhoa/spatial_engine/configs/lab_8ch.yaml \
+    --backend null --wav /tmp/engine_out.wav --seconds 10 \
+    --osc-dialect adm > /tmp/engine.log 2>&1
+kill $PROD; wait $PROD 2>/dev/null; rm -f /dev/shm/spe-smoke
+python3 -c "
+import soundfile as sf, numpy as np
+data, _ = sf.read('/tmp/engine_out.wav')
+print(f'rms={float(np.sqrt(np.mean(data**2))):.4f} '
+      f'nonzero={int((data!=0).any(axis=1).sum())}/{data.shape[0]}')"
+# 기대치: rms≈0.034, 99.9% non-zero
+```
+
+⚠️ **`rms=0` 으로 나오면 producer 가 `--no-osc` 였거나 port 가 불일치한 것** — 엔진은 OSC object 가 없으면 input PCM 을 무시합니다.
+
+### 엔드투엔드 오디오 검증 (synth-based)
+
+```bash
 core/build/spatial_engine_core --layout configs/lab_8ch.yaml \
   --osc-port 9100 --wav /tmp/test.wav --seconds 8 &
 python3 tools/demo_e2e.py --n-objs 5 --duration 7
-
-# WAV RMS 확인 (t=1s 이후, 초기 무음 기간 제외)
 python3 -c "
 import struct
 with open('/tmp/test.wav','rb') as f: f.read(44); d=f.read()
@@ -558,6 +600,71 @@ audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise /
 | **M5** VST3 빌드 옵션 | `cmake -DSPATIAL_ENGINE_VST3=ON` (default OFF), `.vst3` shared object + entry symbols, Phase C SDK 통합 자리표시자 |
 | **M7** SMPTE LTC 디코더 | `core/src/sync/LTCDecoder` biphase-mark, 합성 LTC 1초 → 24 unique frames + 12:34:56:18 정확 매치 |
 
+### v0.2.0 — ADM-OSC v1.0 dual dialect (2026-05-10)
+
+| 항목 | 내용 |
+|------|------|
+| **ADM-OSC v1.0 수신** | `/adm/obj/{n}/aed,azim,elev,dist,gain,mute` 풀세트, `--osc-dialect {legacy,adm}` CLI |
+| **CommandDecoder 통합** | `CommandDecoder.cpp:179+` A-β in-place extension (C3-Q1..Q10 cohort) |
+| **VST3 6 params** | aed_az, aed_el, aed_dist, gain, mute, reserved + 2-bus output (multi-ch + binaural) |
+
+### v0.3 / v0.4 — VST3 본격 + 채널 매핑 안정화
+
+| 항목 | 내용 |
+|------|------|
+| **VST3 state persistence** | v3 reader (S2.5) + v4 writer + kMute param (S7), session save/load 검증 |
+| **VST3 bus 레이아웃** | `core/src/vst3/SpatialEngineProcessor.cpp` 2-bus 라우팅 |
+| **Channel mapping fix** (v0.3.1) | YAML layout 채널 번호 → 출력 인덱스 매핑 정정 |
+| **vst3_bind_collision 가드** | per-instance UDP listener + port reuse 충돌 방지 (ADR 0011) |
+
+### v0.5 — Binaural 본격 + B1/B2 demote
+
+| 항목 | 내용 |
+|------|------|
+| **KEMAR SOFA + KdTree3D** | 직접 SOFA 파싱, 3D 최근접 lookup, OLA convolver |
+| **B1/B2 모드 시스템** | B2 (full HRTF) 가 RT budget 초과 시 B1 (저품질 fallback) 으로 자동 demote |
+| **`/sys/binaural_status` `/sys/binaural_diag` `/sys/binaural_reset_demote`** | 사용자 demote 진단 + 복구 path |
+| **B2 SOFA hotfix** (v0.5.1) | sample-rate mismatch 처리 + IR 검증 강화 |
+
+### v0.6 / v0.7 — 안정성 + Phase B sync + ADR 0018
+
+| 항목 | 내용 |
+|------|------|
+| **ADR 0018 Phase B sync handlers** | `/sys/handshake` + `/transport/play` + 1Hz heartbeat (HeartbeatPublisher) |
+| **Algorithm-swap crossfade Relacy** | `test_p3_algoswap_crossfade` + race detection 1024 iter |
+| **PlayerStaleWatchdog** | 외부 producer heartbeat 부재 시 graceful demote |
+| **ShmTelemetryEmitter** (ADR 0019 PR4) | `/sys/warning shm_full / shm_reset / ring_overrun` |
+
+### v0.7.0+ — ADR 0019 PCM IPC track (2026-05-22 → 2026-05-27)
+
+| PR | 내용 |
+|---|---|
+| **PR1** | `SharedMemoryRegion.cpp` — POSIX shm + mmap + 인증된 sizeof 검증 |
+| **PR2** | `SharedRingBackend.cpp` — RingHeader 매직/버전/지오메트리 게이트 6개 |
+| **PR3** | engine `--input-backend shm:<path>` CLI 결선 + RT consumer path |
+| **PR4** | shm telemetry 채널 (`/sys/warning shm_*` event-driven) |
+| **PR5** | **adm_player IpcRingSink producer** (sibling repo dual-commit, 96 pytest 그린) |
+| PR6 (open) | 60s cross-process soak (pending) |
+
+### v0.8 audit remediation (2026-05-28 → 2026-05-29) — autopilot 완료
+
+DSP MAJOR 2개 + MINOR 2개 결함 zero out + test hardening + docs 정리:
+
+| Phase | 결과 |
+|---|---|
+| **P0** flaky pre-flight | OSC/binaural sleep-barrier → condvar (commit `32bfd5a`) |
+| **P1** DSP MAJOR | 런타임 decoder-type lock-free **double-buffer** (M2HOA-Q14) + VBAP RT-alloc 제거 + 독립 SN3D oracle (`64352df`) |
+| **P2** DSP MINOR | EPAD rank-aware energy scale + VBAP fallback Σg²≈1 guard (`98741a4`) |
+| **P2.3** | **DSP-6 FdnReverb 1-sample-delay bug** 발견+수정 (`readPos = writePos`); T60 oracle (`d7f3e6c`) |
+| **P3.2/3.3/3.4/3.7** | ambi golden + HRTF interp + FDN T60 + OSC malformed flood (`bf0b266` + `d7f3e6c`) |
+| **P4.1/4.3/5.1** | ADR status reconcile + CHANGELOG + build dir prune (`8dcfc8b`) |
+| **P4.2** | C3-Q1..Q10 + M2HOA-Q14 cohort closes (`88c37b5`) |
+| **P6.1** | `O_NOFOLLOW` on shm regular-file (PR3-Q7) (`1aebd43`) |
+| **P6.2** | requirements advisory notes (PIN-DEFER) (`88c37b5`) |
+| **P3.1 / P3.5 / P7.1** | DEFERRED — supervised VST3 / god-object 리팩토링 sprint |
+
+전체 인벤토리: [`docs/ENGINE_OVERVIEW_AND_COMPARISON.md`](docs/ENGINE_OVERVIEW_AND_COMPARISON.md).
+
 ### 하드웨어 대기
 
 | 항목 | 내용 |
@@ -568,13 +675,16 @@ audit 결과 PerObjectChain / DBAP / WFS / FdnReverb / BinauralMonitor / Noise /
 
 ---
 
-## CI 현황
+## CI 현황 (HEAD `6d9958b`, 2026-05-29)
 
 | 항목 | 결과 |
 |------|------|
-| C++ 빌드 (NO_JUCE=ON) | ✅ **43/43 ctest** (Phase A/B 통합) |
-| Python 테스트 | ✅ **193 passed, 3 skipped** |
-| RT-alloc 게이트 | ✅ SPE_RT_ASSERTS=ON 통과 |
+| C++ NO_JUCE (`core/build`) | ✅ **101/101 ctest** (v0.8 audit P0–P3 모두 그린) |
+| C++ RT-asserts (`core/build_rton`) | ✅ **101/101 ctest** (오디오 스레드 malloc sentinel 무장) |
+| C++ Relacy (`core/build_relacy`) | ✅ 1024 iter race-free |
+| Python pytest | ✅ **225 passed, 4 skipped** |
+| Standalone smoke (adm_player → shm → engine) | ✅ rms=0.034, peak=0.498, 99.9% non-zero |
+| RT-alloc 게이트 | ✅ SPATIAL_ENGINE_RT_ASSERTS=ON 통과 |
 | 엔드투엔드 WAV | ✅ RMS > 2000 @ t=1s (5 오브젝트, 8ch) |
 | vid2spatial 연동 | ✅ RMS > 2000 @ t=1s (bridge 경유) |
 | Phase 1 RTT 게이트 | ✅ p99 < 20 ms (실측 0.17 ms) |
