@@ -177,6 +177,22 @@ target_compile_definitions(test_binaural_probe_warning_emission PRIVATE
 add_test(NAME binaural_probe_warning_emission
     COMMAND test_binaural_probe_warning_emission)
 
+# v0.9 Lane A (A-M1) — /sys/metrics 1 Hz emit, end-to-end. Spins up a real
+# SpatialEngine on an ephemeral UDP port, drives audioBlock()s (warming the
+# CpuMeter), forces an oversized block (engine_overrun_count>0), then runs the
+# same ,s key=value emit the core binary's 1 Hz tick does and asserts a client
+# receives /sys/metrics with the expected field names + value ranges.
+add_executable(test_p_sys_metrics_extended test_p_sys_metrics_extended.cpp)
+target_link_libraries(test_p_sys_metrics_extended PRIVATE spe_core Threads::Threads)
+add_test(NAME p_sys_metrics_extended COMMAND test_p_sys_metrics_extended)
+
+# v0.9 Lane A (A-M1, AC2b) — CpuMeter record-latency microbench. Measures the
+# median cost of recordBlockStart()+recordBlockEnd() over N>=50 samples and
+# asserts it stays under a small µs budget (scalar O(1) estimator).
+add_executable(bench_cpumeter_record_latency bench_cpumeter_record_latency.cpp)
+target_link_libraries(bench_cpumeter_record_latency PRIVATE spe_util)
+add_test(NAME cpumeter_record_latency COMMAND bench_cpumeter_record_latency)
+
 add_executable(test_p4_command_decode test_p4_command_decode.cpp)
 target_link_libraries(test_p4_command_decode PRIVATE spe_core)
 add_test(NAME p4_command_decode COMMAND test_p4_command_decode)

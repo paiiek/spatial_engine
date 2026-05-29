@@ -599,6 +599,12 @@ int main(int argc, char** argv) {
     // so calling it every loop iteration is cheap.
     auto last_ambi_decoder_apply = std::chrono::steady_clock::time_point{};
 
+    // v0.9 Lane A (A-M1) — ~1 Hz /sys/metrics emit gate. A default-constructed
+    // time_point forces the first iteration to fire immediately. UNCONDITIONAL:
+    // emitted on every backend (null/dante/shm) so the dashboard always has
+    // cpu/xrun telemetry, not just on the shm path.
+    auto last_metrics_emit = std::chrono::steady_clock::time_point{};
+
     while (!g_quit.load() && clock::now() < deadline) {
         auto now = clock::now();
 
@@ -621,6 +627,40 @@ int main(int argc, char** argv) {
         if (now - last_ambi_decoder_apply >= std::chrono::seconds(1)) {
             last_ambi_decoder_apply = now;
             engine.applyPendingAmbiDecoderChange();
+        }
+
+        // v0.9 Lane A (A-M1) — ~1 Hz /sys/metrics emit. UNCONDITIONAL (every
+        // backend). One ,s key=value message per field — reuses the existing
+        // 3-arg sendReply(addr, ",s", kv) overload (OSCBackend.h:120), exactly
+        // like ShmTelemetryEmitter::emitState does for /sys/state. NO new
+        // encoder. cpu_pct / p99_us come from the engine's single-owner
+        // ObservabilityCounters (audio thread stores them each block); peak
+        // comes off the CPU meter scalar; xrun_count is the backend device
+        // underrun counter; engine_overrun_count is the engine's internal
+        // oversized-block counter; binaural_demote_count is the sticky runtime
+        // auto-demote flag (0/1 — see follow-up note).
+        if (now - last_metrics_emit >= std::chrono::seconds(1)) {
+            last_metrics_emit = now;
+            auto& obs = engine.observabilityCounters();
+            char kv[64];
+            std::snprintf(kv, sizeof(kv), "cpu_pct=%u",
+                          obs.cpu_pct_audio_thread.load(std::memory_order_relaxed));
+            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
+            std::snprintf(kv, sizeof(kv), "cpu_peak_pct=%u",
+                          engine.cpuMeter().peakPct());
+            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
+            std::snprintf(kv, sizeof(kv), "p99_us=%u",
+                          obs.per_block_time_p99_us.load(std::memory_order_relaxed));
+            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
+            std::snprintf(kv, sizeof(kv), "xrun_count=%llu",
+                          static_cast<unsigned long long>(driver->xrunCount()));
+            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
+            std::snprintf(kv, sizeof(kv), "engine_overrun_count=%llu",
+                          static_cast<unsigned long long>(engine.engineOverrunCount()));
+            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
+            std::snprintf(kv, sizeof(kv), "binaural_demote_count=%u",
+                          engine.binauralIsRuntimeDemoted() ? 1u : 0u);
+            engine.oscBackend().sendReply("/sys/metrics", ",s", kv);
         }
 
         // ADR 0019 PR4 (D4) — shm-gated 1 Hz diagnostics tick. poll_diagnostics

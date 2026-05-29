@@ -19,6 +19,8 @@
 #include "reverb/ReverbEngine.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
+#include "util/CpuMeter.h"
+#include "util/ObservabilityCounters.h"
 #include "util/TraceRing.h"
 #include "util/XrunCounter.h"
 
@@ -198,6 +200,12 @@ public:
     std::uint64_t blocksProcessed() const noexcept { return blocks_processed_.load(); }
     const util::TraceRing256& trace() const noexcept { return trace_; }
 
+    // v0.9 Lane A (A-M1) — engine-internal overrun count (audioBlock saw a
+    // block with num_frames > MAX_BLOCK and refused it). Distinct from the
+    // backend device xrun count (driver->xrunCount()). Emitted on
+    // /sys/metrics as engine_overrun_count.
+    std::uint64_t engineOverrunCount() const noexcept { return internal_xruns_.overruns(); }
+
     // Transport (P-D): play=audible, !play=silent (gain ramped to 0).
     // Safe to call from any thread.
     void setTransportPlay(bool play) noexcept { transport_play_.store(play); }
@@ -251,6 +259,17 @@ public:
 
     // Expose OSCBackend for dialect configuration (--osc-dialect CLI flag).
     ipc::OSCBackend& oscBackend() noexcept { return osc_backend_; }
+
+    // v0.9 Lane A (A-M1) — single-owner ObservabilityCounters instance. The
+    // audio thread stores cpu_pct/p99 here each block (relaxed scalar atomics);
+    // the control-thread 1 Hz tick loads them for /sys/metrics. NET-NEW: the
+    // struct was previously dead-code (instantiated nowhere). Mirrors the
+    // oscBackend() accessor above.
+    util::ObservabilityCounters& observabilityCounters() noexcept { return obs_counters_; }
+
+    // v0.9 Lane A (A-M1) — read-only access to the audio-thread CPU meter so
+    // the control thread can load the scalar peak% (single relaxed atomic).
+    const util::CpuMeter& cpuMeter() const noexcept { return cpu_meter_; }
 
     // C1.d — LTC chase from input ch 0. When enabled, audioBlock() taps
     // input_channels[0] (if present) and pushes the samples into the
@@ -452,6 +471,10 @@ private:
     int                        max_block_size_{64};
     util::TraceRing256         trace_;
     util::XrunCounter          internal_xruns_;
+    // v0.9 Lane A (A-M1) — NET-NEW. Audio thread owns cpu_meter_ measurement
+    // and stores scalar results into obs_counters_ (single relaxed atomics).
+    util::CpuMeter             cpu_meter_;
+    util::ObservabilityCounters obs_counters_;
 };
 
 }  // namespace spe::core

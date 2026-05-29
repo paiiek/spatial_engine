@@ -227,7 +227,7 @@
 - **Abort 기준(원칙 1)**: A-M1 measurement 삽입 후 (a) RT-asserts alloc=0 게이트(AC2)가 red, 또는 (b) RT-latency 마이크로벤치(AC2b, `bench_cpumeter_record_latency`)가 예산 초과로 red 면 즉시 abort. 스칼라 추정기 채택으로 두 게이트 모두 trivially pass 예상이나, red 시 핫패스 회귀로 간주하고 중단.
 
 ## Progress tracker
-- [ ] A-M1 CpuMeter + /sys/metrics 1Hz 방출 (+ADR)
+- [x] A-M1 CpuMeter + /sys/metrics 1Hz 방출 (+ADR) — done 2026-05-30. NO_JUCE 103/103, RT-asserts(build_rton) 107/107 (AC2 alloc=0 via rt_alloc_violations()==0 in test_p_sys_metrics_extended), AC2b bench median 0.115 µs vs 5.0 µs budget. binaural_demote_count emitted as sticky runtime-demote flag (0/1) via binauralIsRuntimeDemoted() — cumulative strike count getter not cheaply available; revisit if dashboard needs the count. ADR-text captured inline in plan §5 (thin channel-doc deferred to A-M6).
 - [ ] A-M2 osc_bridge 텔레메트리 분류
 - [ ] A-M3 /ws/metrics + /dashboard 라우트 + MetricsHub
 - [ ] A-M4 dashboard.html/js + 자체 canvas 차트

@@ -414,6 +414,11 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
             b2_sh_scratch_[static_cast<size_t>(k)].data();
     }
 
+    // v0.9 Lane A (A-M1) — the block budget (num_frames / sample_rate) just
+    // changed; clear the CPU meter so samples taken under the previous budget
+    // cannot poison the EWMA/peak/p99 estimators.
+    cpu_meter_.reset();
+
     osc_backend_.start();
     prepared_.store(true);
 }
@@ -431,6 +436,11 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         internal_xruns_.record_overrun();
         return;
     }
+
+    // v0.9 Lane A (A-M1) — stamp block-entry AFTER the overrun guard so a
+    // refused (oversized) block never enters the wall-time sample stream.
+    // Clock read only (alloc/lock/syscall-free; vDSO on Linux).
+    cpu_meter_.recordBlockStart();
 
     // C1.d — LTC chase tap. When chase is enabled and the backend supplies
     // an input ch 0, push that block's samples into the LtcChase ring.
@@ -1011,6 +1021,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     ev.payload_a    = static_cast<std::uint32_t>(block.num_frames);
     ev.payload_b    = static_cast<std::uint32_t>(block.output_channel_count);
     trace_.push(ev);
+
+    // v0.9 Lane A (A-M1) — close the per-block wall measurement at the single
+    // normal fall-through exit, fold it into the EWMA/peak/P² estimators, and
+    // publish the scalar results into the single-owner ObservabilityCounters.
+    // O(1) + relaxed scalar atomic stores only — no alloc/lock/syscall.
+    cpu_meter_.recordBlockEnd(block.num_frames, block.sample_rate);
+    obs_counters_.cpu_pct_audio_thread.store(cpu_meter_.cpuPct(),
+                                             std::memory_order_relaxed);
+    obs_counters_.per_block_time_p99_us.store(cpu_meter_.p99Us(),
+                                              std::memory_order_relaxed);
 }
 
 // v0.5 P4.1 (A6) / v0.5.1 Q1 — moved from header to avoid per-TU duplication.

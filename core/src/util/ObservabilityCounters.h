@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstdint>
 
+namespace spe::util {
+
 /// Shared observability counters exposed via /sys/metrics OSC address.
 ///
 /// All fields are std::atomic so they may be written from the audio thread
@@ -58,3 +60,5 @@ struct ObservabilityCounters {
     /// Audio thread CPU usage percentage (0–100), sampled each block.
     std::atomic<uint32_t> cpu_pct_audio_thread{0};
 };
+
+}  // namespace spe::util
