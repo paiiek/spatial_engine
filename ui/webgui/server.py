@@ -78,6 +78,55 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
+class MetricsHub:
+    """Dashboard-only fan-out for classified telemetry (A-M3).
+
+    Holds the LATEST metrics/warning snapshot in a SINGLE slot (latest-wins —
+    §3 DD-D: queue size 1, drop-older, no unbounded buffering) plus a set of
+    ``/ws/metrics`` subscribers. On a fresh connect the cached snapshot is
+    pushed immediately so a dashboard opened mid-stream is not blank.
+
+    Reuses the ``ConnectionManager`` connect/disconnect/drop-on-fail pattern:
+    a per-client send failure → immediate disconnect (mirrors ``broadcast``).
+    """
+
+    def __init__(self) -> None:
+        self.active: Set[WebSocket] = set()
+        self._last_snapshot: str | None = None
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self.active.add(ws)
+        logger.info("metrics WS client connected, total=%d", len(self.active))
+        # Push the last cached snapshot immediately so a fresh subscriber sees
+        # current state without waiting for the next 1 Hz broadcast.
+        if self._last_snapshot is not None:
+            try:
+                await ws.send_text(self._last_snapshot)
+            except Exception:
+                self.active.discard(ws)
+
+    def disconnect(self, ws: WebSocket) -> None:
+        self.active.discard(ws)
+        logger.info("metrics WS client disconnected, total=%d", len(self.active))
+
+    async def publish(self, payload: dict) -> None:
+        """Cache the latest snapshot (single slot) and fan out to subscribers."""
+        message = json.dumps(payload)
+        self._last_snapshot = message  # latest-wins, no queue (DD-D)
+        dead: list[WebSocket] = []
+        for ws in list(self.active):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.active.discard(ws)
+
+
+metrics_hub = MetricsHub()
+
 # ---------------------------------------------------------------------------
 # OSC bridge handle — injected by osc_bridge on startup
 # ---------------------------------------------------------------------------
@@ -178,6 +227,24 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                 await manager.broadcast(json.dumps(notice))
     except WebSocketDisconnect:
         manager.disconnect(ws)
+
+
+@app.websocket("/ws/metrics")
+async def websocket_metrics(ws: WebSocket) -> None:
+    """Dashboard-only telemetry channel (A-M3).
+
+    On connect the last cached snapshot (if any) is pushed immediately by
+    ``MetricsHub.connect``; subsequent classified metrics/warning broadcasts
+    stream in. This is a read-only channel — inbound frames are drained and
+    ignored so the receive loop stays alive without driving the control plane
+    (positional control stays on ``/ws``).
+    """
+    await metrics_hub.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()  # drain; metrics channel is push-only
+    except WebSocketDisconnect:
+        metrics_hub.disconnect(ws)
 
 
 #: Set of message types that synthesise positional data and therefore
@@ -466,8 +533,18 @@ async def _debug_asyncio_tasks() -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 async def broadcast_state(payload: dict) -> None:
-    """Called from osc_bridge to push engine state to all WS clients."""
-    await manager.broadcast(json.dumps(payload))
+    """Called from osc_bridge to push engine state to WS clients.
+
+    Routing (A-M3 + m1 decision):
+      * type in {"metrics", "warning"} → MetricsHub (/ws/metrics dashboard).
+      * everything else (incl. /sys/state shm raw {osc_address, args}) → the
+        existing /ws control plane. /sys/state is NOT routed to MetricsHub
+        because its latest-wins single slot would clobber distinct shm keys.
+    """
+    if payload.get("type") in ("metrics", "warning"):
+        await metrics_hub.publish(payload)
+    else:
+        await manager.broadcast(json.dumps(payload))
 
 
 # ---------------------------------------------------------------------------
@@ -482,3 +559,14 @@ if _os.path.isdir(_static_dir):
     @app.get("/", response_class=HTMLResponse)
     async def root() -> FileResponse:
         return FileResponse(_os.path.join(_static_dir, "index.html"))
+
+
+# Dashboard route is wired now (A-M3); the real HTML/JS lands in A-M4. A
+# placeholder file is shipped so the route serves 200 until then. If the file
+# is missing for any reason, return 404 gracefully rather than raising.
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> FileResponse:
+    _path = _os.path.join(_static_dir, "dashboard.html")
+    if not _os.path.isfile(_path):
+        raise HTTPException(status_code=404, detail="dashboard.html not found")
+    return FileResponse(_path)

@@ -229,7 +229,7 @@
 ## Progress tracker
 - [x] A-M1 CpuMeter + /sys/metrics 1Hz 방출 (+ADR) — done 2026-05-30. NO_JUCE 103/103, RT-asserts(build_rton) 107/107 (AC2 alloc=0 via rt_alloc_violations()==0 in test_p_sys_metrics_extended), AC2b bench median 0.115 µs vs 5.0 µs budget. binaural_demote_count emitted as sticky runtime-demote flag (0/1) via binauralIsRuntimeDemoted() — cumulative strike count getter not cheaply available; revisit if dashboard needs the count. ADR-text captured inline in plan §5 (thin channel-doc deferred to A-M6).
 - [x] A-M2 osc_bridge 텔레메트리 분류 — done 2026-05-30. `/sys/metrics`→typed metrics dict (`,s` key=value 파싱, 미지/junk 키 robust), `/sys/warning`+`/sys/binaural_warning`→warning dict ({type,ts,category,payload}, `,sf` shape), `/sys/state`(shm) + 미지 주소는 raw fallthrough 유지 (m1 결정). NEW test_osc_bridge_dashboard.py (8 tests). webgui pytest 50 passed (기존 42 + 신규 8), 무회귀.
-- [ ] A-M3 /ws/metrics + /dashboard 라우트 + MetricsHub
+- [x] A-M3 /ws/metrics + /dashboard 라우트 + MetricsHub — done 2026-05-30. server.py: MetricsHub(최신 snapshot 단일 슬롯 latest-wins + 구독자 set, ConnectionManager drop-on-fail 패턴 재사용, connect 시 즉시 last-snapshot push); `@app.websocket("/ws/metrics")`(push-only, inbound drain); `broadcast_state` 라우팅(type∈{metrics,warning}→MetricsHub, 나머지=raw/sys/state→기존 /ws); `@app.get("/dashboard")` FileResponse(파일 없으면 graceful 404). dashboard.html = A-M4 전까지 placeholder stub(200 served, A-M4 가 전면 교체). NEW test_metrics_ws.py (7 tests: metrics 수신·warning 라우팅·fresh-connect snapshot·latest-wins·/sys/state 미유입·역방향 격리·/dashboard 라우트 등록). webgui pytest 57 passed (기존 50 + 신규 7), throughput 60/120Hz 게이트 무회귀.
 - [ ] A-M4 dashboard.html/js + 자체 canvas 차트
 - [ ] A-M5 reset_demote 버튼 e2e
 - [ ] A-M6 문서 + README + ADR 확정
