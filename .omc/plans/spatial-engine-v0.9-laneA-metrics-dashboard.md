@@ -228,7 +228,7 @@
 
 ## Progress tracker
 - [x] A-M1 CpuMeter + /sys/metrics 1Hz 방출 (+ADR) — done 2026-05-30. NO_JUCE 103/103, RT-asserts(build_rton) 107/107 (AC2 alloc=0 via rt_alloc_violations()==0 in test_p_sys_metrics_extended), AC2b bench median 0.115 µs vs 5.0 µs budget. binaural_demote_count emitted as sticky runtime-demote flag (0/1) via binauralIsRuntimeDemoted() — cumulative strike count getter not cheaply available; revisit if dashboard needs the count. ADR-text captured inline in plan §5 (thin channel-doc deferred to A-M6).
-- [ ] A-M2 osc_bridge 텔레메트리 분류
+- [x] A-M2 osc_bridge 텔레메트리 분류 — done 2026-05-30. `/sys/metrics`→typed metrics dict (`,s` key=value 파싱, 미지/junk 키 robust), `/sys/warning`+`/sys/binaural_warning`→warning dict ({type,ts,category,payload}, `,sf` shape), `/sys/state`(shm) + 미지 주소는 raw fallthrough 유지 (m1 결정). NEW test_osc_bridge_dashboard.py (8 tests). webgui pytest 50 passed (기존 42 + 신규 8), 무회귀.
 - [ ] A-M3 /ws/metrics + /dashboard 라우트 + MetricsHub
 - [ ] A-M4 dashboard.html/js + 자체 canvas 차트
 - [ ] A-M5 reset_demote 버튼 e2e

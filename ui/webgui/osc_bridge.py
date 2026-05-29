@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, Optional
 
 from pythonosc import dispatcher as osc_dispatcher
@@ -128,13 +129,90 @@ def shutdown() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Address-based classification (v0.9 A-M2)
+# ---------------------------------------------------------------------------
+
+# /sys/metrics emits one ",s" key=value message per field (MetricsEmit.h).
+# Map each contract key to the parser used to coerce the raw string value.
+# Keys absent from this table are forwarded as-is under their raw key (robust
+# to extra/unknown keys — never crash).
+_METRICS_FIELD_PARSERS = {
+    "cpu_pct": int,
+    "cpu_peak_pct": int,
+    "p99_us": int,
+    "xrun_count": int,
+    "engine_overrun_count": int,
+    "binaural_demote_count": int,
+}
+
+
+def _classify_metrics(args) -> dict:
+    """Parse a /sys/metrics ",s" key=value message into a typed metrics dict.
+
+    The engine emits ONE key=value pair per OSC message (MetricsEmit.h), so
+    ``args`` is normally a single ``"key=value"`` string. We tolerate multiple
+    args defensively. Malformed/junk values and unknown keys never raise: an
+    unparseable value falls back to the raw string, a malformed pair is skipped.
+    """
+    out: dict = {"type": "metrics"}
+    for arg in args:
+        if not isinstance(arg, str) or "=" not in arg:
+            continue  # skip junk / non key=value tokens
+        key, _, raw = arg.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        parser = _METRICS_FIELD_PARSERS.get(key)
+        if parser is None:
+            out[key] = raw  # unknown key: forward raw string
+            continue
+        try:
+            out[key] = parser(raw)
+        except (ValueError, TypeError):
+            out[key] = raw  # junk value: forward raw, do not crash
+    return out
+
+
+def _classify_warning(address: str, args) -> dict:
+    """Parse a /sys/{binaural_,}warning ",sf" message → warning dict.
+
+    Wire shape (SpatialEngine.cpp): args = [category:str, payload:float].
+    Robust to missing trailing args.
+    """
+    arglist = list(args)
+    category = arglist[0] if len(arglist) >= 1 else None
+    payload = arglist[1] if len(arglist) >= 2 else None
+    return {
+        "type": "warning",
+        "ts": time.time(),
+        "category": category,
+        "payload": payload,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Internal OSC handler
 # ---------------------------------------------------------------------------
 
 def _handle_state_message(address: str, *args) -> None:
-    """Receive OSC state from engine (port 9101) → broadcast to WS clients."""
-    payload = {"osc_address": address, "args": list(args)}
+    """Receive OSC state from engine (port 9101) → broadcast to WS clients.
+
+    Address-based classification (A-M2):
+      * /sys/metrics            → typed metrics dict
+      * /sys/warning,
+        /sys/binaural_warning   → warning dict
+      * /sys/state (shm)        → raw fallthrough (m1 decision: stays on /ws)
+      * unknown addresses       → raw {osc_address, args} fallthrough
+    """
     logger.debug("OSC ← 9101  %s %s", address, args)
+    if address == "/sys/metrics":
+        payload = _classify_metrics(args)
+    elif address in ("/sys/warning", "/sys/binaural_warning"):
+        payload = _classify_warning(address, args)
+    else:
+        # /sys/state (shm on-change key=value) + every other address keep the
+        # existing raw shape for backward compat with current WS consumers.
+        payload = {"osc_address": address, "args": list(args)}
     if _loop is not None and _broadcast_fn is not None:
         asyncio.run_coroutine_threadsafe(
             _broadcast_fn(payload), _loop
