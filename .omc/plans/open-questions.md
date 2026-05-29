@@ -216,3 +216,13 @@ Round-2 Critic R1 review applied 4 CRITICAL + 4 MAJOR + 2 MINOR fixes. M2HOA-Q i
   **Resolution:** Open new DSP correctness phase **P2.3**: one-line fix to `readPos = dl.writePos` (+ bound wrap), reinstate `test_p7_fdn_t60_accuracy.cpp` from the deferred state, re-run ctest. Sequence after the P3-subset commit (P3.2/P3.4/P3.7) so the test-addition batch lands cleanly first.
 
   **Scope note:** P3.3 test file (`test_p7_fdn_t60_accuracy.cpp`) was authored but deliberately NOT committed with this batch — it will be reinstated alongside the P2.3 production fix so the test and fix land in the same commit.
+
+## spatial-engine-v0.9-laneA-metrics-dashboard - 2026-05-29
+
+- [ ] **A9-Q1 (DD-A, blocks A-M1)**: `/sys/metrics` 신규 채널 vs 기존 `/sys/state` trailing-args. Plan 권장은 신규 `/sys/metrics`(ObservabilityCounters.h:6 이미 예약; null/dante 경로에서도 상시 방출 필요; 기존 `/sys/state`는 ShmTelemetryEmitter shm-전용 on-change라 의미충돌). — Why it matters: 잘못 선택하면 null/dante 백엔드에서 CPU/xrun이 안 나가 acceptance(AC1·상시표시) 위반.
+- [x] **A9-Q2 (DD-A, OSC encoder signature) — RESOLVED 2026-05-30 → `,s` key=value**: `/sys/metrics` 인코딩은 기존 3-arg `sendReply(addr,",s",kv)` overload(OSCBackend.h:120) 재사용 = `ShmTelemetryEmitter::emitState`(`/sys/state`) 선례 그대로. 신규 C++ 인코더·신규 ADR signature 결정 없음. 멀티-int `,iiiii`(encodeOscReplyMetrics) 안은 드롭. — Why it matters(resolved): 회귀 표면·ADR 부담 최소화.
+- [ ] **A9-Q3 (DD-B, A-M1)**: CPU% 측정 clock 소스 — steady_clock wall(권장, 이식성·xrun 직결) vs CLOCK_THREAD_CPUTIME_ID(정확한 CPU 점유율, macOS 분기 부담). 집계는 EWMA(α≈0.1) + **스칼라 러닝 p99 추정기**(단일 atomic, P²/GK 류; 1024-슬롯 reservoir 는 RT coherence 위해 드롭, user-approved 2026-05-30). — Why it matters: wall은 프리엠션 포함해 약간 비관적이나 "deadline 준수" 운영 관심사에 더 actionable; 스칼라 추정기는 cross-thread race-free.
+- [ ] **A9-Q4 (DD-C, A-M4 — 사용자/Architect 확인 필요)**: 대시보드 차트 라이브러리. 윤곽 문서는 Chart.js로 적혀있으나 원칙 4(오프라인·외부 의존성 0; static/에 vendored lib 없음 확인)와 충돌. Plan 권장은 자체 경량 canvas 미니차트(~150 LOC). uPlot은 시계열 확장 시 승격 후보. — Why it matters: 의존성 도입 = 오프라인 운영·번들·playwright mount 검증 복잡도 증가.
+- [ ] **A9-Q5 (DD-D 정책 확정)**: WS `/ws/metrics` fan-out backpressure — Plan 명문화는 latest-wins(큐 사이즈 1, drop-newest, send 실패 시 즉시 disconnect). 1Hz 저레이트라 충분 판단. — Why it matters: 다중 탭/느린 클라이언트에서 메모리 누적 방지.
+- [ ] **A9-Q6 (follow-up, scope 확인)**: `/sys/binaural_status` 1Hz push 신설 여부. 윤곽 A.0는 기성 채널로 전제하나 현재 미방출(demote 상태는 BinauralMonitor atomic에만 존재). A-M1 `/sys/metrics`에 demote_count만 포함하면 A.1 §3 binaural 패널 최소 충족 가능 — 전체 B1/B2 10플래그 status는 별도 milestone로 분리할지. — Why it matters: 윤곽 scope vs 실제 코드 갭; full status 신설 시 A-M1 범위 확대.
+- [ ] **A9-Q7 (follow-up, v1.x)**: Windows CPU% clock 분기. 윤곽 A.3가 "Windows 별도 — v1.x"로 못박음. steady_clock 채택 시 Windows 동작은 자연 호환이나 thread-cpu 보조지표는 별도. — Why it matters: 크로스플랫폼 정확도 일관성.
