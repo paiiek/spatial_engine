@@ -628,6 +628,7 @@ int main(int argc, char** argv) {
         if (now - last_ambi_decoder_apply >= std::chrono::seconds(1)) {
             last_ambi_decoder_apply = now;
             engine.applyPendingAmbiDecoderChange();
+            engine.applyPendingBinauralSofa(); // B-M3: live SOFA swap on ~1 Hz control tick
         }
 
         // v0.9 Lane A (A-M1) — ~1 Hz /sys/metrics emit. UNCONDITIONAL (every

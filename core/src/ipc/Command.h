@@ -49,6 +49,7 @@ enum class CommandTag : uint8_t {
     SysBinauralEnable  = 0x18, // /sys/binaural_enable ,i {0|1} — enable binaural bus 1 rendering
     SysBinauralMode    = 0x19, // /sys/binaural_mode ,i {0|1} — 0 = B1 Direct, 1 = B2 AmbiVS (v0.5 P4)
     SysBinauralResetDemote = 0x1A, // /sys/binaural_reset_demote ,i {0|1} — v0.7 D-S1 user hatch
+    SysBinauralSofaSelect  = 0x1B, // /sys/binaural_sofa_select ,s "<name>" — B-M3 catalog name → live SOFA swap
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -268,6 +269,13 @@ struct PayloadSysBinauralResetDemote {
     bool enable = false;
 };
 
+// B-M3: /sys/binaural_sofa_select ,s "<catalog-name>" — resolve catalog name
+// → speh_path on the control thread and trigger a live SOFA swap on the ~1 Hz
+// tick. Empty string is rejected (makeUnknown) at decode time.
+struct PayloadSysBinauralSofaSelect {
+    std::string name;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -307,6 +315,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralEnable,
     PayloadSysBinauralMode,
     PayloadSysBinauralResetDemote,
+    PayloadSysBinauralSofaSelect,
     PayloadUnknown
 >;
 

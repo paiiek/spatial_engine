@@ -10,6 +10,7 @@
 #include "ipc/Command.h"
 #include "ipc/OSCBackend.h"
 #include "ipc/StateModel.h"
+#include "hrtf/HrtfCatalog.h"
 #include "output_backend/BinauralMonitor.h"
 #include "render/AmbisonicRenderer.h"
 #include "render/DBAPRenderer.h"
@@ -298,6 +299,11 @@ public:
         ambisonic_.applyPendingDecoderTypeChange();
     }
 
+    // B-M3 — ~1 Hz control-tick: if a /sys/binaural_sofa_select has set a
+    // pending path, perform the actual load + swap off the audio thread.
+    // Mirrors applyPendingAmbiDecoderChange() in cadence and threading contract.
+    void applyPendingBinauralSofa();
+
     bool getLtcCurrentTimecode(spe::sync::Timecode& out) const noexcept {
         return ltc_chase_.getCurrentTimecode(out);
     }
@@ -465,6 +471,17 @@ private:
     std::string                layout_path_;
     std::string                binaural_sofa_path_;
     std::atomic<bool>          binaural_enabled_{false};
+    // B-M3 — HRTF catalog (loaded at startup / prepareToPlay, control-thread
+    // only). Used by the SysBinauralSofaSelect OSC handler to resolve a catalog
+    // name → speh_path before setting the pending flag below.
+    hrtf::HrtfCatalog          hrtf_catalog_;
+    // B-M3 — pending SOFA swap from /sys/binaural_sofa_select. The OSC control
+    // thread stores name + resolved path here; applyPendingBinauralSofa() on
+    // the ~1 Hz tick consumes them. The flag uses relaxed stores/loads — both
+    // accesses are on the control thread (OSC callback + control tick), never
+    // the audio thread.
+    std::string                pending_binaural_sofa_path_;
+    std::atomic<bool>          pending_binaural_sofa_flag_{false};
     spe::sync::LtcChase        ltc_chase_;
     std::atomic<std::uint64_t> blocks_processed_{0};
     double                     sample_rate_{48000.0};

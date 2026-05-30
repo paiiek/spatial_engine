@@ -751,6 +751,13 @@ target_compile_definitions(test_p_hrtf_catalog PRIVATE
     SPE_CATALOG_PATH="${SPE_CATALOG_PATH}")
 add_test(NAME p_hrtf_catalog COMMAND test_p_hrtf_catalog)
 
+# B-M3 — OSC /sys/binaural_sofa_select encode/decode round-trip + catalog resolution
+add_executable(test_p_osc_binaural_sofa_select test_p_osc_binaural_sofa_select.cpp)
+target_link_libraries(test_p_osc_binaural_sofa_select PRIVATE spe_core)
+target_compile_definitions(test_p_osc_binaural_sofa_select PRIVATE
+    SPE_CATALOG_PATH="${SPE_CATALOG_PATH}")
+add_test(NAME osc_binaural_sofa_select COMMAND test_p_osc_binaural_sofa_select)
+
 # B-M2 — runtime SOFA hot-swap functional test: loadPendingSofa +
 # applyPendingSofaChange swaps the active table/tree (detectable via fixtureB's
 # distinct ITD + ir_length); a failed (oversized ir_length) load leaves the

@@ -75,6 +75,12 @@ public:
     // Engine-wide default algorithm.
     Algorithm defaultAlgo() const noexcept { return default_algo_; }
 
+    // B-M3 — control-side pending SOFA catalog name for /sys/state reflection.
+    // The actual atomic publish lives in HrtfLookup (B-M2); this field is the
+    // control-thread record of the most recently requested catalog name.
+    void setPendingSofaName(const std::string& name) { pending_sofa_name_ = name; }
+    const std::string& pendingSofaName() const noexcept { return pending_sofa_name_; }
+
     // Diagnostics.
     uint64_t reorderedDrops() const noexcept { return osc_reordered_drops_; }
     uint64_t burstAlerts()    const noexcept { return burst_alerts_; }
@@ -91,6 +97,7 @@ private:
 
     ReorderWindow reorder_window_;
     WarningCallback warning_cb_;
+    std::string pending_sofa_name_; // B-M3: last requested catalog name (control-thread only)
 
     void checkBurst(uint64_t now_ms) noexcept;
 };

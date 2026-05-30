@@ -189,6 +189,22 @@ SpatialEngine::SpatialEngine(int listen_port)
                                      : output::BinauralMode::Direct);
                 }
                 return;
+            case ipc::CommandTag::SysBinauralSofaSelect:
+                // B-M3: resolve catalog name → speh_path on the control thread,
+                // store the path for the ~1 Hz applyPendingBinauralSofa() tick.
+                // Audio thread is NOT involved — this is an early-return path.
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralSofaSelect>(&cmd.payload)) {
+                    // HrtfCatalog is control-thread-only; catalog_ is loaded at
+                    // prepareToPlay / startup. Unknown name = silent no-op.
+                    const auto* entry = hrtf_catalog_.find(p->name);
+                    if (entry && !entry->speh_path.empty()) {
+                        pending_binaural_sofa_path_ = entry->speh_path;
+                        pending_binaural_sofa_flag_.store(true, std::memory_order_relaxed);
+                        state_model_.setPendingSofaName(p->name);
+                    }
+                    // Out-of-catalog name → safe no-op (no crash).
+                }
+                return;
             case ipc::CommandTag::SysBinauralResetDemote:
                 // v0.7 D-S1 — user-controlled reset hatch. Runs on the OSC IO
                 // thread; delegates entirely to BinauralMonitor. The result
@@ -326,6 +342,7 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         dbap_.prepareToPlay(layout_, sample_rate);
         wfs_.prepareToPlay(layout_, sample_rate);
         ambisonic_.applyPendingDecoderTypeChange(); // apply any pending type before prepare
+        applyPendingBinauralSofa(); // B-M3: apply any pending catalog SOFA swap before prepare
         ambisonic_.prepareToPlay(layout_, sample_rate);
         const int n_spk = vbap_.numSpeakers();
         const size_t total = static_cast<size_t>(n_spk) * max_block_size;
@@ -1034,6 +1051,23 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                                              std::memory_order_relaxed);
     obs_counters_.per_block_time_p99_us.store(cpu_meter_.p99Us(),
                                               std::memory_order_relaxed);
+}
+
+// B-M3 — control-tick SOFA swap apply. Runs on the ~1 Hz control tick
+// (same thread + cadence as applyPendingAmbiDecoderChange). The audio thread
+// never touches pending_binaural_sofa_path_ or pending_binaural_sofa_flag_.
+void SpatialEngine::applyPendingBinauralSofa()
+{
+    if (!pending_binaural_sofa_flag_.load(std::memory_order_relaxed))
+        return;
+    pending_binaural_sofa_flag_.store(false, std::memory_order_relaxed);
+    const std::string path = pending_binaural_sofa_path_;
+    if (path.empty()) return;
+    // loadPendingSofa + applyPendingSofaChange are both control-thread only
+    // (defined in BinauralMonitor, B-M2). They perform the alloc+build off
+    // the audio thread and publish via lock-free double-buffer.
+    binaural_.loadPendingSofa(path);
+    binaural_.applyPendingSofaChange();
 }
 
 // v0.5 P4.1 (A6) / v0.5.1 Q1 — moved from header to avoid per-TU duplication.

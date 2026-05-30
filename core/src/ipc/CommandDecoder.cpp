@@ -413,6 +413,17 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         } else {
             makeUnknown();
         }
+    } else if (addr == "/sys/binaural_sofa_select") {
+        // B-M3: ,s "<catalog-name>" — live SOFA swap via catalog name lookup.
+        // Empty string is rejected (no crash, just Unknown).
+        if (args.n_str > 0 && !args.strings[0].empty()) {
+            cmd.tag = CommandTag::SysBinauralSofaSelect;
+            PayloadSysBinauralSofaSelect p;
+            p.name = args.strings[0];
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
     } else if (addr == "/sys/binaural_enable") {
         // v0.4: ,i {0|1} — toggle binaural bus 1 rendering
         cmd.tag = CommandTag::SysBinauralEnable;
@@ -802,6 +813,16 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         addr = "/sys/binaural_sofa";
         tags += 's';
         for (char c : p.path) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SysBinauralSofaSelect: {
+        // B-M3: ,s "<catalog-name>" (control-thread only)
+        auto& p = std::get<PayloadSysBinauralSofaSelect>(cmd.payload);
+        addr = "/sys/binaural_sofa_select";
+        tags += 's';
+        for (char c : p.name) args_buf.push_back(static_cast<uint8_t>(c));
         args_buf.push_back(0);
         while (args_buf.size() % 4 != 0) args_buf.push_back(0);
         break;
