@@ -67,10 +67,12 @@ def write_synthetic_sofa(out_path: str | Path,
         for r in range(n_receivers):
             base = decay * (0.5 + 0.25 * r) * (1.0 - 0.1 * m)
             # Per-receiver onset shift: contralateral (far) ear is delayed.
-            # For a source at az=+90 (m==1, right side), the LEFT ear (r==0)
-            # is contralateral and gets the delay; the RIGHT ear (r==1) leads.
+            # For az=+90 (m==1, right side): LEFT ear (r==0) is contralateral → delayed.
+            # For az=−90 (m==2, left side): RIGHT ear (r==1) is contralateral → delayed.
             shift = 0
             if itd_samples > 0 and m == 1 and r == 0:
+                shift = itd_samples
+            elif itd_samples > 0 and m == 2 and r == 1:
                 shift = itd_samples
             if shift > 0:
                 shifted = np.zeros(ir_length, dtype=np.float32)
@@ -79,10 +81,13 @@ def write_synthetic_sofa(out_path: str | Path,
             else:
                 ir[m, r, :] = base
 
-    # Source positions: two measurements at (az=0, el=0) and (az=90, el=0), 1m.
+    # Source positions: measurements at az=0, az=90, …, 1m.
+    # n_measurements=2 → az=0,90 (original).
+    # n_measurements=3 → az=0,90,−90 (pm90 fixture for B-M6).
     src_pos = np.zeros((n_measurements, 3), dtype=np.float64)
+    az_list = [0.0, 90.0, -90.0]
     for m in range(n_measurements):
-        src_pos[m] = [m * 90.0, 0.0, 1.0]
+        src_pos[m] = [az_list[m] if m < len(az_list) else m * 90.0, 0.0, 1.0]
 
     # Receivers offset ±0.09 m along the X axis (head radius).
     recv = np.zeros((n_receivers, 3, 1), dtype=np.float64)
@@ -125,8 +130,12 @@ def write_synthetic_sofa(out_path: str | Path,
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/synthetic_min.sofa"
-    # Optional positional overrides for the B-M2 swap fixture:
-    #   gen_synthetic_sofa.py <out> <ir_length> <itd_samples>
-    ir_length   = int(sys.argv[2]) if len(sys.argv) > 2 else 64
-    itd_samples = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    write_synthetic_sofa(out, ir_length=ir_length, itd_samples=itd_samples)
+    # Optional positional overrides:
+    #   gen_synthetic_sofa.py <out> <ir_length> <itd_samples> [<n_measurements>]
+    # n_measurements=2 → az=0,90 (original / B-M2 swap fixtures)
+    # n_measurements=3 → az=0,90,−90 (B-M6 pm90 fixture)
+    ir_length      = int(sys.argv[2]) if len(sys.argv) > 2 else 64
+    itd_samples    = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    n_measurements = int(sys.argv[4]) if len(sys.argv) > 4 else 2
+    write_synthetic_sofa(out, n_measurements=n_measurements,
+                         ir_length=ir_length, itd_samples=itd_samples)

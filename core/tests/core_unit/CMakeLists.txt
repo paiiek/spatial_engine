@@ -767,3 +767,17 @@ target_link_libraries(test_p_hrtf_sofa_swap_apply PRIVATE spe_core)
 target_compile_definitions(test_p_hrtf_sofa_swap_apply PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME p_hrtf_sofa_swap_apply COMMAND test_p_hrtf_sofa_swap_apply)
+
+# B-M6 — Per-dataset ITD oracle regression guard.
+# Loads every catalog .speh present on disk (skip-with-message if absent) plus
+# the always-present synthetic_itd_pm90.speh CI fixture.  Validates az=±90 ITD
+# against the Woodworth closed-form using each dataset's OWN sample_rate.
+# The test FAILS (not skips) if zero datasets were exercised.
+add_executable(test_p_binaural_dataset_itd_oracle
+    test_p_binaural_dataset_itd_oracle.cpp)
+target_link_libraries(test_p_binaural_dataset_itd_oracle PRIVATE spe_core)
+target_compile_definitions(test_p_binaural_dataset_itd_oracle PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}"
+    SPE_CATALOG_PATH="${SPE_CATALOG_PATH}")
+add_test(NAME binaural_dataset_itd_oracle
+    COMMAND test_p_binaural_dataset_itd_oracle)
