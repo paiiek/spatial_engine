@@ -210,6 +210,41 @@
     btn.addEventListener("click", onResetDemote);
   }
 
+  // --- HRTF dataset selector (B-M5) ----------------------------------------
+  function onSofaSelect(name) {
+    ctrlSend({ type: "binaural_sofa_select", name: name });
+  }
+
+  function wireSofaSelect() {
+    const sel = el("binaural-sofa-select");
+    if (!sel) return;
+    // Populate from /api/hrtf/catalog, then wire the onchange handler.
+    fetch("/api/hrtf/catalog")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        const entries = data.hrtf_catalog || [];
+        sel.innerHTML = "";
+        entries.forEach(function (entry) {
+          const opt = document.createElement("option");
+          opt.value = entry.name;
+          opt.textContent = entry.display_name || entry.name;
+          sel.appendChild(opt);
+        });
+        if (entries.length === 0) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "(no catalog)";
+          sel.appendChild(opt);
+        }
+      })
+      .catch(function () {
+        sel.innerHTML = "<option value=''>(catalog unavailable)</option>";
+      });
+    sel.addEventListener("change", function () {
+      if (sel.value) onSofaSelect(sel.value);
+    });
+  }
+
   // --- Boot ----------------------------------------------------------------
   function init() {
     connDot = el("conn-dot");
@@ -254,6 +289,7 @@
     // Initial blank render so axes/grid are visible before the first sample.
     renderCharts();
     wireResetButton();
+    wireSofaSelect();
     connect();
     ctrlConnect();
   }
@@ -264,6 +300,7 @@
     handleMessage,
     connect,
     onResetDemote,
+    onSofaSelect,
     // Expose ctrlSend so the playwright smoke can spy on outbound /ws sends
     // without a live engine.
     ctrlSend: (payload) => ctrlSend(payload),

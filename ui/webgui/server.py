@@ -373,6 +373,13 @@ def _dispatch_to_osc(msg: dict) -> dict | None:
         # CommandTag::SysBinauralResetDemote (CommandDecoder.cpp:429).
         if osc_send_fn:
             osc_send_fn("/sys/binaural_reset_demote", 1)
+    elif mtype == "binaural_sofa_select":
+        # B-M5: HRTF dataset selector → /sys/binaural_sofa_select <name>.
+        # Control-plane only; not in _POSITION_MTYPES → passes through in any
+        # bridge mode (mirrors binaural_reset_demote above).
+        name = str(msg.get("name", ""))
+        if osc_send_fn:
+            osc_send_fn("/sys/binaural_sofa_select", name)
     else:
         logger.debug("Unknown message type: %s", mtype)
 
@@ -570,6 +577,20 @@ if _os.path.isdir(_static_dir):
 # Dashboard route is wired now (A-M3); the real HTML/JS lands in A-M4. A
 # placeholder file is shipped so the route serves 200 until then. If the file
 # is missing for any reason, return 404 gracefully rather than raising.
+@app.get("/api/hrtf/catalog")
+async def get_hrtf_catalog() -> JSONResponse:
+    """B-M5: Return the HRTF dataset catalog for the dashboard selector."""
+    _catalog_path = _os.path.join(
+        _os.path.dirname(__file__), "..", "..", "assets", "hrtf", "catalog.json"
+    )
+    _catalog_path = _os.path.normpath(_catalog_path)
+    if not _os.path.isfile(_catalog_path):
+        raise HTTPException(status_code=404, detail="catalog.json not found")
+    with open(_catalog_path, encoding="utf-8") as _f:
+        _data = json.load(_f)
+    return JSONResponse(_data)
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard() -> FileResponse:
     _path = _os.path.join(_static_dir, "dashboard.html")
