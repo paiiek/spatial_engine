@@ -192,9 +192,11 @@ Suggested session split: **Session 1** = B-M1 + B-M2 + B-M3 (the load-bearing C+
 ## Progress Tracker
 - [x] **B-M1** — HRTF catalog JSON schema + loader (`assets/hrtf/catalog.json`, `core/src/hrtf/HrtfCatalog.{h,cpp}`) — gate `test_p_hrtf_catalog` ✅ 192b8d6 (NO_JUCE 104/104, 손수 JSON 파서 new-dep 0)
 - [x] **B-M2** — Double-buffer the SOFA `table_`/`tree_` + B2 VS bank ✅ 612032b. B1 self-heal; `loadPendingSofa` failure contract; stale `BinauralMonitor.h:6` 수정; `synthetic_swapB.speh` fixture. **설계 변경(architect SOUND 승인):** 합의 기본안이던 single-slot VS + `vs_rebuild_in_progress_` handshake가 Relacy에서 race-free 아님이 증명됨(in-flight AmbiVS 블록이 stale `false` 읽고 control `loadInto`와 overlap — quiescence wait 부재). → 플랜이 §B-M2 scope-split(line 107)에서 명시 승인한 **fallback = VS bank `[2][24]` 더블버퍼(`active_vs_slot_`) + quiescence handshake(`waitInactiveSlotQuiescent`)** 채택. perceptual이 아닌 **correctness** 이유로 in-scope 승격. ~+200KB resident(Risk #4 envelope 내). 게이트: `test_hrtf_sofa_swap_race`(Relacy 0 races/50k + 2 negative control: cadence-guard / VS-double-buffer 제거 시 race 재현) + `test_p_hrtf_sofa_swap_apply`(NO_JUCE 105/105) + RT-asserts 109/109.
-- [ ] **B-M3** — OSC `/sys/binaural_sofa_select ,s` (`CommandDecoder`, `StateModel`, `SpatialEngine`) — gate `test_p_osc_binaural_sofa_select`
-- [ ] **B-M4** — fetch script + license docs (`scripts/fetch_hrtf_datasets.sh`, `docs/HRTF_DATASETS.md`, `.gitignore`) — gate dry-run + HEAD validation
-- [ ] **B-M5** — WebGUI selector wired into Lane A dashboard (`dashboard.html`, `server.py`) — gate `test_dashboard_sofa_select_smoke`
-- [ ] **B-M6** — per-dataset ITD oracle (`test_p_binaural_dataset_itd_oracle.cpp`) — gate NO_JUCE ctest
+- [x] **B-M3** — OSC `/sys/binaural_sofa_select ,s` (`CommandDecoder`, `StateModel`, `SpatialEngine`) — gate `test_p_osc_binaural_sofa_select` ✅ 3ef76a3 (NO_JUCE 106/106, RT 110/110; 핸들러는 OSC IO-thread, audio 미접촉)
+- [x] **B-M4** — fetch script + license docs (`scripts/fetch_hrtf_datasets.sh`, `docs/HRTF_DATASETS.md`, `.gitignore`) — gate dry-run + HEAD validation ✅ d906d1e (dry-run exit 0/per-URL, bash -n clean; ⚠️ CIPIC 410/SADIE 404 → catalog URL 갱신 follow-up)
+- [x] **B-M5** — WebGUI selector wired into Lane A dashboard (`dashboard.html`, `dashboard.js`, `server.py`) — gate `test_dashboard_sofa_select_smoke` ✅ 8066e4e (webgui pytest 67/67; 경로버그 fix 후 통과)
+- [x] **B-M6** — per-dataset ITD oracle (`test_p_binaural_dataset_itd_oracle.cpp`) — gate NO_JUCE ctest ✅ 916c9ae (측정 32 vs Woodworth 31.48 ±20% 내, 양방향 sign OK, fail-if-zero 가드, NO_JUCE 107/107)
+
+**Lane B 완료 (2026-05-30):** B-M1~B-M6 전부 main scoped commit (192b8d6→916c9ae). 최종 게이트 회귀 확인 중.
 
 **Resume rule:** This is the active Lane B plan. On session restart, autopilot reads this tracker and continues at the first unchecked milestone — never re-plan from scratch.
