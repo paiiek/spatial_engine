@@ -207,4 +207,20 @@ if(SPATIAL_ENGINE_BUILD_RELACY_TESTS)
     add_test(NAME osc_outbound_relacy COMMAND test_osc_outbound_relacy)
     message(STATUS "spatial_engine: SPATIAL_ENGINE_BUILD_RELACY_TESTS=ON — "
                    "test_osc_outbound_relacy registered as ctest.")
+
+    # v0.9 Lane B (B-M2) — SOFA hot-swap race detector. Models the HrtfLookup
+    # 2-slot table/tree double buffer + the single-slot B2 VS-bank
+    # vs_rebuild_in_progress_ handshake. Non-vacuous (>=2 publishes/block,
+    # dereferences slot DATA) with two #ifdef-toggleable negative controls
+    # (NEG_REMOVE_CADENCE_GUARD, NEG_REMOVE_FORCE_DIRECT).
+    add_executable(test_hrtf_sofa_swap_race
+        tests/relacy/test_hrtf_sofa_swap_race.cpp)
+    target_include_directories(test_hrtf_sofa_swap_race PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/relacy")
+    target_compile_options(test_hrtf_sofa_swap_race PRIVATE
+        -UNDEBUG
+        -std=c++20)
+    target_link_libraries(test_hrtf_sofa_swap_race PRIVATE Threads::Threads)
+    add_test(NAME hrtf_sofa_swap_race COMMAND test_hrtf_sofa_swap_race)
+    message(STATUS "spatial_engine: test_hrtf_sofa_swap_race registered as ctest.")
 endif()

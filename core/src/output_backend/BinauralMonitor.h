@@ -3,10 +3,21 @@
 //
 // v0.5 refactor (commercial-grade):
 //   * Each of MAX_OBJECTS objects owns a dual-slot OlaConvolver pair (L/R).
-//   * setDirection(obj_id, az, el) is CONTROL-thread only: looks up the
-//     nearest HRIR via the KdTree3D, calls loadInto() on the idle slot, then
-//     atomically promotes it via front_idx_.store(release). A 2-block
-//     crossfade ramps the old slot down and new slot up.
+//   * setDirection(obj_id, az, el) runs ON THE AUDIO THREAD (v0.9 Lane B
+//     correction — the original v0.5 comment claimed "CONTROL-thread only",
+//     which was STALE/WRONG): SpatialEngine::audioBlock() calls it once per
+//     active object per block (core/src/core/SpatialEngine.cpp:886). It looks
+//     up the nearest HRIR via the active KdTree3D slot, calls loadInto() on the
+//     idle convolver slot, then atomically promotes it via front_idx_.store(
+//     release). A 2-block crossfade ramps the old slot down and new slot up.
+//     All of this is alloc-free and RT-safe.
+//   * Because setDirection() runs on the audio thread and re-looks-up against
+//     the active SOFA table/tree every block, a runtime SOFA hot-swap (v0.9
+//     Lane B B-M2) needs NO worker re-derive of per-object HRIRs: the B1 path
+//     SELF-HEALS. The control thread builds a new table/tree into the inactive
+//     HrtfLookup slot and publishes one atomic; on the next block setDirection()
+//     re-looks-up against the new active slot and reloads through the same
+//     2-block crossfade. (See HrtfLookup.h BINDING INVARIANT.)
 //   * processBlockForObject(obj_id, monoIn, leftOut, rightOut, n) is RT-safe.
 //   * Pass-through fallback retained for when no .speh has been loaded.
 //   * Chained-crossfade preempt-with-current-gain handoff per A5/r2 amendment.
@@ -44,6 +55,7 @@
 #include "core/Constants.h"
 #include "dsp/GainRamp.h"
 #include "geometry/SpeakerLayout.h"
+#include "hrtf/HrtfLookup.h"
 #include "hrtf/KdTree3D.h"
 #include "hrtf/OlaConvolver.h"
 #include "hrtf/SofaBinReader.h"
@@ -117,6 +129,59 @@ public:
     void setDirection(float az_rad, float el_rad = 0.f) {
         setDirection(0, az_rad, el_rad);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // v0.9 Lane B (B-M2) — runtime SOFA hot-swap.
+    // ─────────────────────────────────────────────────────────────────────
+
+    // CONTROL THREAD ONLY — ALLOCATES (loadSpeh + KdTree3D::build + a B2 VS
+    // rebuild). Loads `path` into the inactive HrtfLookup slot and, on success,
+    // publishes it as the new active slot, builds the inactive B2 VS slot from
+    // the new active tree and store-release publishes active_vs_slot_, and
+    // resets the runtime-demote state (strikes/flag/latch — but NOT the 60 s
+    // user-reset cooldown clock). B1 self-heals on the audio thread next block.
+    //
+    // FAILURE CONTRACT: a failed load (FileNotFound / SampleRateMismatch /
+    // IRLengthUnsupported (ir_length > kOlaMaxIRLength)) leaves the active slot
+    // UNTOUCHED (no publish, old SOFA stays live), arms a one-shot
+    // sofa_load_failed_<reason> warning latch, and returns false. Never
+    // half-publishes. Returns true on a successful swap.
+    bool loadPendingSofa(const std::string& path);
+
+    // CONTROL THREAD ONLY. Control-tick entry mirroring
+    // AmbisonicRenderer::applyPendingDecoderTypeChange(): compares the pending
+    // SOFA path to the applied one and, if changed, runs loadPendingSofa().
+    // No-op (returns false) when nothing is pending. Set the pending path via
+    // setPendingSofaPath() from the audio-thread command drain.
+    bool applyPendingSofaChange();
+
+    // CONTROL/AUDIO THREAD — relaxed store of the requested SOFA path. The
+    // audio-thread command handler stores the path here; the ~1 Hz control
+    // tick consumes it via applyPendingSofaChange(). Storing a std::string is
+    // NOT itself audio-thread-safe; the engine's command drain runs this from
+    // a context where a std::string assignment is acceptable (it mirrors the
+    // existing binaural_sofa_path_ string handling). Control-thread callers
+    // should prefer this + applyPendingSofaChange().
+    void setPendingSofaPath(const std::string& path) { pending_sofa_path_ = path; }
+
+    // IO-thread drain: returns true once per failed-load event. Heartbeat emits
+    // /sys/warning ,s "sofa_load_failed_<reason>". The reason code is read via
+    // sofaLoadFailureReason() on a true result.
+    bool drainSofaLoadFailedPending() noexcept {
+        return sofa_load_failed_pending_.exchange(false, std::memory_order_acq_rel);
+    }
+    // Last failure reason code ("file_not_found" | "sample_rate_mismatch" |
+    // "ir_length_unsupported" | "invalid_format"). "" before any failure.
+    const char* sofaLoadFailureReason() const noexcept;
+
+    // Test-only: read the active SOFA table's ir_length (lets a functional
+    // test detect that the active table changed across a swap without poking
+    // private members). Returns 0 when no HRTF is loaded.
+    int activeSofaIrLengthForTest() const noexcept;
+    // Test-only: the active table's nearest HRIR L/R onset (argmax|h|) for a
+    // given engine az/el — used to detect an ITD change across a swap.
+    void activeSofaOnsetForTest(float az_rad, float el_rad,
+                                int& onsetL, int& onsetR) const noexcept;
 
     // Telemetry — sum of per-slot loadInto failures across all objects.
     std::uint64_t loadIntoFailures() const noexcept;
@@ -449,9 +514,12 @@ private:
     int   block_size_   = 64;
     float sample_rate_  = 48000.f;
 
-    // HRTF table + spatial index. Built once at initialize().
-    hrtf::HrtfTable table_;
-    hrtf::KdTree3D  tree_;
+    // v0.9 Lane B (B-M2) — 2-slot SOFA table/tree double buffer. Replaces the
+    // single table_/tree_ pair. initialize() seeds slot 0 (loadIntoActive);
+    // a runtime swap (loadPendingSofa) loads+builds the inactive slot then
+    // publishes. setDirection() (audio thread) and initializeB2() read the
+    // active slot. The double buffer covers table/tree ONLY (see HrtfLookup.h).
+    hrtf::HrtfLookup hrtf_;
 
     // Per-object dual-slot state.
     struct ObjectSlots {
@@ -490,20 +558,96 @@ private:
     void primeAllSlots();
 
     // ──── v0.5 P4 — B2 AmbiVS chain (24-pt t-design VS) ────
+    // v0.9 Lane B (B-M2): the convolver banks + per-VS HRIR cache are now
+    // DOUBLE-BUFFERED ([2][kNumVirtualSpeakers]); active_vs_slot_ selects the
+    // slot the audio thread reads. A runtime SOFA swap rebuilds the inactive
+    // slot then store-release publishes. Layout (vs_decoder_/vs_layout_) and the
+    // decode→VS path stay single — only the HRIR-dependent banks/caches double.
     bool                                       b2_initialized_ = false;
     spe::ambi::AmbiDecoder                     vs_decoder_;
     spe::geometry::SpeakerLayout               vs_layout_;
-    std::array<hrtf::OlaConvolver,
-               kNumVirtualSpeakers>            vs_conv_L_{};
-    std::array<hrtf::OlaConvolver,
-               kNumVirtualSpeakers>            vs_conv_R_{};
-    // Per-VS HRIR cache keyed by t-design point. Populated once at
-    // initialize() and invariant across physical-layout swaps (A4 clarif).
-    std::array<std::array<float, hrtf::kOlaMaxIRLength>,
-               kNumVirtualSpeakers>            vs_hrir_L_{};
-    std::array<std::array<float, hrtf::kOlaMaxIRLength>,
-               kNumVirtualSpeakers>            vs_hrir_R_{};
-    std::array<int, kNumVirtualSpeakers>       vs_hrir_len_{};
+    std::array<std::array<hrtf::OlaConvolver, kNumVirtualSpeakers>, 2> vs_conv_L_{};
+    std::array<std::array<hrtf::OlaConvolver, kNumVirtualSpeakers>, 2> vs_conv_R_{};
+    // Per-VS HRIR cache keyed by t-design point (per slot). Populated at
+    // initialize() (slot 0) and on each runtime swap (inactive slot).
+    std::array<std::array<std::array<float, hrtf::kOlaMaxIRLength>,
+               kNumVirtualSpeakers>, 2>        vs_hrir_L_{};
+    std::array<std::array<std::array<float, hrtf::kOlaMaxIRLength>,
+               kNumVirtualSpeakers>, 2>        vs_hrir_R_{};
+    std::array<std::array<int, kNumVirtualSpeakers>, 2> vs_hrir_len_{};
+
+    // ──── v0.9 Lane B (B-M2) — SOFA hot-swap: B2 VS-bank DOUBLE BUFFER ────
+    //
+    // DESIGN NOTE (justified deviation from the plan's first-draft DEFAULT):
+    // The plan initially suggested a single-slot VS bank quiesced by a one-way
+    // flag (audio force-Directs when a rebuild is in progress). Implementing and
+    // modeling that in Relacy proved it is NOT race-free: an audio block's
+    // acquire-load of the flag can legally read a STALE false (C++ coherence
+    // only forbids a thread from going BACKWARDS relative to what it already
+    // read, not from reading an older value than a concurrent store), so a bank
+    // read can overlap a bank write. The plan explicitly authorizes the fallback:
+    // "double-buffer the VS bank with active_vs_slot_... does NOT have the
+    // TOCTOU problem and is the cleaner answer." We implement that fallback.
+    //
+    // Mechanism: mirrors obj_slots_.front_idx, AmbiDecoder, and HrtfLookup.
+    // The control tick builds into the INACTIVE VS slot (1 - active_vs_slot_),
+    // then store-release publishes active_vs_slot_. The audio thread load-
+    // acquires active_vs_slot_ ONCE per block in processBlockB2() and reads only
+    // that slot's convolvers. The inactive slot is guaranteed quiescent before
+    // overwrite by waitInactiveSlotQuiescent() (see below), which uses the
+    // explicit last-consumed-slot handshake (audio publishes at end of each
+    // block via finalizeXfadeBlock; control waits until last_consumed_vs_slot_
+    // ≠ the slot it is about to overwrite). No flag, no force-Direct needed.
+    std::atomic<int> active_vs_slot_{0};
+
+    // Audio-block tick counter. Bumped (release) exactly once per audio block by
+    // finalizeXfadeBlock() (end-of-block, after the slot DATA reads).
+    std::atomic<std::uint64_t> audio_block_tick_{0};
+
+    // EXPLICIT QUIESCENCE HANDSHAKE (the robust fix documented at
+    // AmbiDecoder.h:16-25: "audio publishes last-consumed slot index; control
+    // waits until the to-be-rebuilt slot ≠ last-consumed"). The audio thread
+    // records the slot index it actually READ this block into these plain
+    // members (audio-thread-only) at the read site, then finalizeXfadeBlock()
+    // publishes them (release) at end of block. The control tick's reuse path
+    // (loadPendingSofa) acquire-loads them and waits until the slot it is about
+    // to overwrite is NO LONGER the audio's last-consumed slot — guaranteeing no
+    // in-flight reader still holds it. This makes the 2-slot double buffer
+    // provably race-free WITHOUT relying on the ~1 Hz timing slack (which the
+    // relacy model cannot assume). Init = -1 (no block consumed yet).
+    int               last_consumed_table_slot_local_ = -1;  // audio-thread only
+    int               last_consumed_vs_slot_local_    = -1;  // audio-thread only
+    std::atomic<int>  last_consumed_table_slot_{-1};         // published
+    std::atomic<int>  last_consumed_vs_slot_{-1};            // published
+
+    // pending/applied SOFA path — mirrors AmbisonicRenderer's pending/applied
+    // decoder-type pattern. Control thread reads pending_ in applyPendingSofaChange().
+    std::string pending_sofa_path_;
+    std::string applied_sofa_path_;
+
+    // Failure-contract telemetry. Set by loadPendingSofa() on a failed load;
+    // drained once by the IO heartbeat. reason_ is one of the codes documented
+    // on sofaLoadFailureReason().
+    std::atomic<bool> sofa_load_failed_pending_{false};
+    int               sofa_load_failed_reason_ = -1;  // matches hrtf::SpehResult
+
+    // CONTROL THREAD ONLY — rebuild the INACTIVE B2 VS-bank slot (vs_conv_*_ +
+    // vs_hrir_* cache for slot 1-active) from the CURRENT active HrtfLookup tree,
+    // then store-release publishes active_vs_slot_. Allocates nothing
+    // (convolvers were primed in initializeB2()); just re-derives HRIRs +
+    // loadInto(). No-op when !b2_initialized_. Cadence-guarded by the caller
+    // (loadPendingSofa) so the inactive slot is quiescent before reuse.
+    void rebuildB2FromActiveTree();
+
+    // CONTROL THREAD ONLY — fill VS-bank slot `dst_slot` (HRIR cache +
+    // convolvers) from the CURRENT active HrtfLookup tree. Does NOT publish.
+    void fillVsSlotFromActiveTree(int dst_slot);
+
+    // ≥1-block cadence guard helper (control thread): wait for the audio
+    // per-block tick to advance by >=2 so any in-flight audio block holding the
+    // to-be-overwritten inactive slot index has finished. Bounded spin: no
+    // advance ⇒ no audio thread reading (headless / stopped engine) ⇒ proceed.
+    void waitInactiveSlotQuiescent() noexcept;
 
     // Scratch for AmbiDecoder.decode() output: interleaved
     // [sample * kNumVirtualSpeakers + vs_idx]. Sized MAX_BLOCK * 24.

@@ -40,19 +40,44 @@ def write_synthetic_sofa(out_path: str | Path,
                          n_measurements: int = 2,
                          n_receivers: int = 2,
                          ir_length: int = 64,
-                         sample_rate: float = 48000.0) -> None:
+                         sample_rate: float = 48000.0,
+                         itd_samples: int = 0) -> None:
+    """Write a synthetic SimpleFreeFieldHRIR SOFA fixture.
+
+    itd_samples > 0 embeds a per-receiver onset delay so the L/R IRs differ
+    in their leading-edge index (a detectable inter-aural time difference).
+    For an az=+90 source (right-side in pipeline convention) the right ear
+    (receiver index 1) leads — its onset stays at 0 while the contralateral
+    (left, receiver index 0) onset is shifted by itd_samples. This is used by
+    B-M2's swap-detection fixture, where fixtureB must differ from
+    synthetic_min in BOTH ITD and ir_length so an "active table changed"
+    assertion is unambiguous.
+    """
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    # Synthetic IR: dirac at 0 + exponential decay; per-receiver gain ramps so
-    # the two channels are distinguishable post-round-trip.
+    # Synthetic IR: dirac at the per-receiver onset + exponential decay tail;
+    # per-receiver gain ramps so the two channels are distinguishable
+    # post-round-trip.
     n = np.arange(ir_length, dtype=np.float32)
     decay = np.exp(-n / 8.0).astype(np.float32)
     decay[0] = 1.0  # dirac dominant
     ir = np.zeros((n_measurements, n_receivers, ir_length), dtype=np.float32)
     for m in range(n_measurements):
         for r in range(n_receivers):
-            ir[m, r, :] = decay * (0.5 + 0.25 * r) * (1.0 - 0.1 * m)
+            base = decay * (0.5 + 0.25 * r) * (1.0 - 0.1 * m)
+            # Per-receiver onset shift: contralateral (far) ear is delayed.
+            # For a source at az=+90 (m==1, right side), the LEFT ear (r==0)
+            # is contralateral and gets the delay; the RIGHT ear (r==1) leads.
+            shift = 0
+            if itd_samples > 0 and m == 1 and r == 0:
+                shift = itd_samples
+            if shift > 0:
+                shifted = np.zeros(ir_length, dtype=np.float32)
+                shifted[shift:] = base[:ir_length - shift]
+                ir[m, r, :] = shifted
+            else:
+                ir[m, r, :] = base
 
     # Source positions: two measurements at (az=0, el=0) and (az=90, el=0), 1m.
     src_pos = np.zeros((n_measurements, 3), dtype=np.float64)
@@ -100,4 +125,8 @@ def write_synthetic_sofa(out_path: str | Path,
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/synthetic_min.sofa"
-    write_synthetic_sofa(out)
+    # Optional positional overrides for the B-M2 swap fixture:
+    #   gen_synthetic_sofa.py <out> <ir_length> <itd_samples>
+    ir_length   = int(sys.argv[2]) if len(sys.argv) > 2 else 64
+    itd_samples = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    write_synthetic_sofa(out, ir_length=ir_length, itd_samples=itd_samples)

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <thread>
 
 namespace spe::output {
 
@@ -67,7 +68,9 @@ BinauralMonitor::InitResult BinauralMonitor::initialize(const Config& cfg)
         return InitResult::Ok;
     }
 
-    hrtf::SpehResult res = hrtf::loadSpeh(cfg.sofaPath, cfg.sampleRate, table_);
+    // v0.9 Lane B (B-M2) — seed the ACTIVE HrtfLookup slot (slot 0). loadSpeh
+    // + KD-tree build happen on the control thread here (allocates OK).
+    hrtf::SpehResult res = hrtf_.loadIntoActive(cfg.sofaPath, cfg.sampleRate);
     switch (res) {
     case hrtf::SpehResult::Ok:               break;
     case hrtf::SpehResult::FileNotFound:     return InitResult::SofaNotFound;
@@ -77,9 +80,8 @@ BinauralMonitor::InitResult BinauralMonitor::initialize(const Config& cfg)
     }
 
     hrtf_loaded_ = true;
-
-    // Build the KD-tree on positions (control thread, allocates OK).
-    tree_.build(table_);
+    applied_sofa_path_ = cfg.sofaPath;
+    pending_sofa_path_ = cfg.sofaPath;
 
     // Prime all OlaConvolvers to worst-case capacity so loadInto() never allocates.
     primeAllSlots();
@@ -117,9 +119,20 @@ void BinauralMonitor::setDirection(int obj_id, float az_rad, float el_rad)
 
     auto& obj = obj_slots_[static_cast<std::size_t>(obj_id)];
 
-    // Look up nearest HRIR pair via KD-tree (O(log N), alloc-free).
-    const hrtf::HrtfPair p =
-        hrtf::lookupHrtfFromTree(table_, tree_, az_rad, el_rad);
+    // v0.9 Lane B (B-M2) — look up against the ACTIVE SOFA slot. One
+    // acquire-load of the slot index, then read that slot's table/tree (mirror
+    // AmbiDecoder::decode() at AmbiDecoder.cpp:241). On a runtime swap this is
+    // how B1 self-heals: the next block re-looks-up against the new active slot
+    // and reloads through the existing 2-block crossfade.
+    const int slot = hrtf_.activeSlot();
+    // Record the table slot consumed this block (audio-thread-only local;
+    // published by finalizeXfadeBlock() for the control tick's quiescence
+    // handshake). setDirection() may run once per object per block — they all
+    // read the same active slot, so the last write correctly reflects the slot
+    // in use this block.
+    last_consumed_table_slot_local_ = slot;
+    const hrtf::HrtfPair p = hrtf::lookupHrtfFromTree(
+        hrtf_.tableForSlot(slot), hrtf_.treeForSlot(slot), az_rad, el_rad);
 
     // Determine which slot to load (the one NOT currently fronted).
     const int front = obj.front_idx.load(std::memory_order_acquire);
@@ -266,8 +279,10 @@ std::uint64_t BinauralMonitor::loadIntoFailures() const noexcept
         for (const auto& c : obj.conv_L) total += c.loadIntoFailures();
         for (const auto& c : obj.conv_R) total += c.loadIntoFailures();
     }
-    for (const auto& c : vs_conv_L_) total += c.loadIntoFailures();
-    for (const auto& c : vs_conv_R_) total += c.loadIntoFailures();
+    for (const auto& slot : vs_conv_L_)
+        for (const auto& c : slot) total += c.loadIntoFailures();
+    for (const auto& slot : vs_conv_R_)
+        for (const auto& c : slot) total += c.loadIntoFailures();
     return total;
 }
 
@@ -306,39 +321,204 @@ void BinauralMonitor::initializeB2()
     // 2. Prepare the AmbiDecoder for orders 1..3 against vs_layout_.
     vs_decoder_.prepare(vs_layout_);
 
-    // 3. Per-VS HRIR cache + convolver priming. KD-tree lookup at each VS
-    //    direction yields the nearest HRIR pair; we copy into the cache and
-    //    prime+loadInto the convolver pair.
+    // 3. Prime ALL 96 VS convolvers (2 slots × 24 × L/R) to worst-case capacity
+    //    (allocates; control thread). loadInto() into them is then alloc-free
+    //    for any later swap.
+    for (int s = 0; s < 2; ++s) {
+        for (int i = 0; i < kNumVirtualSpeakers; ++i) {
+            vs_conv_L_[static_cast<std::size_t>(s)][static_cast<std::size_t>(i)]
+                .prepareForReload(hrtf::kOlaMaxIRLength, block_size_);
+            vs_conv_R_[static_cast<std::size_t>(s)][static_cast<std::size_t>(i)]
+                .prepareForReload(hrtf::kOlaMaxIRLength, block_size_);
+        }
+    }
+
+    b2_initialized_ = true;
+    active_vs_slot_.store(0, std::memory_order_release);
+
+    // 4. Populate slot 0's per-VS HRIR cache + convolvers from the active tree.
+    //    fillVsSlotFromActiveTree writes a SPECIFIC slot (no publish); we fill
+    //    the active slot (0) directly at init since nothing is reading yet.
+    fillVsSlotFromActiveTree(0);
+}
+
+void BinauralMonitor::fillVsSlotFromActiveTree(int dst_slot)
+{
+    const std::size_t s = static_cast<std::size_t>(dst_slot);
+    const int slot = hrtf_.activeSlot();
+    const hrtf::HrtfTable& table = hrtf_.tableForSlot(slot);
+    const hrtf::KdTree3D&  tree  = hrtf_.treeForSlot(slot);
+
     for (int i = 0; i < kNumVirtualSpeakers; ++i) {
+        const std::size_t vi = static_cast<std::size_t>(i);
         const auto& pt    = spe::ambi::kTDesign24[i];
         const float horiz = std::sqrt(pt.x * pt.x + pt.z * pt.z);
         const float az    = std::atan2(pt.x, pt.z);
         const float el    = std::atan2(pt.y, horiz);
 
         const hrtf::HrtfPair p =
-            hrtf::lookupHrtfFromTree(table_, tree_, az, el);
+            hrtf::lookupHrtfFromTree(table, tree, az, el);
         const int ir_len = std::min(p.ir_length, hrtf::kOlaMaxIRLength);
-        vs_hrir_len_[static_cast<std::size_t>(i)] = ir_len;
-        std::fill(vs_hrir_L_[static_cast<std::size_t>(i)].begin(),
-                  vs_hrir_L_[static_cast<std::size_t>(i)].end(), 0.f);
-        std::fill(vs_hrir_R_[static_cast<std::size_t>(i)].begin(),
-                  vs_hrir_R_[static_cast<std::size_t>(i)].end(), 0.f);
-        std::copy(p.left,  p.left  + ir_len,
-                  vs_hrir_L_[static_cast<std::size_t>(i)].begin());
-        std::copy(p.right, p.right + ir_len,
-                  vs_hrir_R_[static_cast<std::size_t>(i)].begin());
+        vs_hrir_len_[s][vi] = ir_len;
+        std::fill(vs_hrir_L_[s][vi].begin(), vs_hrir_L_[s][vi].end(), 0.f);
+        std::fill(vs_hrir_R_[s][vi].begin(), vs_hrir_R_[s][vi].end(), 0.f);
+        std::copy(p.left,  p.left  + ir_len, vs_hrir_L_[s][vi].begin());
+        std::copy(p.right, p.right + ir_len, vs_hrir_R_[s][vi].begin());
 
-        vs_conv_L_[static_cast<std::size_t>(i)].prepareForReload(
-            hrtf::kOlaMaxIRLength, block_size_);
-        vs_conv_R_[static_cast<std::size_t>(i)].prepareForReload(
-            hrtf::kOlaMaxIRLength, block_size_);
-        vs_conv_L_[static_cast<std::size_t>(i)].loadInto(
-            vs_hrir_L_[static_cast<std::size_t>(i)].data(), ir_len);
-        vs_conv_R_[static_cast<std::size_t>(i)].loadInto(
-            vs_hrir_R_[static_cast<std::size_t>(i)].data(), ir_len);
+        vs_conv_L_[s][vi].loadInto(vs_hrir_L_[s][vi].data(), ir_len);
+        vs_conv_R_[s][vi].loadInto(vs_hrir_R_[s][vi].data(), ir_len);
+    }
+}
+
+void BinauralMonitor::rebuildB2FromActiveTree()
+{
+    if (!b2_initialized_) return;
+
+    // v0.9 Lane B (B-M2) — DOUBLE-BUFFER publish (mirrors AmbiDecoder /
+    // obj_slots_.front_idx). Build the INACTIVE VS slot from the new active
+    // SOFA tree, then store-release publish it via active_vs_slot_. The audio
+    // thread acquire-loads active_vs_slot_ once per block in processBlockB2()
+    // and reads only that slot's convolvers. The caller (loadPendingSofa) has
+    // already called waitInactiveSlotQuiescent(), so no in-flight audio block
+    // is still holding the inactive slot index as its last-consumed slot.
+    const int inactive = 1 - active_vs_slot_.load(std::memory_order_relaxed);
+    fillVsSlotFromActiveTree(inactive);
+    active_vs_slot_.store(inactive, std::memory_order_release);
+}
+
+void BinauralMonitor::waitInactiveSlotQuiescent() noexcept
+{
+    // EXPLICIT QUIESCENCE HANDSHAKE (AmbiDecoder.h:16-25 robust fix). We are
+    // about to overwrite the INACTIVE table slot (1 - active_sofa_slot_) and the
+    // INACTIVE VS slot (1 - active_vs_slot_). Wait until the audio thread's
+    // last-consumed slot is NO LONGER either inactive slot — i.e. every in-flight
+    // reader has moved on to the active slot — AND the per-block tick has
+    // advanced at least once (so a stale "never consumed" reading can't pass
+    // vacuously). The acquire-loads pair with finalizeXfadeBlock()'s release
+    // stores, establishing the happens-before that makes the overwrite race-free.
+    //
+    // Bounded spin: if the tick never advances, no audio thread is consuming
+    // slots (headless unit test / stopped engine — finalizeXfadeBlock() is never
+    // called), so the inactive slots are trivially quiescent and we proceed.
+    const int inactive_table = 1 - hrtf_.activeSlot();
+    const int inactive_vs    = 1 - active_vs_slot_.load(std::memory_order_acquire);
+    const std::uint64_t start_tick =
+        audio_block_tick_.load(std::memory_order_acquire);
+
+    constexpr int kCadenceSpinBudget = 10000000;
+    for (int spin = 0; spin < kCadenceSpinBudget; ++spin) {
+        const std::uint64_t tick =
+            audio_block_tick_.load(std::memory_order_acquire);
+        if (tick == start_tick) {
+            // No audio block has finished yet — yield the CPU so the audio
+            // thread (if it exists) can run. This is the control thread only,
+            // so yielding is safe. On a stopped/headless engine the tick never
+            // advances and we exit via the budget bound above.
+            std::this_thread::yield();
+            continue;
+        }
+        const int lc_table = last_consumed_table_slot_.load(std::memory_order_acquire);
+        const int lc_vs     = last_consumed_vs_slot_.load(std::memory_order_acquire);
+        // Quiescent once the most-recently-finished block consumed neither
+        // inactive slot. (-1 = never consumed that buffer ⇒ trivially clear.)
+        const bool table_clear = (lc_table != inactive_table);
+        const bool vs_clear     = (lc_vs    != inactive_vs);
+        if (table_clear && vs_clear)
+            break;
+        std::this_thread::yield();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v0.9 Lane B (B-M2) — runtime SOFA hot-swap (CONTROL THREAD ONLY).
+// ─────────────────────────────────────────────────────────────────────────
+
+bool BinauralMonitor::loadPendingSofa(const std::string& path)
+{
+    // CONTROL THREAD ONLY — ALLOCATES.
+    // ≥1-block CADENCE GUARD before overwriting either inactive slot (table or
+    // VS bank). On a 2nd+ consecutive swap the inactive slot was the ACTIVE slot
+    // one publish ago; an audio block may still hold its index from its last
+    // snapshot. Wait until any such in-flight reader has finished (upholds the
+    // 2-slot double-buffer invariant — HrtfLookup.h / AmbiDecoder.h:16-25).
+    waitInactiveSlotQuiescent();
+
+    // 1. Load + build into the INACTIVE HrtfLookup slot. loadSpeh enforces the
+    //    failure contract: IRLengthUnsupported when ir_length > kOlaMaxIRLength,
+    //    plus FileNotFound / SampleRateMismatch / format errors.
+    const hrtf::SpehResult res = hrtf_.loadIntoInactive(path, sample_rate_);
+    if (res != hrtf::SpehResult::Ok) {
+        // FAILURE CONTRACT: active slot UNTOUCHED, old SOFA stays live, no
+        // publish. Arm the one-shot warning latch with the reason code.
+        sofa_load_failed_reason_ = static_cast<int>(res);
+        sofa_load_failed_pending_.store(true, std::memory_order_release);
+        return false;
     }
 
-    b2_initialized_ = true;
+    // 2. Publish the freshly-built inactive slot (store-release). The audio
+    //    thread's next setDirection() acquire-load sees the new active table/
+    //    tree and B1 self-heals via the 2-block crossfade. No per-object
+    //    convolver is touched here (that would race the audio-thread write).
+    hrtf_.publish();
+
+    // 3. Build the inactive B2 VS slot from the new active tree and
+    //    store-release publish active_vs_slot_. No-op when B2 was never
+    //    initialised. The inactive slot was already guarded quiescent by
+    //    waitInactiveSlotQuiescent() above, so no in-flight reader holds it.
+    rebuildB2FromActiveTree();
+
+    // 4. Reset runtime-demote state (fresh measurement environment) via the
+    //    existing clear path — but do NOT reset the 60 s user-reset cooldown
+    //    clock (runtime_demote_last_reset_ns_), to prevent swap-spam from
+    //    bypassing the cooldown.
+    clearRuntimeDemoteForTest();
+
+    applied_sofa_path_ = path;
+    return true;
+}
+
+bool BinauralMonitor::applyPendingSofaChange()
+{
+    // CONTROL THREAD ONLY — mirrors AmbisonicRenderer::applyPendingDecoderTypeChange().
+    if (!hrtf_loaded_) return false;
+    if (pending_sofa_path_ == applied_sofa_path_) return false;
+    return loadPendingSofa(pending_sofa_path_);
+}
+
+const char* BinauralMonitor::sofaLoadFailureReason() const noexcept
+{
+    switch (static_cast<hrtf::SpehResult>(sofa_load_failed_reason_)) {
+    case hrtf::SpehResult::FileNotFound:        return "file_not_found";
+    case hrtf::SpehResult::SampleRateMismatch:  return "sample_rate_mismatch";
+    case hrtf::SpehResult::IRLengthUnsupported: return "ir_length_unsupported";
+    case hrtf::SpehResult::InvalidMagic:        return "invalid_format";
+    case hrtf::SpehResult::TruncatedFile:       return "invalid_format";
+    default:                                    return "";
+    }
+}
+
+int BinauralMonitor::activeSofaIrLengthForTest() const noexcept
+{
+    if (!hrtf_loaded_) return 0;
+    return static_cast<int>(hrtf_.activeTable().ir_length);
+}
+
+void BinauralMonitor::activeSofaOnsetForTest(float az_rad, float el_rad,
+                                             int& onsetL, int& onsetR) const noexcept
+{
+    onsetL = -1;
+    onsetR = -1;
+    if (!hrtf_loaded_) return;
+    const int slot = hrtf_.activeSlot();
+    const hrtf::HrtfPair p = hrtf::lookupHrtfFromTree(
+        hrtf_.tableForSlot(slot), hrtf_.treeForSlot(slot), az_rad, el_rad);
+    float peakL = -1.f, peakR = -1.f;
+    for (int n = 0; n < p.ir_length; ++n) {
+        const float aL = std::fabs(p.left[n]);
+        const float aR = std::fabs(p.right[n]);
+        if (aL > peakL) { peakL = aL; onsetL = n; }
+        if (aR > peakR) { peakR = aR; onsetR = n; }
+    }
 }
 
 void BinauralMonitor::setRequestedMode(BinauralMode m) noexcept
@@ -686,21 +866,27 @@ int BinauralMonitor::b2HrirLength(int vs_idx) const noexcept
 {
     if (vs_idx < 0 || vs_idx >= kNumVirtualSpeakers || !b2_initialized_)
         return -1;
-    return vs_hrir_len_[static_cast<std::size_t>(vs_idx)];
+    const std::size_t s =
+        static_cast<std::size_t>(active_vs_slot_.load(std::memory_order_acquire));
+    return vs_hrir_len_[s][static_cast<std::size_t>(vs_idx)];
 }
 
 const float* BinauralMonitor::b2HrirLeft(int vs_idx) const noexcept
 {
     if (vs_idx < 0 || vs_idx >= kNumVirtualSpeakers || !b2_initialized_)
         return nullptr;
-    return vs_hrir_L_[static_cast<std::size_t>(vs_idx)].data();
+    const std::size_t s =
+        static_cast<std::size_t>(active_vs_slot_.load(std::memory_order_acquire));
+    return vs_hrir_L_[s][static_cast<std::size_t>(vs_idx)].data();
 }
 
 const float* BinauralMonitor::b2HrirRight(int vs_idx) const noexcept
 {
     if (vs_idx < 0 || vs_idx >= kNumVirtualSpeakers || !b2_initialized_)
         return nullptr;
-    return vs_hrir_R_[static_cast<std::size_t>(vs_idx)].data();
+    const std::size_t s =
+        static_cast<std::size_t>(active_vs_slot_.load(std::memory_order_acquire));
+    return vs_hrir_R_[s][static_cast<std::size_t>(vs_idx)].data();
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -752,6 +938,10 @@ void BinauralMonitor::buildXfadeEnvelopes() noexcept
 BinauralMonitor::XfadeStep BinauralMonitor::observeAndArmXfade() noexcept
 {
     XfadeStep step{};
+    // C1 single per-block snapshot of effective_mode_ (one acquire per block).
+    // v0.9 Lane B (B-M2): the B2 VS bank is now DOUBLE-BUFFERED (active_vs_slot_),
+    // so a runtime SOFA swap no longer needs to force-Direct this block — the
+    // audio thread simply reads whichever VS slot is published. No handshake.
     const int effective = effective_mode_.load(std::memory_order_acquire);
 
     if (xfade_blocks_remaining_ == 0 && effective != prev_effective_mode_) {
@@ -793,6 +983,18 @@ BinauralMonitor::XfadeStep BinauralMonitor::observeAndArmXfade() noexcept
 
 void BinauralMonitor::finalizeXfadeBlock() noexcept
 {
+    // v0.9 Lane B (B-M2) — END OF BLOCK. finalizeXfadeBlock() is called once per
+    // block AFTER the B1/B2 dispatch (which read the active table + VS slots).
+    // Publish (release) the slots actually consumed this block for the control
+    // tick's quiescence handshake, then bump the per-block tick (liveness
+    // signal). The release ordering ensures the control tick's acquire-load of
+    // last_consumed_* happens-after this block's slot DATA reads.
+    last_consumed_table_slot_.store(last_consumed_table_slot_local_,
+                                    std::memory_order_release);
+    last_consumed_vs_slot_.store(last_consumed_vs_slot_local_,
+                                 std::memory_order_release);
+    audio_block_tick_.fetch_add(1, std::memory_order_release);
+
     if (xfade_blocks_remaining_ > 0) {
         --xfade_blocks_remaining_;
         xfade_blocks_remaining_atomic_.store(xfade_blocks_remaining_,
@@ -869,13 +1071,20 @@ void BinauralMonitor::processBlockB2(const float* const* sh_planar,
     }
 
     // 3. Convolve each VS through its HRIR pair, sum to leftOut/rightOut.
+    //    v0.9 Lane B (B-M2): acquire-load the active VS-bank slot ONCE per block
+    //    (mirror AmbiDecoder::decode() at AmbiDecoder.cpp:241) and read that
+    //    slot's convolvers. A runtime swap publishes the other slot; this read
+    //    is alloc-free and race-free under the double-buffer invariant.
+    const int vslot_i = active_vs_slot_.load(std::memory_order_acquire);
+    last_consumed_vs_slot_local_ = vslot_i;  // audio-thread-only; published at EOB
+    const std::size_t vslot = static_cast<std::size_t>(vslot_i);
     std::memset(leftOut,  0, out_bytes);
     std::memset(rightOut, 0, out_bytes);
     for (int i = 0; i < kNumVirtualSpeakers; ++i) {
-        vs_conv_L_[static_cast<std::size_t>(i)].process(
+        vs_conv_L_[vslot][static_cast<std::size_t>(i)].process(
             vs_buf_[static_cast<std::size_t>(i)].data(),
             num_samples, vs_conv_L_scratch_.data());
-        vs_conv_R_[static_cast<std::size_t>(i)].process(
+        vs_conv_R_[vslot][static_cast<std::size_t>(i)].process(
             vs_buf_[static_cast<std::size_t>(i)].data(),
             num_samples, vs_conv_R_scratch_.data());
         for (int n = 0; n < num_samples; ++n) {
