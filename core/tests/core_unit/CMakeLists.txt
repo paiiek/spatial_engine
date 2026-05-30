@@ -738,3 +738,15 @@ if(SPATIAL_ENGINE_RT_ASSERTS)
     add_test(NAME shared_ring_backend_rt_sentinel
         COMMAND test_shared_ring_backend_rt_sentinel)
 endif()
+
+# B-M1 — HRTF catalog loader gate test
+if(EXISTS "${CMAKE_SOURCE_DIR}/assets/hrtf/catalog.json")
+    set(SPE_CATALOG_PATH "${CMAKE_SOURCE_DIR}/assets/hrtf/catalog.json")
+else()
+    set(SPE_CATALOG_PATH "${CMAKE_SOURCE_DIR}/../assets/hrtf/catalog.json")
+endif()
+add_executable(test_p_hrtf_catalog test_p_hrtf_catalog.cpp)
+target_link_libraries(test_p_hrtf_catalog PRIVATE spe_core)
+target_compile_definitions(test_p_hrtf_catalog PRIVATE
+    SPE_CATALOG_PATH="${SPE_CATALOG_PATH}")
+add_test(NAME p_hrtf_catalog COMMAND test_p_hrtf_catalog)

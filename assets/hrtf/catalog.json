@@ -1,0 +1,48 @@
+{
+  "hrtf_catalog": [
+    {
+      "name": "kemar",
+      "display_name": "MIT KEMAR (Gardner & Martin)",
+      "speh_path": "assets/hrtf/kemar.speh",
+      "sofa_source_url": "https://sound.media.mit.edu/resources/KEMAR.html",
+      "license": "CC-BY-4.0",
+      "attribution": "Gardner, W.G. and Martin, K.D. (1994). HRTF Measurements of a KEMAR Dummy-Head Microphone. MIT Media Lab",
+      "auto_fetch": true,
+      "n_positions_hint": 710,
+      "ir_length_hint": 128
+    },
+    {
+      "name": "cipic_003",
+      "display_name": "CIPIC Subject 003 (UC Davis)",
+      "speh_path": "assets/hrtf/cipic_003.speh",
+      "sofa_source_url": "https://www.ece.ucdavis.edu/cipic/spatial-sound/hrtf-data/",
+      "license": "academic-research-only",
+      "attribution": "Algazi, V.R., Duda, R.O., Thompson, D.M., Avendano, C. (2001). The CIPIC HRTF Database. IEEE WASPAA. UC Davis CIPIC Interface Lab",
+      "auto_fetch": false,
+      "n_positions_hint": 1250,
+      "ir_length_hint": 200
+    },
+    {
+      "name": "sadie2_H08",
+      "display_name": "SADIE-II Subject H08 (University of York)",
+      "speh_path": "assets/hrtf/sadie2_H08.speh",
+      "sofa_source_url": "https://www.york.ac.uk/sadie-ii/database.html",
+      "license": "CC-BY-4.0",
+      "attribution": "Armstrong, C., Threshold, L., Murphy, D., Kearney, G. (2018). A Perceptual Evaluation of Individual and Non-Individual HRTFs: A Case Study of the SADIE II Database. Applied Sciences. University of York",
+      "auto_fetch": true,
+      "n_positions_hint": 2818,
+      "ir_length_hint": 256
+    },
+    {
+      "name": "hutubs_pp1",
+      "display_name": "HUTUBS Subject pp1 (TU Berlin)",
+      "speh_path": "assets/hrtf/hutubs_pp1.speh",
+      "sofa_source_url": "https://depositonce.tu-berlin.de/handle/11303/10294",
+      "license": "academic-research-only",
+      "attribution": "Brinkmann, F. et al. (2019). A Cross-Evaluated Database of Measured and Simulated HRTFs Including 3D Head Meshes, Anthropometric Features, and Headphone Impulse Responses. JAES. TU Berlin",
+      "auto_fetch": false,
+      "n_positions_hint": 440,
+      "ir_length_hint": 256
+    }
+  ]
+}

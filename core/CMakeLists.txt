@@ -134,6 +134,7 @@ set(SPE_CORE_SOURCES
     src/hrtf/HrtfLookup.cpp
     src/hrtf/OlaConvolver.cpp
     src/hrtf/KdTree3D.cpp
+    src/hrtf/HrtfCatalog.cpp
     # F2: Ambisonics 1st-order encoder + M2 decoder
     src/ambi/AmbisonicEncoder.cpp
     src/ambi/AmbiDecoder.cpp
