@@ -93,3 +93,8 @@ tests/soak_harness/soak_reports/binaural_diag_*.jsonl
 
 # Generated webgui soak logs (root)
 /soak_reports/
+
+# HRTF binaries and raw downloads (catalog.json + docs are committed; binaries are NOT)
+assets/hrtf/*.speh
+assets/hrtf/raw/
+assets/hrtf/raw/*.sofa
