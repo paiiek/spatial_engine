@@ -59,6 +59,11 @@ enum class CommandTag : uint8_t {
     SceneSave     = 0x30, // /scene/save    — save current scene by name
     SceneLoad     = 0x31, // /scene/load    — load scene by name
     SceneList     = 0x32, // /scene/list    — list available scenes
+    // v0.9 Lane E (E-M1): scene library management ops.
+    SceneRename    = 0x33, // /scene/rename ,ss    — rename scene from→to
+    SceneDuplicate = 0x34, // /scene/duplicate ,ss — duplicate scene from→to
+    SceneDelete    = 0x35, // /scene/delete ,s     — delete scene by name
+    SceneMeta      = 0x36, // /scene/meta ,ss      — set scene meta (name, json)
 
     // Noise generator (per-channel array verification)
     NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink
@@ -187,6 +192,14 @@ struct PayloadSceneSave { char name[64] = {}; };
 struct PayloadSceneLoad { char name[64] = {}; };
 struct PayloadSceneList {};
 
+// v0.9 Lane E (E-M1): scene library management payloads. Fixed 64-byte name
+// buffers mirror PayloadSceneSave/Load. SceneMeta carries a control-thread-only
+// std::string for the meta JSON (tags/note); never touched on the audio thread.
+struct PayloadSceneRename    { char from[64] = {}; char to[64] = {}; };
+struct PayloadSceneDuplicate { char from[64] = {}; char to[64] = {}; };
+struct PayloadSceneDelete    { char name[64] = {}; };
+struct PayloadSceneMeta      { char name[64] = {}; std::string meta_json; };
+
 struct PayloadNoiseType {
     uint32_t channel = 0;
     bool     pink    = false; // false = white, true = pink
@@ -302,6 +315,10 @@ using CommandPayload = std::variant<
     PayloadSceneSave,
     PayloadSceneLoad,
     PayloadSceneList,
+    PayloadSceneRename,
+    PayloadSceneDuplicate,
+    PayloadSceneDelete,
+    PayloadSceneMeta,
     PayloadNoiseType,
     PayloadNoiseGain,
     PayloadTransportPlay,

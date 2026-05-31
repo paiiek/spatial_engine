@@ -312,6 +312,11 @@ add_executable(test_p_scene test_p_scene.cpp)
 target_link_libraries(test_p_scene PRIVATE spe_core)
 add_test(NAME p_scene COMMAND test_p_scene)
 
+# v0.9 Lane E (E-M1): scene library management ops + D3 rescan recovery.
+add_executable(test_p_scene_library_ops test_p_scene_library_ops.cpp)
+target_link_libraries(test_p_scene_library_ops PRIVATE spe_core)
+add_test(NAME p_scene_library_ops COMMAND test_p_scene_library_ops)
+
 # US-002: MAX_OBJECTS scale-up tests
 add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)

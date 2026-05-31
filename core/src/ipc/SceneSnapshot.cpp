@@ -155,6 +155,9 @@ std::vector<std::string> SceneSnapshot::listScenes(const std::string& scenesDir)
     for (const auto& entry : fs::directory_iterator(scenesDir, ec)) {
         if (ec) break;
         if (entry.path().extension() == ".json") {
+            // Skip the reserved scene-library sidecar (v0.9 Lane E) — it lives
+            // in the scenes dir but is not itself a scene snapshot.
+            if (entry.path().filename() == "index.json") continue;
             names.push_back(entry.path().stem().string());
         }
     }

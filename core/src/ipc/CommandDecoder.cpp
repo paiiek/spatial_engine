@@ -482,6 +482,29 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
     } else if (addr == "/scene/list") {
         cmd.tag = CommandTag::SceneList;
         cmd.payload = PayloadSceneList{};
+    } else if (addr == "/scene/rename") {
+        cmd.tag = CommandTag::SceneRename;
+        PayloadSceneRename p;
+        copySceneName(p.from, (args.n_str > 0) ? args.strings[0] : std::string{});
+        copySceneName(p.to,   (args.n_str > 1) ? args.strings[1] : std::string{});
+        cmd.payload = p;
+    } else if (addr == "/scene/duplicate") {
+        cmd.tag = CommandTag::SceneDuplicate;
+        PayloadSceneDuplicate p;
+        copySceneName(p.from, (args.n_str > 0) ? args.strings[0] : std::string{});
+        copySceneName(p.to,   (args.n_str > 1) ? args.strings[1] : std::string{});
+        cmd.payload = p;
+    } else if (addr == "/scene/delete") {
+        cmd.tag = CommandTag::SceneDelete;
+        PayloadSceneDelete p;
+        copySceneName(p.name, (args.n_str > 0) ? args.strings[0] : std::string{});
+        cmd.payload = p;
+    } else if (addr == "/scene/meta") {
+        cmd.tag = CommandTag::SceneMeta;
+        PayloadSceneMeta p;
+        copySceneName(p.name, (args.n_str > 0) ? args.strings[0] : std::string{});
+        p.meta_json = (args.n_str > 1) ? args.strings[1] : std::string{};
+        cmd.payload = p;
     } else if (addr == "/transport/play") {
         // ADR 0018 D-2 — edge-triggered. Gate flips immediately downstream;
         // the optional `,d unix_time_seconds` timetag is advisory only (no
@@ -869,6 +892,49 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
     }
     case CommandTag::SceneList: {
         addr = "/scene/list";
+        break;
+    }
+    case CommandTag::SceneRename:
+    case CommandTag::SceneDuplicate: {
+        // Both carry two null-terminated scene names (from, to) as ,ss.
+        const bool is_rename = (cmd.tag == CommandTag::SceneRename);
+        const char* from_nm = is_rename
+            ? std::get<PayloadSceneRename>(cmd.payload).from
+            : std::get<PayloadSceneDuplicate>(cmd.payload).from;
+        const char* to_nm = is_rename
+            ? std::get<PayloadSceneRename>(cmd.payload).to
+            : std::get<PayloadSceneDuplicate>(cmd.payload).to;
+        addr = is_rename ? "/scene/rename" : "/scene/duplicate";
+        tags += 's';
+        for (const char* p = from_nm; *p; ++p) args_buf.push_back(static_cast<uint8_t>(*p));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        tags += 's';
+        for (const char* p = to_nm; *p; ++p) args_buf.push_back(static_cast<uint8_t>(*p));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SceneDelete: {
+        auto& p = std::get<PayloadSceneDelete>(cmd.payload);
+        addr = "/scene/delete";
+        tags += 's';
+        for (const char* q = p.name; *q; ++q) args_buf.push_back(static_cast<uint8_t>(*q));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::SceneMeta: {
+        auto& p = std::get<PayloadSceneMeta>(cmd.payload);
+        addr = "/scene/meta";
+        tags += 's';
+        for (const char* q = p.name; *q; ++q) args_buf.push_back(static_cast<uint8_t>(*q));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        tags += 's';
+        for (char c : p.meta_json) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
         break;
     }
     case CommandTag::NoiseType: {
