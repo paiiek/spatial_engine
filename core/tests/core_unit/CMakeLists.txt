@@ -317,6 +317,11 @@ add_executable(test_p_scene_library_ops test_p_scene_library_ops.cpp)
 target_link_libraries(test_p_scene_library_ops PRIVATE spe_core)
 add_test(NAME p_scene_library_ops COMMAND test_p_scene_library_ops)
 
+# v0.9 Lane E (E-M2): CueList JSON round-trip + boundary value tests.
+add_executable(test_p_cuelist_serialize test_p_cuelist_serialize.cpp)
+target_link_libraries(test_p_cuelist_serialize PRIVATE spe_core)
+add_test(NAME p_cuelist_serialize COMMAND test_p_cuelist_serialize)
+
 # US-002: MAX_OBJECTS scale-up tests
 add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)

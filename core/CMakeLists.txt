@@ -112,6 +112,8 @@ set(SPE_CORE_SOURCES
     src/ipc/SceneController.cpp
     # M4: Time-based scene crossfade
     src/scene/SceneCrossfade.cpp
+    # E-M2: Cue list data model + serialisation
+    src/scene/CueList.cpp
     # M7: SMPTE LTC biphase decoder
     src/sync/LTCDecoder.cpp
     # C1.c: control-rate LTC consumer (audio→ring→control-thread decoder)
