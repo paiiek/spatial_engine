@@ -8,12 +8,16 @@ memory ceiling) of `.omc/plans/spatial-engine-v0.9-laneC-max-objects.md`.
 | Gate | Threshold (authoritative) | 64 build | 128 build | Result |
 |---|---|---|---|---|
 | **C-M3 RT** | peak per-block ≤ 50% budget (≤ 666.7 µs) **AND** xruns == 0 at the compiled cap | peak ~252 µs (18.9%), 0 xruns | peak ~558–629 µs (41.8–47.2%), 0 xruns | **PASS** (both) |
-| **C-M4 RSS** | max-RSS at the cap < 100 MB | **~129 MB** | **~250 MB** | **FAIL** (both) |
+| **C-M4 RSS** | max-RSS at the cap < 100 MB | ~129 MB → **27.5 MB** | ~250 MB → **46.7 MB** | **FAIL at C-M4 → PASS after Lane F5** |
 
-The RT budget has comfortable headroom at 128. **The memory gate FAILS hard** —
-and the failure is NOT the binaural OlaConvolvers the §0.4 plan model predicted;
-it is the **WFS renderer's per-(object×speaker) delay-line allocation**, a term
-the §0.4 model omitted entirely. See [Memory](#c-m4--memory-footprint) below.
+The RT budget has comfortable headroom at 128. At C-M4 **the memory gate FAILED
+hard** — and the failure is NOT the binaural OlaConvolvers the §0.4 plan model
+predicted; it is the **WFS renderer's per-(object×speaker) delay-line
+allocation**, a term the §0.4 model omitted entirely. See
+[Memory](#c-m4--memory-footprint) below. **v0.9 Lane F5 (ADR 0021) remediated this
+— the 100 MB gate now PASSES at both caps (27.5 / 46.7 MB, WFS-inactive); see the
+[Lane F5 section](#v09-lane-f5--post-remediation-re-measure-f5-m4-decision-gate)
+and the C-M7 re-evaluation. (WFS-active 128 ≈ 111 MB remains a follow-up.)**
 
 ---
 
@@ -217,6 +221,20 @@ the 64 config's own 129 MB is over the C-M4 100 MB ceiling. **The C-M4 memory
 gate must be remediated (WFS/chains delay-line sizing) before either (a) the
 default can flip to 128, or (b) the 100 MB gate can be claimed PASS at any cap.**
 
+### C-M7 RE-EVALUATION after v0.9 Lane F5 (2026-06-01)
+
+F5 (ADR 0021) remediated the WFS/chains delay-line sizing. Post-F5 @128
+(WFS-inactive, the common path): RSS **46.7 MB** (< 70 ✓), xruns 0 (✓), peak
+**46.9%** budget (> 35% ✗). The **memory criterion — the historical blocker — now
+passes comfortably** (and the 100 MB hard gate now PASSES at both caps: 27.5 MB
+@64, 46.7 MB @128).
+
+→ **Still DO NOT flip the default. Keep `SPATIAL_ENGINE_MAX_OBJECTS` default = 64.**
+The remaining blockers are now (a) the RT-peak headroom (46.9% > the 35% flip
+threshold) and (b) a **WFS-active** 128 deployment still ~111 MB (over 100 MB —
+F5 follow-up). 128 is a **validated opt-in**, now memory-deployable for
+WFS-inactive venues. No blanket flip.
+
 ---
 
 ## v0.9 Lane F5 — post-remediation re-measure (F5-M4 decision gate)
@@ -246,7 +264,27 @@ that term when WFS is inactive → 111.6 − 64 ≈ **~48 MB** (clears comfortab
 **128 RSS ≈ 111 MB ≥ 100 MB → TRIGGER F5-M3b (Option C: skip WFS `delays_`
 allocation until WFS first becomes the active algorithm, control-thread
 allocate-then-publish handshake + TSan gate).** @64 (59.4 MB) clears WITHOUT
-Option C. Final post-Option-C numbers + the C-M7 verdict are recorded at F5-M6.
+Option C.
+
+### F5-M3b result (Option C landed — WFS allocated lazily)
+
+| cap | post-M1..M3 (WFS allocated) | **post-M3b (WFS inactive)** | ceiling | gate |
+|-----|---------------------------:|----------------------------:|--------:|------|
+| 64  | 59.4 MB                    | **27.5 MB**                 | 100 MB  | **PASS** |
+| 128 | ~111 MB (FAIL)             | **46.7 MB**                 | 100 MB  | **PASS** |
+
+`perf_obj_block_time` now **exits 0** at both caps. @128 RT under normal load
+(loadavg ≈ 4.5): median 29.9%, p99 31.6%, **peak 46.9%** budget, xruns 0 — the
+F5-M4 peak excursion (106.8%) was confirmed load jitter. TSan
+(`soak_wfs_algoswap_race`): zero data races on `ready_`/`delays_`/`ramps_` over
+150 rounds; correct non-silent audio after each allocate-then-publish flip.
+
+**WFS-ACTIVE caveat (honest):** Option C removes the ~64 MB WFS `delays_` term
+only when WFS is NOT the active algorithm (the common VBAP/binaural case the perf
+harness exercises). A **WFS-active** 128 deployment re-allocates the term →
+46.7 + 64 ≈ **~111 MB**, still over the 100 MB ceiling. Clearing WFS-active 128 is
+a follow-up (allocate WFS lines per active-WFS-object, not full MAX_OBJECTS ×
+speakers). See ADR 0021.
 
 > **RT-peak note:** this F5-M4 run was taken under high host load (loadavg ≈ 13.5,
 > concurrent builds) — the single-block *peak* statistic spiked (128 peak ≈ 105%,

@@ -351,8 +351,8 @@ Every instantiation of the global `spe::dsp::DelayLine` (`std::array<float,48000
 | F5-M3 right-size propagation line (keep user_delay + spk_delays large) | ✅ done | propdelay green; full ctest 114/114 ×2 caps; PropagationDelay clamp now capacity-matched |
 | F5-M3b skip-WFS-alloc (Option C) — TRIGGERED & DONE @128 | ✅ done | TSan `soak_wfs_algoswap_race` race-free ×150 rounds; WFS-inactive RSS **@128 111.6→46.7 MB**, **@64 59.4→27.5 MB**, perf VERDICT PASS both caps (peak 46.9% @128 under normal load) |
 | F5-M4 footprint re-measure + doc update (D1) | ✅ measured / decision made | @64 **59.4 MB PASS**, @128 **~111 MB FAIL** (model ~108 confirmed) → **Option C (F5-M3b) TRIGGERED**. Final exit-0 after M3b. Doc updated. |
-| F5-M5 both-cap regression + RT-asserts | ☐ pending | ctest + p1_rt_no_alloc green ×2 |
-| F5-M6 C-M7 default-flip re-eval + ADR | ☐ pending | ADR + doc verdict |
+| F5-M5 both-cap regression + RT-asserts | ✅ done | ctest **114/114 ×2 caps** (Option C); `p1_rt_no_alloc` green ×2; pytest 61p/3s; spk_delays_ 500/1100ms covered by test_p_delayline_clamp DelayLine<48000> case |
+| F5-M6 C-M7 default-flip re-eval + ADR | ✅ done | ADR 0021 written + indexed; RT_BUDGET doc updated (headline + F5 section + C-M7 re-eval); **default stays 64** (RT-peak 46.9%>35% + WFS-active 128 ~111MB); 128 memory-viable opt-in |
 
 ---
 
