@@ -47,7 +47,9 @@ private:
 
     float     sr_                   = 48000.f;
     float     current_delay_samples_= 0.f;
-    DelayLine delay_;
+    // F5-M1: kept at the large 48000 capacity for now; right-sized to
+    // WFS_MAX_DELAY_SAMPLES in F5-M3 (propagation is geometry-bounded).
+    DelayLine48k delay_;
     GainRamp  ramp_;
 };
 

@@ -34,7 +34,9 @@ private:
 
     // Heap-allocated: [obj_idx * num_speakers + spk_idx]
     // Allocated at prepareToPlay, RT-safe thereafter.
-    std::vector<spe::dsp::DelayLine> delays_; // size = MAX_OBJECTS * num_speakers
+    // WFS delay is geometry-bounded (r/c) → right-sized to WFS_MAX_DELAY_SAMPLES
+    // (16384) instead of the default 48000. This is the dominant footprint term.
+    std::vector<spe::dsp::DelayLine<spe::dsp::WFS_MAX_DELAY_SAMPLES>> delays_; // size = MAX_OBJECTS * num_speakers
     std::vector<spe::dsp::GainRamp>  ramps_;  // size = MAX_OBJECTS * num_speakers
 
     int flat_idx(int obj, int spk) const noexcept {

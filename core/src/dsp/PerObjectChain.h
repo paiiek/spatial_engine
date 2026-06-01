@@ -81,7 +81,9 @@ private:
     PerObjectChainParams params_;
 
     EQ4Band       eq_;
-    DelayLine     user_delay_;
+    // user_delay_ is a user-settable delay (user_delay_ms over OSC) that may
+    // legitimately want up to ~1 s → KEEP the large 48000 capacity (DelayLine48k).
+    DelayLine48k  user_delay_;
     DistanceGain  dist_gain_;
     DistanceLPF   hf_;
     PropagationDelay prop_;

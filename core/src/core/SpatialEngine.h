@@ -430,8 +430,12 @@ private:
     std::vector<float>  dbap_scratch_;
     std::vector<float>  wfs_scratch_;
     std::vector<float>  ambisonic_scratch_;
-    // Per-speaker time-alignment (delay + gain)
-    std::vector<spe::dsp::DelayLine>       spk_delays_;
+    // Per-speaker time-alignment (delay + gain).
+    // spk_delays_ is user-settable & UNCLAMPED (layout YAML delay_ms →
+    // delay_ms*0.001*sr) and may legitimately exceed 341 ms → KEEP the large
+    // 48000 capacity (DelayLine48k). It is per-SPEAKER not per-object (~1.5 MB),
+    // so keeping it large is footprint-neutral. (Lane F5 §0.4 #4 / amendment 1.)
+    std::vector<spe::dsp::DelayLine48k>    spk_delays_;
     std::vector<float>                     spk_gain_lin_;
     std::vector<float>                     spk_delay_samples_;
     std::vector<spe::dsp::ChannelLimiter>  spk_limiters_;
