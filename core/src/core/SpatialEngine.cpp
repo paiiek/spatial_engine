@@ -56,6 +56,13 @@ SpatialEngine::SpatialEngine(int listen_port)
                 if (auto* p = std::get_if<ipc::PayloadObjAlgo>(&cmd.payload)) {
                     qc.obj_id = p->obj_id;
                     qc.algo   = p->algo;
+                    // F5-M3b (Option C): on the FIRST WFS activation, allocate the
+                    // WFS delay lines on THIS (OSC/control, non-RT) thread and
+                    // publish ready_ BEFORE this algo switch is pushed to the FIFO
+                    // (cmd_fifo_.push below). So by the time the audio thread drains
+                    // the switch and routes the object to wfs_objs_, the storage is
+                    // built and ready_ is visible. Idempotent; no-op after the first.
+                    if (p->algo == ipc::Algorithm::WFS) wfs_.ensureAllocated();
                 }
                 break;
             case ipc::CommandTag::NoiseType:
@@ -340,7 +347,14 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     if (has_layout_) {
         vbap_.prepareToPlay(layout_, sample_rate);
         dbap_.prepareToPlay(layout_, sample_rate);
-        wfs_.prepareToPlay(layout_, sample_rate);
+        wfs_.prepareToPlay(layout_, sample_rate); // F5-M3b: leaves WFS lazy (unallocated)
+        // F5-M3b safety net: prepareToPlay leaves WFS delay lines unallocated. If
+        // a prior session already routed an object to WFS (obj_cache_ persists
+        // across a re-prepare / layout reload), re-allocate now so that object is
+        // not silently muted. Audio is stopped during prepare → reading obj_cache_
+        // is safe; at first-ever prepare all objects are VBAP so this is a no-op.
+        for (const auto& oc : obj_cache_)
+            if (oc.algo == ipc::Algorithm::WFS) { wfs_.ensureAllocated(); break; }
         ambisonic_.applyPendingDecoderTypeChange(); // apply any pending type before prepare
         applyPendingBinauralSofa(); // B-M3: apply any pending catalog SOFA swap before prepare
         ambisonic_.prepareToPlay(layout_, sample_rate);

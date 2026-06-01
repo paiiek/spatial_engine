@@ -83,6 +83,12 @@ int main() {
         WFSRenderer wfs;
         wfs.prepareToPlay(layout, SR);
         CHECK(wfs.numSpeakers() == N_SPK);
+        // F5-M3b: WFS delay lines are lazily allocated — a direct user of the
+        // renderer must call ensureAllocated() (the engine does this on the first
+        // WFS algorithm activation). Without it processBlock renders silent.
+        CHECK(!wfs.isReady());
+        wfs.ensureAllocated();
+        CHECK(wfs.isReady());
 
         // Setup one object at source position
         // Convert to spherical

@@ -20,14 +20,35 @@ void WFSRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
     float alias_limit = spe::SOUND_C / (2.f * F_MAX); // ~21.4 mm
     alias_fade_gain_ = std::min(1.f, alias_limit / spacing);
 
-    // Pre-allocate delay lines and ramps on heap (non-RT, allowed here)
+    // F5-M3b (Option C): DO NOT allocate delays_/ramps_ here — that is the
+    // dominant footprint term and a deployment that never uses WFS should not
+    // pay it. Re-gate: any prior allocation is discarded and ready_ is reset so
+    // the next WFS activation re-allocates against the (possibly new) layout.
+    // delays_/ramps_ are only (re)sized here while audio is stopped (prepare is
+    // the device-open path); the live algorithm-switch path goes through
+    // ensureAllocated()'s release store.
+    ready_.store(false, std::memory_order_release);
+    delays_.clear();
+    ramps_.clear();
+}
+
+void WFSRenderer::ensureAllocated()
+{
+    // Control thread (non-RT). Idempotent: allocate exactly once.
+    if (ready_.load(std::memory_order_acquire)) return;
+
     const int total = spe::MAX_OBJECTS * num_speakers_;
     delays_.resize(total);
     ramps_.resize(total);
-    for (auto& d : delays_) d.prepareToPlay(sample_rate);
+    for (auto& d : delays_) d.prepareToPlay(sr_);
     for (int obj = 0; obj < spe::MAX_OBJECTS; ++obj)
         for (int s = 0; s < num_speakers_; ++s)
             ramps_[flat_idx(obj, s)].reset(0.f);
+
+    // Publish AFTER the storage is fully built. The audio thread's acquire-load
+    // of ready_ in processBlock pairs with this release store, so a thread that
+    // observes ready_==true is guaranteed to see the completed delays_/ramps_.
+    ready_.store(true, std::memory_order_release);
 }
 
 void WFSRenderer::processBlock(
@@ -40,6 +61,12 @@ void WFSRenderer::processBlock(
     const int S = num_speakers_;
 
     std::memset(out, 0, sizeof(float) * static_cast<size_t>(num_samples * S));
+
+    // F5-M3b: render silent until the control thread has allocated & published
+    // delays_/ramps_ (acquire pairs with ensureAllocated's release). This branch
+    // is the only audio-path cost of Option C: one atomic acquire-load + an early
+    // return. delays_/ramps_ are guaranteed non-empty & fully built once true.
+    if (!ready_.load(std::memory_order_acquire)) return;
 
     for (int obj = 0; obj < N && obj < spe::MAX_OBJECTS; ++obj) {
         if (!objects[obj].active) continue;

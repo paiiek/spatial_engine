@@ -22,6 +22,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR SPATIAL_ENGINE_RUN_SOAK)
              CONFIGURATIONS Release)
     set_tests_properties(soak_cue_cmdfifo_race PROPERTIES TIMEOUT 60)
 
+    # v0.9 Lane F5 (F5-M3b) — Option C lazy-WFS-alloc TSan gate. An "audio" thread
+    # spins WFSRenderer::processBlock while a "control" thread calls
+    # ensureAllocated() mid-flight (first WFS activation). Asserts zero data races
+    # on ready_/delays_/ramps_ (under -fsanitize=thread) and correct non-silent
+    # audio after the allocate-then-publish flip.
+    add_executable(soak_wfs_algoswap_race soak_wfs_algoswap_race.cpp)
+    target_link_libraries(soak_wfs_algoswap_race PRIVATE spe_core Threads::Threads)
+    add_test(NAME soak_wfs_algoswap_race
+             COMMAND soak_wfs_algoswap_race
+             CONFIGURATIONS Release)
+    set_tests_properties(soak_wfs_algoswap_race PROPERTIES TIMEOUT 120)
+
     # v0.9 Lane C (C-M3 + C-M4) — RT-budget + memory-footprint measurement.
     # Drives audioBlock() at the heaviest config (8ch + VBAP + B2 binaural
     # Direct per-object) across object counts {8,16,32,64,96,128}; counts above
