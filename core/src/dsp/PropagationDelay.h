@@ -24,9 +24,13 @@ public:
     // Smooths the delay over ramp_samples to avoid zipper noise.
     void setDistance(float dist_m, int ramp_samples = 512) noexcept {
         float target = distToSamples(dist_m);
-        // Clamp to buffer capacity
-        if (target > static_cast<float>(DELAY_LINE_MAX_SAMPLES - 1))
-            target = static_cast<float>(DELAY_LINE_MAX_SAMPLES - 1);
+        // Clamp to the delay line's ACTUAL template capacity (F5-M3: delay_ is now
+        // DelayLine<WFS_MAX_DELAY_SAMPLES>, not 48000 — clamping to the old 48000
+        // would admit an over-capacity target that only the processSample backstop
+        // would catch). The DelayLine::processSample clamp (to Capacity-2) is the
+        // authoritative backstop; this is matched defense-in-depth.
+        const float kMax = static_cast<float>(decltype(delay_)::capacity() - 1);
+        if (target > kMax) target = kMax;
         ramp_.setTarget(target, ramp_samples);
     }
 
@@ -47,9 +51,10 @@ private:
 
     float     sr_                   = 48000.f;
     float     current_delay_samples_= 0.f;
-    // F5-M1: kept at the large 48000 capacity for now; right-sized to
-    // WFS_MAX_DELAY_SAMPLES in F5-M3 (propagation is geometry-bounded).
-    DelayLine48k delay_;
+    // Propagation delay is geometry-bounded (source dist ≤ 20 m → r/c ≤ ~2800
+    // samples @48k), so right-sized to WFS_MAX_DELAY_SAMPLES (16384) — 187.5KB →
+    // 64KB/line. (F5-M3. user_delay_ / spk_delays_ stay large; propagation does not.)
+    DelayLine<WFS_MAX_DELAY_SAMPLES> delay_;
     GainRamp  ramp_;
 };
 
