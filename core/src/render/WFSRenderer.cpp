@@ -7,6 +7,14 @@
 
 namespace spe::render {
 
+// PRECONDITION (thread-safety, load-bearing): the caller guarantees no concurrent
+// ensureAllocated() while prepareToPlay runs. In SpatialEngine this holds because
+// ensureAllocated()'s only off-thread caller is the OSC sink on osc_backend_'s
+// udp_thread_, whose entire lifetime is strictly nested inside the prepared window
+// (prepareToPlay calls osc_backend_.start() LAST; releaseResources calls
+// osc_backend_.stop() — which JOINS udp_thread_ — FIRST). So this clear()/resize()
+// can never race ensureAllocated(). Do not break that nesting without revisiting
+// the ready_ handshake (it guards processBlock, NOT prepareToPlay vs ensureAllocated).
 void WFSRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
                                  double sample_rate)
 {

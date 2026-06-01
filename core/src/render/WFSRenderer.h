@@ -2,7 +2,8 @@
 // Wave Field Synthesis renderer.
 // Per-speaker delay (r/c) + 1/sqrt(r) gain for point source.
 // Spatial aliasing edge-fade beyond c/(2*f_max*spacing).
-// Delay lines allocated on heap at prepareToPlay (RT-safe thereafter).
+// Delay lines allocated lazily on the control thread by ensureAllocated() (F5-M3b,
+// Option C) — NOT at prepareToPlay — and read RT-safe behind the ready_ flag.
 
 #pragma once
 #include "render/RenderingAlgorithm.h"

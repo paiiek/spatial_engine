@@ -107,7 +107,7 @@ static std::vector<std::vector<float>> run_impulse(
 // Direct DelayLine acceptance test: processSample with delay_samples=480
 // should produce a delayed impulse.
 static void test_delay_line_480() {
-    spe::dsp::DelayLine dl;
+    spe::dsp::DelayLine48k dl;  // spk_delays_ class (48000); explicit capacity
     dl.prepareToPlay(kSR);
 
     const int delay = 480;
