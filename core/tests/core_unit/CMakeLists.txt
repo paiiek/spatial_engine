@@ -138,6 +138,10 @@ add_executable(test_p3_propdelay_sweep test_p3_propdelay_sweep.cpp)
 target_link_libraries(test_p3_propdelay_sweep PRIVATE spe_core spe_util)
 add_test(NAME p3_propdelay_sweep COMMAND test_p3_propdelay_sweep)
 
+add_executable(test_p_delayline_clamp test_p_delayline_clamp.cpp)
+target_link_libraries(test_p_delayline_clamp PRIVATE spe_core)
+add_test(NAME p_delayline_clamp COMMAND test_p_delayline_clamp)
+
 add_executable(test_p3_algoswap_crossfade test_p3_algoswap_crossfade.cpp)
 target_link_libraries(test_p3_algoswap_crossfade PRIVATE spe_core spe_util)
 add_test(NAME p3_algoswap_crossfade COMMAND test_p3_algoswap_crossfade)

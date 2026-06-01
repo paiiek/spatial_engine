@@ -41,6 +41,17 @@ public:
 
     // Push one sample and read back fractional-delayed output.
     float processSample(float input, float delay_samples) noexcept {
+        // Capacity clamp (load-bearing safety, Lane F5-M2). A delay request that
+        // exceeds the buffer would otherwise wrap modulo Capacity and return a
+        // GARBAGE sample (no crash, no UB — silently wrong audio). Clamp to
+        // [0, Capacity-2] so over-capacity requests degrade gracefully to the
+        // maximum representable delay; -2 keeps headroom for the ri0+1 interp tap.
+        // In-range delays (every supported venue × SR) are bit-identical to before.
+        if (delay_samples > static_cast<float>(Capacity - 2))
+            delay_samples = static_cast<float>(Capacity - 2);
+        if (delay_samples < 0.f)
+            delay_samples = 0.f;
+
         // Write
         buf_[write_] = input;
 
