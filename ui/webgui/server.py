@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import math
+import os as _os
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -380,6 +381,40 @@ def _dispatch_to_osc(msg: dict) -> dict | None:
         name = str(msg.get("name", ""))
         if osc_send_fn:
             osc_send_fn("/sys/binaural_sofa_select", name)
+    # E-M4 — Scene library extended ops (rename/duplicate/delete/meta)
+    elif mtype == "scene_rename":
+        from_ = str(msg.get("from", ""))[:64]
+        to_ = str(msg.get("to", ""))[:64]
+        if osc_send_fn:
+            osc_send_fn("/scene/rename", from_, to_)
+    elif mtype == "scene_duplicate":
+        from_ = str(msg.get("from", ""))[:64]
+        to_ = str(msg.get("to", ""))[:64]
+        if osc_send_fn:
+            osc_send_fn("/scene/duplicate", from_, to_)
+    elif mtype == "scene_delete":
+        name = str(msg.get("name", ""))[:64]
+        if osc_send_fn:
+            osc_send_fn("/scene/delete", name)
+    elif mtype == "scene_meta":
+        name = str(msg.get("name", ""))[:64]
+        meta_json = str(msg.get("meta_json", "{}"))
+        if osc_send_fn:
+            osc_send_fn("/scene/meta", name, meta_json)
+    # E-M4 — Cue transport ops
+    elif mtype == "cue_go":
+        index = int(msg.get("index", 0))
+        if osc_send_fn:
+            osc_send_fn("/cue/go", index)
+    elif mtype == "cue_next":
+        if osc_send_fn:
+            osc_send_fn("/cue/next")
+    elif mtype == "cue_prev":
+        if osc_send_fn:
+            osc_send_fn("/cue/prev")
+    elif mtype == "cue_stop":
+        if osc_send_fn:
+            osc_send_fn("/cue/stop")
     else:
         logger.debug("Unknown message type: %s", mtype)
 
@@ -564,7 +599,6 @@ async def broadcast_state(payload: dict) -> None:
 # Static files (served after API routes are registered)
 # ---------------------------------------------------------------------------
 
-import os as _os
 _static_dir = _os.path.join(_os.path.dirname(__file__), "static")
 if _os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
@@ -589,6 +623,62 @@ async def get_hrtf_catalog() -> JSONResponse:
     with open(_catalog_path, encoding="utf-8") as _f:
         _data = json.load(_f)
     return JSONResponse(_data)
+
+
+def _scenes_dir() -> str:
+    """Mirror scenes_dir_path() from spatial_engine_core.cpp:79.
+
+    $XDG_CONFIG_HOME/spatial_engine/scenes (or ~/.config/spatial_engine/scenes).
+    The C++ daemon is the single writer; Python only reads index.json/cuelist.json.
+    """
+    xdg = _os.environ.get("XDG_CONFIG_HOME", "")
+    base = xdg if xdg else _os.path.join(_os.path.expanduser("~"), ".config")
+    return _os.path.join(base, "spatial_engine", "scenes")
+
+
+@app.get("/api/scenes")
+async def get_scenes() -> JSONResponse:
+    """E-M4: Read scene library from index.json in the shared scenes dir.
+
+    The C++ daemon (SceneController) is the single writer of index.json.
+    Python reads it directly (RX reply deferred, ADR-2).
+    Falls back to scanning *.json if index.json is absent.
+    """
+    sdir = _scenes_dir()
+    index_path = _os.path.join(sdir, "index.json")
+    if _os.path.isfile(index_path):
+        try:
+            with open(index_path, encoding="utf-8") as f:
+                data = json.load(f)
+            return JSONResponse({"scenes": data.get("scenes", []), "source": "index.json"})
+        except Exception as exc:
+            logger.warning("get_scenes: failed to parse index.json: %s", exc)
+    # Fallback: enumerate *.json scene files (no metadata).
+    scenes = []
+    if _os.path.isdir(sdir):
+        for entry in _os.scandir(sdir):
+            if entry.name.endswith(".json") and entry.name not in ("index.json", "cuelist.json"):
+                scenes.append({"name": entry.name[:-5]})
+    return JSONResponse({"scenes": scenes, "source": "scandir"})
+
+
+@app.get("/api/cues")
+async def get_cues() -> JSONResponse:
+    """E-M4: Read cue list from cuelist.json in the shared scenes dir.
+
+    The C++ daemon (CueList) is the single writer of cuelist.json.
+    Python reads it directly (RX reply deferred, ADR-2).
+    """
+    sdir = _scenes_dir()
+    cuelist_path = _os.path.join(sdir, "cuelist.json")
+    if _os.path.isfile(cuelist_path):
+        try:
+            with open(cuelist_path, encoding="utf-8") as f:
+                data = json.load(f)
+            return JSONResponse({"cues": data.get("cues", [])})
+        except Exception as exc:
+            logger.warning("get_cues: failed to parse cuelist.json: %s", exc)
+    return JSONResponse({"cues": []})
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

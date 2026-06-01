@@ -290,8 +290,174 @@
     renderCharts();
     wireResetButton();
     wireSofaSelect();
+    wireScenePanel();
+    wireCuePanel();
+    loadScenes();
+    loadCues();
     connect();
     ctrlConnect();
+  }
+
+  // --- E-M4 — Scene library (§6) ------------------------------------------
+
+  function loadScenes() {
+    fetch("/api/scenes")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        renderSceneList(data.scenes || []);
+      })
+      .catch(function () {
+        const ul = el("scene-list");
+        if (ul) ul.innerHTML = "<li style='color:#f99'>fetch error</li>";
+      });
+  }
+
+  function renderSceneList(scenes) {
+    const ul = el("scene-list");
+    if (!ul) return;
+    if (scenes.length === 0) {
+      ul.innerHTML = "<li style='color:#555'>(no scenes)</li>";
+      return;
+    }
+    ul.innerHTML = "";
+    scenes.forEach(function (s) {
+      const name = s.name || String(s);
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.className = "scene-name";
+      span.textContent = name;
+      span.title = name;
+
+      const btnLoad = document.createElement("button");
+      btnLoad.className = "scene-btn";
+      btnLoad.textContent = "Load";
+      btnLoad.addEventListener("click", function () {
+        ctrlSend({ type: "scene_load", name: name });
+      });
+
+      const btnRename = document.createElement("button");
+      btnRename.className = "scene-btn";
+      btnRename.textContent = "Rename";
+      btnRename.addEventListener("click", function () {
+        const to = window.prompt("Rename '" + name + "' to:", name);
+        if (to && to !== name) {
+          ctrlSend({ type: "scene_rename", from: name, to: to });
+          setTimeout(loadScenes, 300);
+        }
+      });
+
+      const btnDup = document.createElement("button");
+      btnDup.className = "scene-btn";
+      btnDup.textContent = "Dup";
+      btnDup.addEventListener("click", function () {
+        const to = window.prompt("Duplicate '" + name + "' as:", name + "_copy");
+        if (to) {
+          ctrlSend({ type: "scene_duplicate", from: name, to: to });
+          setTimeout(loadScenes, 300);
+        }
+      });
+
+      const btnDel = document.createElement("button");
+      btnDel.className = "scene-btn danger";
+      btnDel.textContent = "Del";
+      btnDel.addEventListener("click", function () {
+        if (window.confirm("Delete scene '" + name + "'?")) {
+          ctrlSend({ type: "scene_delete", name: name });
+          setTimeout(loadScenes, 300);
+        }
+      });
+
+      li.appendChild(span);
+      li.appendChild(btnLoad);
+      li.appendChild(btnRename);
+      li.appendChild(btnDup);
+      li.appendChild(btnDel);
+      ul.appendChild(li);
+    });
+  }
+
+  function wireScenePanel() {
+    const btnSave = el("btn-scene-save");
+    if (btnSave) {
+      btnSave.addEventListener("click", function () {
+        const input = el("scene-name-input");
+        const name = (input ? input.value.trim() : "") || "scene";
+        ctrlSend({ type: "scene_save", name: name });
+        setTimeout(loadScenes, 300);
+      });
+    }
+    const btnRefresh = el("btn-scene-refresh");
+    if (btnRefresh) {
+      btnRefresh.addEventListener("click", loadScenes);
+    }
+  }
+
+  // --- E-M4 — Cue list (§7) -----------------------------------------------
+
+  let _currentCueIndex = -1;
+
+  function loadCues() {
+    fetch("/api/cues")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        renderCueList(data.cues || []);
+      })
+      .catch(function () {
+        const ul = el("cue-list");
+        if (ul) ul.innerHTML = "<li style='color:#f99'>fetch error</li>";
+      });
+  }
+
+  function renderCueList(cues) {
+    const ul = el("cue-list");
+    if (!ul) return;
+    if (cues.length === 0) {
+      ul.innerHTML = "<li style='color:#555'>(no cues)</li>";
+      return;
+    }
+    ul.innerHTML = "";
+    cues.forEach(function (c, idx) {
+      const sceneName = (c && c.scene_name) ? c.scene_name : String(c);
+      const li = document.createElement("li");
+      if (idx === _currentCueIndex) li.classList.add("active-cue");
+
+      const idxSpan = document.createElement("span");
+      idxSpan.className = "cue-idx";
+      idxSpan.textContent = String(idx);
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "cue-scene";
+      nameSpan.textContent = sceneName;
+      nameSpan.title = sceneName;
+
+      const btnGo = document.createElement("button");
+      btnGo.className = "scene-btn";
+      btnGo.textContent = "Go";
+      btnGo.addEventListener("click", function () {
+        ctrlSend({ type: "cue_go", index: idx });
+        _currentCueIndex = idx;
+        renderCueList(cues);
+      });
+
+      li.appendChild(idxSpan);
+      li.appendChild(nameSpan);
+      li.appendChild(btnGo);
+      ul.appendChild(li);
+    });
+  }
+
+  function wireCuePanel() {
+    const btnPrev = el("btn-cue-prev");
+    if (btnPrev) btnPrev.addEventListener("click", function () { ctrlSend({ type: "cue_prev" }); });
+
+    const btnNext = el("btn-cue-next");
+    if (btnNext) btnNext.addEventListener("click", function () { ctrlSend({ type: "cue_next" }); });
+
+    const btnStop = el("btn-cue-stop");
+    if (btnStop) btnStop.addEventListener("click", function () { ctrlSend({ type: "cue_stop" }); });
+
+    const btnRefresh = el("btn-cue-refresh");
+    if (btnRefresh) btnRefresh.addEventListener("click", loadCues);
   }
 
   // Expose a small surface for the playwright smoke test (and A-M5): inject a
@@ -304,6 +470,9 @@
     // Expose ctrlSend so the playwright smoke can spy on outbound /ws sends
     // without a live engine.
     ctrlSend: (payload) => ctrlSend(payload),
+    // E-M4: expose scene/cue loaders for playwright smoke test.
+    loadScenes,
+    loadCues,
     get charts() {
       return { cpu: cpuChart, xrun: xrunChart, p99: p99Chart };
     },

@@ -105,6 +105,43 @@
     }
     #warning-log li { padding: 1px 0; border-bottom: 1px solid #15152a; }
 
+    /* §6 — scene library panel */
+    #scene-list { list-style: none; font-size: 11px; color: #ccc;
+      max-height: 160px; overflow-y: auto;
+      background: #0f0f1a; border: 1px solid #1f1f3a; border-radius: 4px;
+      padding: 4px 6px; margin-bottom: 6px; }
+    #scene-list li { display: flex; align-items: center; gap: 4px;
+      padding: 2px 0; border-bottom: 1px solid #15152a; }
+    #scene-list li:last-child { border-bottom: none; }
+    .scene-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scene-btn { font-family: inherit; font-size: 10px; padding: 1px 6px;
+      border-radius: 3px; border: 1px solid #2a2a4e;
+      background: #1a1a2e; color: #aaa; cursor: pointer; }
+    .scene-btn:hover { background: #2a2a4e; color: #ccc; }
+    .scene-btn.danger { border-color: #4e2a2a; color: #f99; }
+    .scene-btn.danger:hover { background: #2e1a1a; }
+    .scene-controls { display: flex; gap: 4px; margin-top: 4px; }
+    #scene-name-input { font-family: inherit; font-size: 11px; flex: 1;
+      background: #0f0f1a; border: 1px solid #1f1f3a; border-radius: 3px;
+      color: #ccc; padding: 2px 5px; }
+
+    /* §7 — cue list panel */
+    #cue-list { list-style: none; font-size: 11px; color: #ccc;
+      max-height: 160px; overflow-y: auto;
+      background: #0f0f1a; border: 1px solid #1f1f3a; border-radius: 4px;
+      padding: 4px 6px; margin-bottom: 6px; }
+    #cue-list li { display: flex; align-items: center; gap: 4px;
+      padding: 2px 0; border-bottom: 1px solid #15152a; }
+    #cue-list li:last-child { border-bottom: none; }
+    #cue-list li.active-cue { background: #1a2e1a; border-radius: 3px; }
+    .cue-idx { width: 20px; text-align: right; color: #777; font-size: 10px; }
+    .cue-scene { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cue-transport { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .cue-transport button { font-family: inherit; font-size: 11px;
+      padding: 3px 10px; border-radius: 4px; border: 1px solid #2a2a4e;
+      background: #1a1a2e; color: #aaa; cursor: pointer; }
+    .cue-transport button:hover { background: #2a2a4e; color: #ccc; }
+
     /* §5 — object activity */
     #object-activity {
       display: grid;
@@ -180,6 +217,30 @@
         <div id="object-activity"></div>
       </section>
     </div>
+  </div>
+
+  <!-- §6 — Scene library + §7 Cue list (E-M4) -->
+  <div class="grid" style="margin-top:10px;">
+    <section class="panel" id="panel-scene-library">
+      <h2>Scene Library</h2>
+      <ul id="scene-list"><li style="color:#555">loading…</li></ul>
+      <div class="scene-controls">
+        <input id="scene-name-input" type="text" placeholder="scene name" maxlength="63" />
+        <button class="scene-btn" id="btn-scene-save" title="/scene/save">Save</button>
+        <button class="scene-btn" id="btn-scene-refresh" title="refresh list">↺</button>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-cue-list">
+      <h2>Cue List</h2>
+      <ul id="cue-list"><li style="color:#555">loading…</li></ul>
+      <div class="cue-transport">
+        <button id="btn-cue-prev" title="/cue/prev">◀ Prev</button>
+        <button id="btn-cue-next" title="/cue/next">Next ▶</button>
+        <button id="btn-cue-stop" title="/cue/stop">■ Stop</button>
+        <button id="btn-cue-refresh" title="refresh cue list">↺</button>
+      </div>
+    </section>
   </div>
 
   <script src="/static/js/minichart.js"></script>
