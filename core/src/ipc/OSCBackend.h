@@ -8,6 +8,7 @@
 #include "ExternalControl.h"
 #include "CommandDecoder.h"
 #include "EchoSubscriber.h"
+#include "util/CommandFifo.h"  // v0.9 Lane E (E-M3): control-plane mailboxes
 
 #include <sys/socket.h>      // sockaddr_storage, socklen_t (POSIX only — JUCE
                              // path uses the same struct as an opaque blob).
@@ -240,6 +241,58 @@ public:
     // Returns -1 when the backend is not running (no socket open).
     int udpFdForEcho() const noexcept { return udp_fd_; }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // v0.9 Lane E (E-M3) — fix-1a control-plane mailboxes (see plan §0.4).
+    //
+    // Two SPSC CommandFifo<Command> mailboxes carry decoded /cue/* + Scene*
+    // commands and CueEngine object updates across the UDP↔control boundary
+    // WITHOUT adding a second producer to the audio cmd_fifo_ (preserved as
+    // single-producer = the UDP thread). Both are control-plane only; the audio
+    // callback and cmd_fifo_ are untouched.
+    //
+    //   inbound  (UDP producer  → control consumer): decoded /cue/* + Scene*.
+    //   outbound (control producer → UDP consumer):  CueEngine object updates;
+    //            the UDP thread drains it on its existing 100ms SO_RCVTIMEO
+    //            wake and forwards each via the existing sink_(cmd).
+    //
+    // Mailbox-full policy (fix #9): push returns false → caller drop-and-counts.
+    static constexpr int kCueMailboxCap = 256;
+    using CueMailbox = util::CommandFifo<kCueMailboxCap, Command>;
+
+    // UDP thread posts a decoded cue/scene Command for the control loop.
+    bool postInbound(const Command& cmd) noexcept {
+        if (inbound_mailbox_.push(cmd)) return true;
+        inbound_drops_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    // Control loop drains one inbound cue/scene Command. Returns false if empty.
+    bool drainInbound(Command& out) noexcept { return inbound_mailbox_.pop(out); }
+
+    // Control loop (CueEngine emitFn) posts an object-update Command for the UDP
+    // thread to forward. Returns false (drop-and-count) when the mailbox is full.
+    bool postOutbound(const Command& cmd) noexcept {
+        if (outbound_mailbox_.push(cmd)) return true;
+        outbound_mailbox_drops_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    std::uint64_t inboundDrops() const noexcept {
+        return inbound_drops_.load(std::memory_order_relaxed);
+    }
+    std::uint64_t outboundMailboxDrops() const noexcept {
+        return outbound_mailbox_drops_.load(std::memory_order_relaxed);
+    }
+
+    // Test hook: drain + forward the outbound mailbox once on the calling
+    // thread (simulates the UDP-thread wake in unit tests where listen_port_==0
+    // so no real UDP thread runs). Production drains inline in the UDP loop.
+    void drainOutboundToSink() noexcept {
+        Command c;
+        while (outbound_mailbox_.pop(c)) {
+            if (sink_) sink_(c);
+        }
+    }
+
 private:
     CommandSink    sink_;
     CommandDecoder decoder_;
@@ -305,6 +358,12 @@ private:
     // M5.1 — echo plane (port 9102). Owned by OSCBackend; all access is
     // control-thread only via SpatialEngine's tick/drain path.
     EchoPlane echo_plane_;
+
+    // v0.9 Lane E (E-M3) — fix-1a control-plane mailboxes (see public section).
+    CueMailbox inbound_mailbox_;   // UDP producer  → control consumer
+    CueMailbox outbound_mailbox_;  // control producer → UDP consumer
+    std::atomic<std::uint64_t> inbound_drops_{0};
+    std::atomic<std::uint64_t> outbound_mailbox_drops_{0};
 
     // Build an OSC packet (address + types + args) into dst. Returns bytes
     // written, or 0 on overflow. Shared by all sendReply() overloads.

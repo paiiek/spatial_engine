@@ -322,6 +322,18 @@ add_executable(test_p_cuelist_serialize test_p_cuelist_serialize.cpp)
 target_link_libraries(test_p_cuelist_serialize PRIVATE spe_core)
 add_test(NAME p_cuelist_serialize COMMAND test_p_cuelist_serialize)
 
+# v0.9 Lane E (E-M3): CueEngine go/advance + dwell latch + gain units +
+# SceneLoad-failure hold.
+add_executable(test_p_cue_go_advance test_p_cue_go_advance.cpp)
+target_link_libraries(test_p_cue_go_advance PRIVATE spe_core)
+add_test(NAME p_cue_go_advance COMMAND test_p_cue_go_advance)
+
+# v0.9 Lane E (E-M3): wire-path dispatch — /cue/go datagram queued on the UDP
+# path, applied on a simulated control loop, outbound updates forwarded via sink.
+add_executable(test_p_cue_wire_dispatch test_p_cue_wire_dispatch.cpp)
+target_link_libraries(test_p_cue_wire_dispatch PRIVATE spe_core)
+add_test(NAME p_cue_wire_dispatch COMMAND test_p_cue_wire_dispatch)
+
 # US-002: MAX_OBJECTS scale-up tests
 add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)

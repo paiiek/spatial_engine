@@ -114,6 +114,8 @@ set(SPE_CORE_SOURCES
     src/scene/SceneCrossfade.cpp
     # E-M2: Cue list data model + serialisation
     src/scene/CueList.cpp
+    # E-M3: Cue firing engine + dwell auto-advance
+    src/scene/CueEngine.cpp
     # M7: SMPTE LTC biphase decoder
     src/sync/LTCDecoder.cpp
     # C1.c: control-rate LTC consumer (audio→ring→control-thread decoder)

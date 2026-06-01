@@ -6,6 +6,32 @@
 #include <chrono>
 #include <cstring>
 
+namespace spe::ipc {
+// v0.9 Lane E (E-M3) fix 1a: classify which decoded tags are routed to the
+// control-loop inbound mailbox (queued, applied on the control loop) instead
+// of the inline sink_ path. Covers the cue transport + all scene library ops.
+// Defined here (above both compile paths) so injectPacket()/the UDP loop in
+// either path can use it.
+static inline bool isCueOrSceneTag(CommandTag tag) noexcept {
+    switch (tag) {
+        case CommandTag::SceneSave:
+        case CommandTag::SceneLoad:
+        case CommandTag::SceneList:
+        case CommandTag::SceneRename:
+        case CommandTag::SceneDuplicate:
+        case CommandTag::SceneDelete:
+        case CommandTag::SceneMeta:
+        case CommandTag::CueGo:
+        case CommandTag::CueNext:
+        case CommandTag::CuePrev:
+        case CommandTag::CueStop:
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace spe::ipc
+
 #if defined(SPE_HAVE_JUCE) && SPE_HAVE_JUCE
 // ---- JUCE path (compiled when JUCE submodule is present) -------------------
 // Full UDP receive/send via juce::OSCReceiver / juce::OSCSender.
@@ -41,7 +67,13 @@ void OSCBackend::dispatch(Command const& cmd) {
 
 void OSCBackend::injectPacket(std::span<const uint8_t> packet) noexcept {
     Command cmd = decoder_.decode(packet);
-    if (cmd.tag != CommandTag::Unknown && sink_) {
+    if (cmd.tag == CommandTag::Unknown) return;
+    // v0.9 Lane E (E-M3) fix 1a: mirror the UDP-thread routing so injectPacket
+    // (the in-process datagram path) queues /cue/* + Scene* to the control-loop
+    // inbound mailbox; all other tags keep the existing inline sink path.
+    if (isCueOrSceneTag(cmd.tag)) {
+        postInbound(cmd);
+    } else if (sink_) {
         sink_(cmd);
     }
 }
@@ -196,10 +228,30 @@ void OSCBackend::start() {
                         std::memcpy(&last_peer_endpoint_, &peer, peer_len);
                         last_peer_len_.store(peer_len, std::memory_order_release);
                     }
-                    if (sink_) sink_(cmd);
+                    // v0.9 Lane E (E-M3) fix 1a: /cue/* + Scene* commands are
+                    // QUEUED to the control loop (single-threaded CueEngine
+                    // state), NOT executed inline here. All other tags keep
+                    // the existing inline sink path (audio cmd_fifo_ producer).
+                    if (isCueOrSceneTag(cmd.tag)) {
+                        postInbound(cmd); // drop-and-count if full
+                    } else if (sink_) {
+                        sink_(cmd);
+                    }
                 }
                 // Malformed / unknown packets are dropped silently without
                 // mutating last_peer_endpoint_.
+            }
+
+            // v0.9 Lane E (E-M3) fix 1a: drain the control→UDP outbound mailbox
+            // on this existing wake (recvfrom returns ~every 100ms via
+            // SO_RCVTIMEO even at zero traffic) and forward each CueEngine
+            // update via the existing sink_ — so cmd_fifo_ keeps ONE physical
+            // producer (this UDP thread).
+            if (running_.load(std::memory_order_acquire)) {
+                Command outc;
+                while (outbound_mailbox_.pop(outc)) {
+                    if (sink_) sink_(outc);
+                }
             }
         }
     });
@@ -256,7 +308,13 @@ void OSCBackend::dispatch(Command const& cmd) {
 
 void OSCBackend::injectPacket(std::span<const uint8_t> packet) noexcept {
     Command cmd = decoder_.decode(packet);
-    if (cmd.tag != CommandTag::Unknown && sink_) {
+    if (cmd.tag == CommandTag::Unknown) return;
+    // v0.9 Lane E (E-M3) fix 1a: mirror the UDP-thread routing so injectPacket
+    // (the in-process datagram path) queues /cue/* + Scene* to the control-loop
+    // inbound mailbox; all other tags keep the existing inline sink path.
+    if (isCueOrSceneTag(cmd.tag)) {
+        postInbound(cmd);
+    } else if (sink_) {
         sink_(cmd);
     }
 }

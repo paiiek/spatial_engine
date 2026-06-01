@@ -505,6 +505,20 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         copySceneName(p.name, (args.n_str > 0) ? args.strings[0] : std::string{});
         p.meta_json = (args.n_str > 1) ? args.strings[1] : std::string{};
         cmd.payload = p;
+    } else if (addr == "/cue/go") {
+        cmd.tag = CommandTag::CueGo;
+        PayloadCueGo p;
+        p.index = getInt(0);
+        cmd.payload = p;
+    } else if (addr == "/cue/next") {
+        cmd.tag = CommandTag::CueNext;
+        cmd.payload = PayloadCueNext{};
+    } else if (addr == "/cue/prev") {
+        cmd.tag = CommandTag::CuePrev;
+        cmd.payload = PayloadCuePrev{};
+    } else if (addr == "/cue/stop") {
+        cmd.tag = CommandTag::CueStop;
+        cmd.payload = PayloadCueStop{};
     } else if (addr == "/transport/play") {
         // ADR 0018 D-2 — edge-triggered. Gate flips immediately downstream;
         // the optional `,d unix_time_seconds` timetag is advisory only (no
@@ -935,6 +949,25 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         for (char c : p.meta_json) args_buf.push_back(static_cast<uint8_t>(c));
         args_buf.push_back(0);
         while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        break;
+    }
+    case CommandTag::CueGo: {
+        // E-M3: /cue/go ,i <index>
+        auto& p = std::get<PayloadCueGo>(cmd.payload);
+        addr = "/cue/go";
+        add_i(p.index);
+        break;
+    }
+    case CommandTag::CueNext: {
+        addr = "/cue/next";
+        break;
+    }
+    case CommandTag::CuePrev: {
+        addr = "/cue/prev";
+        break;
+    }
+    case CommandTag::CueStop: {
+        addr = "/cue/stop";
         break;
     }
     case CommandTag::NoiseType: {

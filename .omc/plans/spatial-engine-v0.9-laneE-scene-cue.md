@@ -319,6 +319,7 @@ Mode: **SHORT** (default). Lane E is additive, control-thread-only, with an exis
 - **F2**: Expose scene/cue index read-back over an OSC reply channel (RX deferred, ADR-2) so the webgui need not read shared files directly.
 - **F3**: Cuelist wrap-around / loop and fade-curve (linear vs equal-power) options.
 - **F4**: Extend `SceneSnapshot` (`ObjectSnapshot`) to persist `width_rad` and `reverb_send` so scenes/cues round-trip them instead of defaulting to 0; coordinate with the existing snapshot wire-byte tests.
+- **F5** (surfaced by E-M3 TSan gate): **Pre-existing `udp_fd_` shutdown race** — `OSCBackend::stop()` (`OSCBackend.cpp:269` `close(udp_fd_); udp_fd_ = -1;`) races the UDP listener's `recvfrom(udp_fd_, …)` read (`:218`). TSan flags it under BOTH the new `soak_cue_cmdfifo_race` AND the pre-existing `soak_adm_osc_flood` (identical report) — so it is a v0.5.1-era benign shutdown race, **NOT a Lane E regression** (E-M3 did not touch `stop()` or `udp_fd_`). Fix out of Lane E scope: guard `udp_fd_` with an atomic or rely solely on `shutdown()`+`running_=false` without nulling the fd from `stop()`. Note: the soak's `xrunCount()==0` assertion also fails under TSan for both soaks (instrumentation slowdown artifact); the NON-TSan Release run reports `xruns: 0`. TSan is used here for race inspection; the functional/RT xrun gate is the Release run.
 
 ---
 
@@ -326,7 +327,7 @@ Mode: **SHORT** (default). Lane E is additive, control-thread-only, with an exis
 
 - [ ] **E-M1** — Scene library index + rename/duplicate/delete/meta; `test_p_scene_library_ops` (incl. D3 rescan recovery) green; existing scene wire bytes unchanged.
 - [ ] **E-M2** — `CueList.{h,cpp}` + `cuelist.json` serialize; `test_p_cuelist_serialize` green.
-- [ ] **E-M3** — `CueEngine` (control-loop, fix-1a UDP-funnelled updates) + `/cue/*` decode→queue→apply + dwell auto-advance + `OSCBackend` control-plane mailbox + snapshot→frame conversion; `test_p_cue_go_advance` (D2 latch + units), `test_p_cue_wire_dispatch` (wire-path) green; **D1**: RT-asserts build green AND TSan/stress race-free; audio diff ∅; `cmd_fifo_` single-producer preserved.
+- [x] **E-M3** — `CueEngine` (control-loop, fix-1a UDP-funnelled updates) + `/cue/*` decode→queue→apply + dwell auto-advance + `OSCBackend` control-plane mailbox + snapshot→frame conversion; `test_p_cue_go_advance` (D2 latch + units incl. **emitted-linear gain fix #7**), `test_p_cue_wire_dispatch` (wire-path) green; full ctest **111/111**; **D1(a)** RT-asserts build green (18/18 RT); **D1(b)** TSan: zero NEW races, zero `cmd_fifo_`/mailbox races (only pre-existing `udp_fd_` shutdown race → F5); NON-TSan soak `xruns:0`, `inbound_drops:0`; audio diff ∅; `cmd_fifo_` single-producer preserved (one push site). DONE.
 - [ ] **E-M4** — WebGUI scene library + cue list panels + `/api/scenes` `/api/cues` + `_dispatch_to_osc` extension; playwright `test_dashboard_scene_cue_smoke` + cue TX-byte tests green.
 - [ ] **E-M5** — MIDI PC → cue index mode in `midi_bridge.py`; `test_midi_cue_trigger` green; scene mode regression-free.
 - [ ] **E-M6** — `test_scene_cue_e2e` + `docs/SCENE_AND_CUE_WORKFLOW.md` (incl. threading + quantization honesty) + README pointer; full ctest + pytest + RT-asserts + TSan/stress re-verify green.

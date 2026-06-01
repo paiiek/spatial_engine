@@ -8,6 +8,8 @@
 #include "bin/PlayerStaleWatchdog.h"
 #include "geometry/LayoutLoader.h"
 #include "ipc/CommandDecoder.h"
+#include "ipc/SceneController.h"   // v0.9 Lane E (E-M3): scene library + load
+#include "scene/CueEngine.h"       // v0.9 Lane E (E-M3): cue automation
 #include "util/RtAssertNoAlloc.h"
 #include "WavWriter.h"
 
@@ -27,9 +29,12 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <thread>
+#include <variant>
 #include <vector>
 
 // Registry-based per-instance forwarding (ADR 0011 §4 reader-side).
@@ -66,6 +71,22 @@ static std::string forwarder_registry_path()
         base = std::string(home ? home : "/tmp") + "/.config";
     }
     return base + "/spatial_engine/instances.json";
+}
+
+// v0.9 Lane E (E-M3) — scene library directory. Mirrors the registry path
+// derivation: $XDG_CONFIG_HOME/spatial_engine/scenes (or ~/.config/...). The
+// SceneController owns scene .json + index.json + cuelist.json here.
+static std::string scenes_dir_path()
+{
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base;
+    if (xdg && xdg[0] != '\0') {
+        base = xdg;
+    } else {
+        const char* home = std::getenv("HOME");
+        base = std::string(home ? home : "/tmp") + "/.config";
+    }
+    return base + "/spatial_engine/scenes";
 }
 
 // Current boot_id (cached on first call; empty string on error).
@@ -462,6 +483,29 @@ int main(int argc, char** argv) {
         std::printf("  binaural-enable: 1\n");
     }
 
+    // ── v0.9 Lane E (E-M3) — FIRST-EVER scene/cue wiring into the daemon ──────
+    // SceneController + CueEngine live on this control loop ONLY (fix 1a). The
+    // CueEngine emitFn posts object-update Commands to the OSCBackend's
+    // control→UDP outbound mailbox; the UDP listener thread drains + forwards
+    // them via the existing sink_ so the audio cmd_fifo_ keeps ONE producer.
+    const std::string scenes_dir = scenes_dir_path();
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(scenes_dir, ec);
+    }
+    spe::ipc::SceneController scene_ctrl(scenes_dir);
+    spe::scene::CueEngine cue_engine(
+        &scene_ctrl, static_cast<float>(sr),
+        [&engine](const spe::ipc::Command& c) {
+            return engine.oscBackend().postOutbound(c);
+        });
+    // Load a cuelist from disk if present (manual list otherwise empty).
+    {
+        spe::scene::CueList cl;
+        if (cl.loadFromDisk(scenes_dir)) cue_engine.setCueList(cl);
+    }
+    std::printf("  scenes dir: %s\n", scenes_dir.c_str());
+
     // ── Backend selection (ADR 0019 PR3) ──────────────────────────────────
     // The INPUT backend (--input-backend) is the loop driver. When it is shm or
     // null, that backend owns the output staging the engine renders into and is
@@ -620,6 +664,32 @@ int main(int argc, char** argv) {
         // ADR 0018 D-5 — drive the staleness watchdog (gated to ~1 Hz inside).
         spe::bin::servicePlayerStaleWatchdog(engine, now, last_stale_check,
                                              now_unix_ms);
+
+        // v0.9 Lane E (E-M3) — drain the UDP→control inbound mailbox (decoded
+        // /cue/* + Scene* commands queued on the UDP thread) and APPLY them on
+        // this control loop, then tick the cue crossfade/dwell clock. CueEngine
+        // state is single-threaded here; object updates are funnelled back to
+        // the UDP producer via the outbound mailbox (fix 1a).
+        {
+            spe::ipc::Command inc;
+            while (engine.oscBackend().drainInbound(inc)) {
+                switch (inc.tag) {
+                    case spe::ipc::CommandTag::CueGo: {
+                        const auto& p = std::get<spe::ipc::PayloadCueGo>(inc.payload);
+                        cue_engine.go(p.index, now_unix_ms);
+                        break;
+                    }
+                    case spe::ipc::CommandTag::CueNext: cue_engine.next(now_unix_ms); break;
+                    case spe::ipc::CommandTag::CuePrev: cue_engine.prev(now_unix_ms); break;
+                    case spe::ipc::CommandTag::CueStop: cue_engine.stop(now_unix_ms); break;
+                    default:
+                        // Scene* library ops: apply on the control thread.
+                        scene_ctrl.handleCommand(inc);
+                        break;
+                }
+            }
+            cue_engine.tick(now_unix_ms);
+        }
 
         // v0.8 P1.1 — ~1 Hz ambisonic decoder-type apply tick. Cheap (no-op
         // when nothing changed); rebuilds + publishes via lock-free double-

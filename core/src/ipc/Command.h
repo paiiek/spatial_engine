@@ -64,6 +64,11 @@ enum class CommandTag : uint8_t {
     SceneDuplicate = 0x34, // /scene/duplicate ,ss — duplicate scene from→to
     SceneDelete    = 0x35, // /scene/delete ,s     — delete scene by name
     SceneMeta      = 0x36, // /scene/meta ,ss      — set scene meta (name, json)
+    // v0.9 Lane E (E-M3): cue (snapshot) automation transport.
+    CueGo          = 0x37, // /cue/go ,i           — fire cue by index
+    CueNext        = 0x38, // /cue/next            — advance to next cue
+    CuePrev        = 0x39, // /cue/prev            — go to previous cue
+    CueStop        = 0x3A, // /cue/stop            — freeze + cancel pending dwell
 
     // Noise generator (per-channel array verification)
     NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink
@@ -200,6 +205,14 @@ struct PayloadSceneDuplicate { char from[64] = {}; char to[64] = {}; };
 struct PayloadSceneDelete    { char name[64] = {}; };
 struct PayloadSceneMeta      { char name[64] = {}; std::string meta_json; };
 
+// v0.9 Lane E (E-M3): cue transport payloads. CueGo carries a cue index;
+// Next/Prev/Stop are nullary. POD — decoded on the UDP thread, applied on the
+// control loop (never touched on the audio thread).
+struct PayloadCueGo   { int32_t index = 0; };
+struct PayloadCueNext {};
+struct PayloadCuePrev {};
+struct PayloadCueStop {};
+
 struct PayloadNoiseType {
     uint32_t channel = 0;
     bool     pink    = false; // false = white, true = pink
@@ -319,6 +332,10 @@ using CommandPayload = std::variant<
     PayloadSceneDuplicate,
     PayloadSceneDelete,
     PayloadSceneMeta,
+    PayloadCueGo,
+    PayloadCueNext,
+    PayloadCuePrev,
+    PayloadCueStop,
     PayloadNoiseType,
     PayloadNoiseGain,
     PayloadTransportPlay,

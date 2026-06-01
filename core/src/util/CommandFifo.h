@@ -45,12 +45,17 @@ struct QueuedCmd {
     char     obj_name[32] = {}; // ObjName label (truncated, null-terminated)
 };
 
-template<int N = 1024>
+// SPSC ring buffer. T defaults to QueuedCmd so the existing audio-path
+// cmd_fifo_ usage (CommandFifo<> / CommandFifo<N>) is byte-identical. The v0.9
+// Lane E (E-M3) control-plane mailboxes instantiate CommandFifo<N, ipc::Command>
+// to carry full decoded Commands across the UDP↔control thread boundary while
+// keeping the single-producer/single-consumer invariant (fix 1a).
+template<int N = 1024, typename T = QueuedCmd>
 class CommandFifo {
     static_assert((N & (N-1)) == 0, "N must be power of two");
 public:
-    // Producer (OSC thread): push one command. Returns false if full.
-    bool push(const QueuedCmd& cmd) noexcept {
+    // Producer thread: push one element. Returns false if full.
+    bool push(const T& cmd) noexcept {
         int h = head_.load(std::memory_order_relaxed);
         int t = tail_.load(std::memory_order_acquire);
         if (h - t >= N) return false;
@@ -59,8 +64,8 @@ public:
         return true;
     }
 
-    // Consumer (audio thread): pop one command. Returns false if empty.
-    bool pop(QueuedCmd& out) noexcept {
+    // Consumer thread: pop one element. Returns false if empty.
+    bool pop(T& out) noexcept {
         int t = tail_.load(std::memory_order_relaxed);
         int h = head_.load(std::memory_order_acquire);
         if (h == t) return false;
@@ -75,7 +80,7 @@ public:
     }
 
 private:
-    std::array<QueuedCmd, N> slots_{};
+    std::array<T, N> slots_{};
     std::atomic<int> head_{0};
     std::atomic<int> tail_{0};
 };
