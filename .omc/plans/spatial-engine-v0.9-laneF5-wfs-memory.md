@@ -350,7 +350,7 @@ Every instantiation of the global `spe::dsp::DelayLine` (`std::array<float,48000
 | F5-M2 processSample capacity clamp (safety) | ✅ done | test_p_delayline_clamp green ×2 caps (WFS-16384 + large-48000 cases); wfs+propdelay green |
 | F5-M3 right-size propagation line (keep user_delay + spk_delays large) | ✅ done | propdelay green; full ctest 114/114 ×2 caps; PropagationDelay clamp now capacity-matched |
 | F5-M3b skip-WFS-alloc (Option C) — LIKELY REQUIRED @128 (gated on F5-M4, expected to trigger) | ☐ expected | TSan (`build_tsan`) clean; WFS-unused RSS drops |
-| F5-M4 footprint re-measure + doc update (D1) | ☐ pending | perf_obj_block_time exit-0 both caps; doc updated |
+| F5-M4 footprint re-measure + doc update (D1) | ✅ measured / decision made | @64 **59.4 MB PASS**, @128 **~111 MB FAIL** (model ~108 confirmed) → **Option C (F5-M3b) TRIGGERED**. Final exit-0 after M3b. Doc updated. |
 | F5-M5 both-cap regression + RT-asserts | ☐ pending | ctest + p1_rt_no_alloc green ×2 |
 | F5-M6 C-M7 default-flip re-eval + ADR | ☐ pending | ADR + doc verdict |
 

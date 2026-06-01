@@ -219,6 +219,45 @@ default can flip to 128, or (b) the 100 MB gate can be claimed PASS at any cap.*
 
 ---
 
+## v0.9 Lane F5 — post-remediation re-measure (F5-M4 decision gate)
+
+After F5-M1..M3 (template `DelayLine` on compile-time capacity; WFS + propagation
+right-sized to `WFS_MAX_DELAY_SAMPLES = 16384` = 64 KB/line; `user_delay_` and
+`spk_delays_` kept at 48000; `processSample` capacity clamp). Same machine, same
+heaviest config (8ch + VBAP + B2 binaural Direct per-object).
+
+| cap | C-M4 RSS (pre-F5) | **F5 RSS (post-M1..M3)** | §0.7 honest model | ceiling | gate |
+|-----|------------------:|-------------------------:|------------------:|--------:|------|
+| 64  | ~129 MB           | **59.4 MB**              | ~58 MB            | 100 MB  | **PASS** |
+| 128 | ~250 MB           | **~111 MB**              | ~108 MB           | 100 MB  | **FAIL** |
+
+Model vs measured agree within ~3 MB at both caps (honest §0.7 arithmetic
+confirmed). **@64 clears the 100 MB gate; @128 is still over** — exactly as the
+plan predicted.
+
+**Why 128 is still over — and why Option C is the fix:** at 128 the perf harness
+reports baseline (8 obj) RSS ≈ **111.5 MB** ≈ at-cap (128 obj) RSS ≈ 111.6 MB.
+The footprint is **flat in object count** because `WFSRenderer::delays_`
+(128 × 8 × 64 KB = **64 MB**) is allocated **unconditionally at `prepareToPlay`**,
+regardless of object count or whether WFS is ever the active algorithm. Removing
+that term when WFS is inactive → 111.6 − 64 ≈ **~48 MB** (clears comfortably).
+
+### DECISION (F5-M4, authoritative on the measured number)
+**128 RSS ≈ 111 MB ≥ 100 MB → TRIGGER F5-M3b (Option C: skip WFS `delays_`
+allocation until WFS first becomes the active algorithm, control-thread
+allocate-then-publish handshake + TSan gate).** @64 (59.4 MB) clears WITHOUT
+Option C. Final post-Option-C numbers + the C-M7 verdict are recorded at F5-M6.
+
+> **RT-peak note:** this F5-M4 run was taken under high host load (loadavg ≈ 13.5,
+> concurrent builds) — the single-block *peak* statistic spiked (128 peak ≈ 105%,
+> and 32/96-obj peaks were equally wild) while the stable *median* (33%) and *p99*
+> (~50–60%) at 128 match the Lane C C-M3 committed evidence and `xruns == 0`. The
+> peak excursion is environmental jitter, not an F5 regression (F5 adds only a
+> branchless `std::min`/`std::max` clamp on the audio path). A clean-load peak
+> reading is captured at the F5-M6 final gate.
+
+---
+
 ## How to reproduce
 
 ```bash
