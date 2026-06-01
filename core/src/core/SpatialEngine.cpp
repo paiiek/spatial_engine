@@ -673,36 +673,42 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     if (render_ready_.load(std::memory_order_relaxed) && block.output_channel_count > 0) {
         const int n_spk = vbap_.numSpeakers();
 
-        std::array<render::ObjectState, MAX_OBJECTS> vbap_objs{};
-        std::array<render::ObjectState, MAX_OBJECTS> dbap_objs{};
-        std::array<render::ObjectState, MAX_OBJECTS> wfs_objs{};
-        std::array<render::ObjectState, MAX_OBJECTS> ambisonic_objs{};
+        // v0.9 Lane C (hoist): scratch arrays are now engine members
+        // (vbap_objs_/dbap_objs_/wfs_objs_/ambisonic_objs_) rather than stack
+        // locals — RT-identical, just off the audio-thread stack. Each must be
+        // re-zeroed per block because every object is written into exactly ONE
+        // algorithm array (the prior stack locals were zero-initialised fresh
+        // each block).
+        vbap_objs_.fill(render::ObjectState{});
+        dbap_objs_.fill(render::ObjectState{});
+        wfs_objs_.fill(render::ObjectState{});
+        ambisonic_objs_.fill(render::ObjectState{});
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             const auto& c = obj_cache_[static_cast<size_t>(i)];
             const render::ObjectState s = {c.az, c.el, c.dist, c.active, c.width_rad};
             switch (c.algo) {
-            case ipc::Algorithm::WFS:       wfs_objs[i]       = s; break;
-            case ipc::Algorithm::DBAP:      dbap_objs[i]      = s; break;
-            case ipc::Algorithm::Ambisonic: ambisonic_objs[i] = s; break;
+            case ipc::Algorithm::WFS:       wfs_objs_[i]       = s; break;
+            case ipc::Algorithm::DBAP:      dbap_objs_[i]      = s; break;
+            case ipc::Algorithm::Ambisonic: ambisonic_objs_[i] = s; break;
             case ipc::Algorithm::VBAP:
-            default:                        vbap_objs[i]      = s; break;
+            default:                        vbap_objs_[i]      = s; break;
             }
         }
 
         vbap_.processBlock(
-            std::span<const render::ObjectState>(vbap_objs.data(), MAX_OBJECTS),
+            std::span<const render::ObjectState>(vbap_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             vbap_scratch_.data(), block.num_frames);
         dbap_.processBlock(
-            std::span<const render::ObjectState>(dbap_objs.data(), MAX_OBJECTS),
+            std::span<const render::ObjectState>(dbap_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             dbap_scratch_.data(), block.num_frames);
         wfs_.processBlock(
-            std::span<const render::ObjectState>(wfs_objs.data(), MAX_OBJECTS),
+            std::span<const render::ObjectState>(wfs_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             wfs_scratch_.data(), block.num_frames);
         ambisonic_.processBlock(
-            std::span<const render::ObjectState>(ambisonic_objs.data(), MAX_OBJECTS),
+            std::span<const render::ObjectState>(ambisonic_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             ambisonic_scratch_.data(), block.num_frames);
 

@@ -9,7 +9,9 @@
 //   - Addresses echoed: /adm/obj/N/{aed,xyz,gain,mute,active,width,name}
 //     and /transport/{play,stop}.
 //   - Coalesce: same (obj_id, addr-enum) within one flush() call -> latest.
-//     Dirty-bit map: 64 objects x 7 addresses = 448 bits (~56 B).
+//     Dirty-bit map: kEchoMaxObjects objects x 7 addresses (v0.9 Lane C:
+//     kEchoMaxObjects derives from spe::MAX_OBJECTS — 64 → 448 bits / 128 →
+//     896 bits).
 //   - Values: stored per (obj, addr) so flush() can re-emit without needing
 //     the audio-thread obj_cache_. Echo emits wire-level idempotent values
 //     (inbound values, not engine-internal spherical conversions).
@@ -24,6 +26,7 @@
 
 #pragma once
 
+#include "core/Constants.h"
 #include "ipc/Command.h"
 
 #include <array>
@@ -48,7 +51,9 @@ enum class EchoAddr : uint8_t {
 };
 
 static constexpr std::size_t kMaxEchoSubscribers = 4;
-static constexpr std::size_t kEchoMaxObjects     = 64;
+// v0.9 Lane C: echo cache + dirty-bit map cap derives from the canonical cap.
+static constexpr std::size_t kEchoMaxObjects =
+    static_cast<std::size_t>(spe::MAX_OBJECTS);
 static constexpr int         kEchoRateLimit      = 5000;
 static constexpr int64_t     kEchoSubscriberTtlMs = 30000;
 

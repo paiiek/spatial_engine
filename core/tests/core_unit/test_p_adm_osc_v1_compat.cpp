@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 using namespace spe::ipc;
@@ -170,13 +171,18 @@ static void test_obj_name_decode() {
 // ---------------------------------------------------------------------------
 static void test_obj_id_out_of_range() {
     CommandDecoder dec;
-    const uint32_t too_large = static_cast<uint32_t>(spe::MAX_OBJECTS); // 64
+    // v0.9 Lane C: cap-relative — out-of-range addresses are MAX_OBJECTS and
+    // MAX_OBJECTS+1 so the "decoded but drain-dropped" semantic holds at BOTH
+    // the 64 and 128 builds.
+    const uint32_t too_large = static_cast<uint32_t>(spe::MAX_OBJECTS);
+    const uint32_t too_large_plus1 = too_large + 1;
 
-    // obj_id == MAX_OBJECTS (64) — structurally valid packet, out-of-range id
+    // obj_id == MAX_OBJECTS — structurally valid packet, out-of-range id
     {
         std::vector<uint8_t> args;
         appendF32(args, 45.0f);
-        auto pkt = makeOsc("/adm/obj/64/azim", "f", args);
+        auto pkt = makeOsc("/adm/obj/" + std::to_string(too_large) + "/azim",
+                           "f", args);
         uint32_t before = dec.rejectCount();
         Command cmd = dec.decode(std::span<const uint8_t>(pkt));
         // Decoder accepts it (valid address), no reject_count increment
@@ -187,18 +193,19 @@ static void test_obj_id_out_of_range() {
         (void)too_large;
     }
 
-    // obj_id == MAX_OBJECTS + 1 (65) — same: valid decode, drain drops
+    // obj_id == MAX_OBJECTS + 1 — same: valid decode, drain drops
     {
         std::vector<uint8_t> args;
         appendF32(args, 0.0f);
         appendF32(args, 0.0f);
         appendF32(args, 0.5f);
-        auto pkt = makeOsc("/adm/obj/65/aed", "fff", args);
+        auto pkt = makeOsc("/adm/obj/" + std::to_string(too_large_plus1) + "/aed",
+                           "fff", args);
         uint32_t before = dec.rejectCount();
         Command cmd = dec.decode(std::span<const uint8_t>(pkt));
         assert(cmd.tag == CommandTag::ObjMove);
         auto& p = std::get<PayloadObjMove>(cmd.payload);
-        assert(p.obj_id == 65);
+        assert(p.obj_id == too_large_plus1);
         assert(dec.rejectCount() == before);
         (void)p;
     }

@@ -7,7 +7,12 @@
 #include <cstdlib>
 
 int main() {
-    static_assert(spe::MAX_OBJECTS == 64, "MAX_OBJECTS expanded to 64 by US-002");
+    // v0.9 Lane C: cap is a compile-time option (SPE_MAX_OBJECTS ∈ {64,128});
+    // value-agnostic so the 128 build compiles. Default stays 64.
+    static_assert(spe::MAX_OBJECTS == SPE_MAX_OBJECTS,
+                  "MAX_OBJECTS must equal the configured SPE_MAX_OBJECTS");
+    static_assert(spe::MAX_OBJECTS == 64 || spe::MAX_OBJECTS == 128,
+                  "MAX_OBJECTS must be 64 or 128 (v0.9 Lane C)");
     static_assert(spe::MAX_BLOCK == 512, "MAX_BLOCK pinned at 512 frames");
     static_assert(spe::ALGO_SWAP_K == 256, "Algorithm-swap crossfade per ADR 0006");
 

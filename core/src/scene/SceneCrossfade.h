@@ -12,6 +12,7 @@
 // to step from the audio thread.
 
 #pragma once
+#include "core/Constants.h"
 #include <array>
 #include <cstdint>
 
@@ -30,7 +31,9 @@ struct ObjectFrame {
     float reverb_send  = 0.f;
 };
 
-inline constexpr int MAX_OBJECTS = 64;
+// v0.9 Lane C: derive from the single canonical cap (core/Constants.h) so the
+// scene/cue/crossfade plane bumps in lockstep with spe::MAX_OBJECTS.
+inline constexpr int MAX_OBJECTS = spe::MAX_OBJECTS;
 
 struct Snapshot {
     std::array<ObjectFrame, MAX_OBJECTS> objects{};

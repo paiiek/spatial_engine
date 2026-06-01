@@ -42,6 +42,15 @@ endif()
 # Test-build-only RT-asserts and click-detector
 option(SPATIAL_ENGINE_RT_ASSERTS "Enable RT_ASSERT_NO_ALLOC and ClickDetectorFFT in test build" OFF)
 
+# v0.9 Lane C — compile-time max simultaneous spatial objects (64 or 128).
+# Default STAYS 64 (Option A): a bare cmake .. is byte-identical to today.
+# Propagated to spe_util (PUBLIC) as SPE_MAX_OBJECTS so every Constants.h
+# consumer sees the configured value. Allowed values: {64, 128}.
+set(SPATIAL_ENGINE_MAX_OBJECTS 64 CACHE STRING "Max simultaneous spatial objects (64 or 128)")
+if(NOT SPATIAL_ENGINE_MAX_OBJECTS STREQUAL "64" AND NOT SPATIAL_ENGINE_MAX_OBJECTS STREQUAL "128")
+    message(FATAL_ERROR "SPATIAL_ENGINE_MAX_OBJECTS must be 64 or 128 (got '${SPATIAL_ENGINE_MAX_OBJECTS}')")
+endif()
+
 # VST3 plugin (Option B — direct hand-roll, no juce_add_plugin).
 # OFF by default to preserve byte-identical core artifacts (Principle 5).
 option(SPATIAL_ENGINE_VST3 "Build VST3 plugin (Option B hand-roll)" OFF)

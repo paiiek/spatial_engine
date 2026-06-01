@@ -9,7 +9,16 @@ namespace spe {
 // Object slot count. Spec mandates 8 simultaneous; expanded to 64 for
 // larger venue deployments (US-002). Allows algorithm-swap parallel-run
 // (ADR 0006) without growth.
-inline constexpr int MAX_OBJECTS = 64;
+//
+// v0.9 Lane C (ADR amendment): the cap is now a compile-time option driven by
+// the cmake cache var SPATIAL_ENGINE_MAX_OBJECTS ∈ {64,128}, which defines the
+// SPE_MAX_OBJECTS macro. Default stays 64 — a bare build is byte-identical.
+// All object-dimension caps (scene::MAX_OBJECTS, STATE_MAX_OBJECTS,
+// kEchoMaxObjects) derive from this single source of truth.
+#ifndef SPE_MAX_OBJECTS
+#define SPE_MAX_OBJECTS 64
+#endif
+inline constexpr int MAX_OBJECTS = SPE_MAX_OBJECTS;
 
 // Hard upper bound on per-callback block size. JUCE host refuses to start
 // if the device reports a larger buffer (P1 startup gate).

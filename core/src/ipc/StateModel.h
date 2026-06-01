@@ -6,13 +6,15 @@
 
 #pragma once
 #include "Command.h"
+#include "core/Constants.h"
 #include <array>
 #include <cstdint>
 #include <functional>
 
 namespace spe::ipc {
 
-static constexpr int STATE_MAX_OBJECTS = 64;
+// v0.9 Lane C: control-side store cap derives from the single canonical cap.
+static constexpr int STATE_MAX_OBJECTS = spe::MAX_OBJECTS;
 
 // Per-object authoritative state.
 struct ObjectEntry {

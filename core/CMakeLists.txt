@@ -67,6 +67,18 @@ target_compile_definitions(spe_util PUBLIC
 if(SPATIAL_ENGINE_RT_ASSERTS)
     target_compile_definitions(spe_util PUBLIC SPE_RT_ASSERTS=1)
 endif()
+# v0.9 Lane C — compile-time object cap. PUBLIC on spe_util so it reaches every
+# Constants.h consumer transitively (spe_core links spe_util PUBLIC). Defaults
+# to 64 via the cache var in the top-level CMakeLists; bare builds stay
+# byte-identical. SPATIAL_ENGINE_MAX_OBJECTS may also be passed directly when
+# configuring core/ standalone.
+if(NOT DEFINED SPATIAL_ENGINE_MAX_OBJECTS)
+    set(SPATIAL_ENGINE_MAX_OBJECTS 64)
+endif()
+if(NOT SPATIAL_ENGINE_MAX_OBJECTS STREQUAL "64" AND NOT SPATIAL_ENGINE_MAX_OBJECTS STREQUAL "128")
+    message(FATAL_ERROR "SPATIAL_ENGINE_MAX_OBJECTS must be 64 or 128 (got '${SPATIAL_ENGINE_MAX_OBJECTS}')")
+endif()
+target_compile_definitions(spe_util PUBLIC SPE_MAX_OBJECTS=${SPATIAL_ENGINE_MAX_OBJECTS})
 
 # --- yaml-cpp via FetchContent (used only by spe_core / LayoutLoader) ----
 include(FetchContent)

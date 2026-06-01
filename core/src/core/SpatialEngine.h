@@ -329,6 +329,13 @@ public:
     size_t spkGainLinSize()    const noexcept { return spk_gain_lin_.size(); }
     size_t spkLimitersSize()   const noexcept { return spk_limiters_.size(); }
     size_t noiseChansSize()    const noexcept { return noise_chans_.size(); }
+    // v0.9 Lane C (D2 test introspection) — per-object cache active flag by
+    // object id. Used to prove objects up to MAX_OBJECTS-1 are populated by the
+    // FIFO drain at the configured cap. Not RT-safe; returns false on OOB.
+    bool objCacheActiveAt(size_t obj_id) const noexcept {
+        return (obj_id < obj_cache_.size()) ? obj_cache_[obj_id].active : false;
+    }
+    size_t objCacheSize() const noexcept { return obj_cache_.size(); }
     std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
@@ -407,6 +414,15 @@ private:
     // dry_scratch_[obj][sample]
     std::array<std::array<float, MAX_BLOCK>, MAX_OBJECTS> dry_scratch_{};
     std::array<const float*, MAX_OBJECTS>                 dry_ptrs_{};
+    // v0.9 Lane C (hoist): per-block per-algorithm object-state scratch. Moved
+    // off the audio-callback stack to engine members so the audio thread never
+    // carries ~10 KB of stack arrays at MAX_OBJECTS=128. Fixed-size, alloc-once,
+    // rewritten every block in audioBlock — behaviour-identical to the prior
+    // stack locals.
+    std::array<render::ObjectState, MAX_OBJECTS> vbap_objs_{};
+    std::array<render::ObjectState, MAX_OBJECTS> dbap_objs_{};
+    std::array<render::ObjectState, MAX_OBJECTS> wfs_objs_{};
+    std::array<render::ObjectState, MAX_OBJECTS> ambisonic_objs_{};
     // mix_buf_: interleaved final output [sample * num_speakers + spk]
     // Per-algorithm scratches summed into mix_buf_.
     std::vector<float>  mix_buf_;

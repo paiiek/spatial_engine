@@ -346,6 +346,15 @@ add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)
 add_test(NAME p_max_objects COMMAND test_p_max_objects)
 
+# v0.9 Lane C (C-M2 / D2): boundary object (MAX_OBJECTS-1) renders non-silent.
+# Cap-relative — proves obj 63 at the 64-build and obj 127 at the 128-build.
+add_executable(test_p_object_cap_render test_p_object_cap_render.cpp)
+target_link_libraries(test_p_object_cap_render PRIVATE spe_core)
+target_compile_definitions(test_p_object_cap_render PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME p_object_cap_render
+    COMMAND test_p_object_cap_render "${SPE_FIXTURES_DIR}")
+
 # Feature 2: VBAP 3D elevation numerical tests
 add_executable(test_p_vbap3d test_p_vbap3d.cpp)
 target_link_libraries(test_p_vbap3d PRIVATE spe_core)
