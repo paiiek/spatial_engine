@@ -537,7 +537,7 @@ for i in range(180):
 |------|------|
 | ADM-OSC 수신 | `/adm/obj/n/{azim\|elev\|dist\|gain\|mute\|aed}` 파싱 |
 | 씬 시스템 | SceneSnapshot JSON 저장/로드, `/scene/save\|load\|list` |
-| MAX_OBJECTS 64 | `Constants.h MAX_OBJECTS=64` |
+| MAX_OBJECTS | `cmake -DSPATIAL_ENGINE_MAX_OBJECTS={64\|128}` (기본 64; 128 RT-검증 완료, 메모리 remediation 대기 — [`docs/RT_BUDGET_MAX_OBJECTS.md`](docs/RT_BUDGET_MAX_OBJECTS.md)) |
 | VBAP 3D | C(N,3) 삼각형, Cramer 규칙, 최근접-3 폴백 |
 | AmbisonicEncoder | ACN/SN3D 1차~3차 (4/9/16ch) |
 | ElevationView | PySide6 사이드뷰 위젯 |

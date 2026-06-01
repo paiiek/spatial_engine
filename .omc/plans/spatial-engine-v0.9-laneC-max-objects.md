@@ -347,8 +347,19 @@ Either way, Option A's both-config machinery + the 64 regression baseline are re
 **Follow-ups**:
 - **F1 (now an IN-LANE C-M7 step, not a follow-up):** the default-flip to 128 is decided in C-M7 by the evidence gate (≤~35% budget + <~70 MB + 0 xruns). Retained here only as a pointer; the someday-deferral is removed.
 - **F2**: Audit/parameterize any Python/UI hardcoded `range(64)` object enumeration so the UI surfaces 65–128 (catalog in C-M5; fix here if found).
-- **F3 (conditionally promoted by C-M4):** lazy-prime of `BinauralMonitor` OlaConvolver slots (prime on first activation instead of all 128 at `primeAllSlots`). **In-scope for Lane C iff C-M4 measures RSS ≥ ~80 MB**; otherwise a separate audio-path lane with its own RT gate.
+- **F3 (measured — does NOT resolve C-M4 alone, so NOT sufficient for in-scope promotion):** lazy-prime of `BinauralMonitor` OlaConvolver slots. C-M4 measurement showed the OlaConvolver term is only ~4–7 MB — F3 would save that, but the dominant memory term is elsewhere (F5). F3 remains a worthwhile but minor follow-up; it does not get C-M4 under 100 MB.
+- **F5 (NEW — surfaced by C-M4 measurement; the real D3 blocker):** **WFS (and `chains_`) per-object delay-line footprint.** `WFSRenderer::delays_`/`ramps_` resize to `MAX_OBJECTS × num_speakers` (`WFSRenderer.cpp:24-26`), each `DelayLine` an inline `std::array<float, 48000>` = **187.5 KB** (`DelayLine.h:13,43`). `wfs_` is an UNCONDITIONAL `SpatialEngine` member primed in `prepareToPlay` (`SpatialEngine.cpp:343`) regardless of the active algorithm → **96 MB @64 / 192 MB @128 allocated even when WFS is unused.** This is the dominant RSS term (the §0.4 model wrongly blamed binaural). It makes the **64 baseline already 129 MB** (the <100 MB gate fails pre-Lane-C). **Fix is engine-DSP (lazy/conditional WFS allocation, or size to active objects / only when WFS selected) → needs its own ralplan consensus lane.** Benefits even the current 64 default (would drop 64 to ~33 MB). Until F5 lands, the C-M4 <100 MB gate cannot pass at any cap and the default stays 64.
 - **F4**: VST3 host parameter count — confirm the VST3 scaffold (`SPATIAL_ENGINE_VST3`) does not hardcode 64 object parameters (out of NO_JUCE scope; verify when VST3 path is exercised).
+
+---
+
+## C-M7 OUTCOME (measured — evidence-driven decision)
+
+**Decision: DEFAULT STAYS 64.** The C-M7 flip gate (`peakPct ≤ ~35%` AND `RSS < ~70 MB` AND `0 xruns`) is NOT met at 128: measured peak **42–47%** (> 35%) and RSS **~250 MB** (≫ 70 MB). 128 remains a fully-built, RT-verified opt-in (`-DSPATIAL_ENGINE_MAX_OBJECTS=128`).
+
+**What Lane C delivered (C-M1/2/3/5/6 green):** compile-time `{64,128}` option; four object-cap unification (no plane-desync); both configs compile + pass (113/113 NO_JUCE, 117/117 RT-asserts at 128); audioBlock stack hoist (zero new audio-thread stack/alloc at 128); **D1 RT feasibility PROVEN** — 128 objects on the heaviest path hold ~47% peak budget with 0 xruns.
+
+**What is NOT met:** **D3 (C-M4) memory <100 MB FAILS at both caps** — and the 64 baseline already fails (129 MB) due to the pre-existing WFS eager-allocation (F5), which the plan's §0.4 model did not anticipate. This is NOT a 64→128 regression; it is a pre-existing footprint surfaced by the measurement harness. Resolving it (and thus enabling a 128 default or a <100 MB pass) requires the **F5 WFS-memory-remediation lane** (engine-DSP, separate ralplan).
 
 ---
 
@@ -371,13 +382,13 @@ Either way, Option A's both-config machinery + the 64 regression baseline are re
 
 ## Progress Tracker
 
-- [ ] **C-M1** — `SPATIAL_ENGINE_MAX_OBJECTS` cmake option + `Constants.h` macro; `test_p_max_objects_constant`; default build unchanged, 128 configures.
-- [ ] **C-M2** — Unify the four object caps (`Constants.h` / `SceneCrossfade.h:33` / `StateModel.h:15` / `EchoSubscriber.h:51`) to one source; **B1: guard `test_p_max_objects.cpp:14-15,71-87` + `test_p_adm_osc_v1_compat.cpp:167-190` to boundary semantics (128 compiles/passes)**; **amendment 4: hoist the four `ObjectState` scratch arrays from `SpatialEngine.cpp:676-679` to engine members**; `test_p_object_cap_unify` (audio-plane non-silent + control/echo/scene-plane, obj 64–127 at 128, byte-identical at 64); grep-invariants: no stray object-dim `64`, no `ObjectState` local in `audioBlock`.
-- [ ] **C-M3** — `perf_obj_block_time` harness + `docs/RT_BUDGET_MAX_OBJECTS.md`; RT-budget table {8…128}; 128 heaviest **peakPct ≤50% budget AND xruns 0** (hard backstops) + median/p99-estimate; soak re-parameterized.
-- [ ] **C-M4** — Memory-footprint verification (getrusage max-RSS); 128/heaviest < 100 MB; memory table; **F3 lazy-prime promoted in-scope iff RSS ≥ ~80 MB**.
-- [ ] **C-M5** — Full regression at BOTH 64 and 128 (ctest both configs green incl. B1-guarded tests + pytest); cross-language 64-literal audit.
-- [ ] **C-M6** — RT-asserts `build_rton_obj128` green; zero new audioBlock alloc at 128; hoist verified (no stack ObjectState); D1(peakPct+xrun)/D3 re-verify; audio-path diff = ∅ (only constant differs).
-- [ ] **C-M7** — **Evidence-gated default flip (≤~35% budget + <~70 MB + 0 xruns → 128, else 64)** + Docs + ADR amendment; README links build flag + RT budget.
+- [x] **C-M1** — `SPATIAL_ENGINE_MAX_OBJECTS` cmake option + `Constants.h` macro; `test_p_max_objects_constant`; default build unchanged, 128 configures.
+- [x] **C-M2** — Unify the four object caps (`Constants.h` / `SceneCrossfade.h:33` / `StateModel.h:15` / `EchoSubscriber.h:51`) to one source; **B1: guard `test_p_max_objects.cpp:14-15,71-87` + `test_p_adm_osc_v1_compat.cpp:167-190` to boundary semantics (128 compiles/passes)**; **amendment 4: hoist the four `ObjectState` scratch arrays from `SpatialEngine.cpp:676-679` to engine members**; `test_p_object_cap_unify` (audio-plane non-silent + control/echo/scene-plane, obj 64–127 at 128, byte-identical at 64); grep-invariants: no stray object-dim `64`, no `ObjectState` local in `audioBlock`.
+- [x] **C-M3** — `perf_obj_block_time` harness + `docs/RT_BUDGET_MAX_OBJECTS.md`; RT-budget table {8…128}; 128 heaviest **peakPct ≤50% budget AND xruns 0** (hard backstops) + median/p99-estimate; soak re-parameterized.
+- [~] **C-M4** — Memory measured (getrusage max-RSS): 129 MB@64 / 250 MB@128 — **<100 MB gate FAILS at BOTH caps** (pre-existing, NOT a 64→128 regression). Root cause = WFS eager per-object delay-lines (**F5**), not binaural (§0.4 model was wrong). F3 insufficient. Memory table + root-cause in docs/RT_BUDGET_MAX_OBJECTS.md. **Resolution deferred to F5 ralplan lane.**
+- [x] **C-M5** — Full regression at BOTH 64 and 128 (ctest both configs green incl. B1-guarded tests + pytest); cross-language 64-literal audit.
+- [x] **C-M6** — RT-asserts `build_rton_obj128` green; zero new audioBlock alloc at 128; hoist verified (no stack ObjectState); D1(peakPct+xrun)/D3 re-verify; audio-path diff = ∅ (only constant differs).
+- [x] **C-M7** — **Evidence-gated default flip (≤~35% budget + <~70 MB + 0 xruns → 128, else 64)** + Docs + ADR amendment; README links build flag + RT budget.
 
 ---
 
