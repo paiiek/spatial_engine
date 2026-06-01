@@ -1,4 +1,4 @@
-"""MIDI Program Change → /scene/load OSC bridge."""
+"""MIDI Program Change → /scene/load or /cue/go OSC bridge."""
 
 try:
     import mido
@@ -21,14 +21,23 @@ import time
 
 SCENE_NAME_TEMPLATE = "scene_{pc}"
 OSC_SCENE_LOAD = "/scene/load"
+OSC_CUE_GO = "/cue/go"
 
 
 class MidiBridge:
-    """Routes MIDI PC events to /scene/load OSC messages."""
+    """Routes MIDI PC events to /scene/load (scene mode) or /cue/go (cue mode) OSC messages."""
 
-    def __init__(self, osc_client=None, midi_port_name: str | None = None):
+    def __init__(
+        self,
+        osc_client=None,
+        midi_port_name: str | None = None,
+        mode: str = "scene",
+        pc_to_cue: dict | None = None,
+    ):
         self._client = osc_client
         self._port_name = midi_port_name
+        self._mode = mode
+        self._pc_to_cue = pc_to_cue or {}
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._port = None
@@ -41,12 +50,27 @@ class MidiBridge:
     def pc_to_scene_name(pc: int) -> str:
         return SCENE_NAME_TEMPLATE.format(pc=pc)
 
-    def handle_message(self, msg) -> str | None:
+    def pc_to_cue_index(self, pc: int) -> int:
+        """Return cue index for a program-change number.
+
+        Performs a table lookup via the ``pc_to_cue`` mapping supplied at
+        construction time; falls back to identity (pc → pc) when no entry
+        exists.
+        """
+        return self._pc_to_cue.get(pc, pc)
+
+    def handle_message(self, msg) -> str | int | None:
         if hasattr(msg, 'type') and msg.type == 'program_change':
-            name = self.pc_to_scene_name(msg.program)
-            if self._client is not None:
-                self._client.send_message(OSC_SCENE_LOAD, name)
-            return name
+            if self._mode == "cue":
+                idx = self.pc_to_cue_index(msg.program)
+                if self._client is not None:
+                    self._client.send_message(OSC_CUE_GO, idx)
+                return idx
+            else:
+                name = self.pc_to_scene_name(msg.program)
+                if self._client is not None:
+                    self._client.send_message(OSC_SCENE_LOAD, name)
+                return name
         return None
 
     def _discover_port(self) -> str | None:
