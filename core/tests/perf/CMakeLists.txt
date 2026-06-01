@@ -21,4 +21,25 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR SPATIAL_ENGINE_RUN_SOAK)
              COMMAND soak_cue_cmdfifo_race
              CONFIGURATIONS Release)
     set_tests_properties(soak_cue_cmdfifo_race PROPERTIES TIMEOUT 60)
+
+    # v0.9 Lane C (C-M3 + C-M4) — RT-budget + memory-footprint measurement.
+    # Drives audioBlock() at the heaviest config (8ch + VBAP + B2 binaural
+    # Direct per-object) across object counts {8,16,32,64,96,128}; counts above
+    # the compiled cap (spe::MAX_OBJECTS) are skipped. Gates peak <= 50% RT
+    # budget AND xruns == 0 at the cap, and max-RSS < 100 MB. Builds in BOTH the
+    # 64 and 128 configs (the sweep self-limits to the compiled cap). Needs the
+    # synthetic SOFA fixture to prime the per-object OlaConvolvers.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/core/tests/fixtures")
+        set(SPE_PERF_FIXTURES_DIR "${CMAKE_SOURCE_DIR}/core/tests/fixtures")
+    else()
+        set(SPE_PERF_FIXTURES_DIR "${CMAKE_SOURCE_DIR}/tests/fixtures")
+    endif()
+    add_executable(perf_obj_block_time perf_obj_block_time.cpp)
+    target_link_libraries(perf_obj_block_time PRIVATE spe_core Threads::Threads)
+    target_compile_definitions(perf_obj_block_time PRIVATE
+        SPE_FIXTURES_DIR="${SPE_PERF_FIXTURES_DIR}")
+    add_test(NAME perf_obj_block_time
+             COMMAND perf_obj_block_time
+             CONFIGURATIONS Release)
+    set_tests_properties(perf_obj_block_time PROPERTIES TIMEOUT 300)
 endif()

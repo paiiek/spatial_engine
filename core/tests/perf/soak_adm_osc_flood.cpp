@@ -71,7 +71,8 @@ int main() {
     std::puts("  Acceptance: no crash, xruns=0, rejectCount=0, batch p99 < 3.0 ms");
 
     constexpr int PORT      = 9100;
-    constexpr int N_OBJ     = 64;
+    // v0.9 Lane C (C-M3): flood at the configured object cap (was literal 64).
+    constexpr int N_OBJ     = spe::MAX_OBJECTS;
     constexpr int SOAK_SECS = 60;
     // 1 ms per object cycle: 64 objects -> 64 kHz aggregate
     constexpr int64_t INTERVAL_NS = 1000000LL / N_OBJ; // ~15625 ns
