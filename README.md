@@ -8,6 +8,7 @@ OSC/UDP를 통해 모든 컴포넌트가 연결됩니다.
 **핵심 문서**:
 - [`docs/TESTING.md`](docs/TESTING.md) — 자동 테스트 + 수동 smoke (adm_player → shm → engine) + WebGUI/VST3 검증
 - [`docs/ENGINE_OVERVIEW_AND_COMPARISON.md`](docs/ENGINE_OVERVIEW_AND_COMPARISON.md) — 전체 기능 인벤토리, L-ISA/Spat/Atmos 비교, v0.9–v1.x 로드맵
+- [`docs/SCENE_AND_CUE_WORKFLOW.md`](docs/SCENE_AND_CUE_WORKFLOW.md) — 씬 라이브러리 관리, 큐리스트 포맷, OSC 레퍼런스, 스레딩 모델 (v0.9 Lane E)
 - [`.omc/plans/spatial-engine-v0.8-status-overview.md`](.omc/plans/spatial-engine-v0.8-status-overview.md) — 시점별 엔지니어링 스냅샷
 
 ---

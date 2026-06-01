@@ -325,12 +325,14 @@ Mode: **SHORT** (default). Lane E is additive, control-thread-only, with an exis
 
 ## Progress Tracker
 
-- [ ] **E-M1** — Scene library index + rename/duplicate/delete/meta; `test_p_scene_library_ops` (incl. D3 rescan recovery) green; existing scene wire bytes unchanged.
-- [ ] **E-M2** — `CueList.{h,cpp}` + `cuelist.json` serialize; `test_p_cuelist_serialize` green.
+- [x] **E-M1** — Scene library index + rename/duplicate/delete/meta; `test_p_scene_library_ops` (incl. D3 rescan recovery) green; existing scene wire bytes unchanged. DONE (e9b78aa).
+- [x] **E-M2** — `CueList.{h,cpp}` + `cuelist.json` serialize; `test_p_cuelist_serialize` green. DONE (d424597).
 - [x] **E-M3** — `CueEngine` (control-loop, fix-1a UDP-funnelled updates) + `/cue/*` decode→queue→apply + dwell auto-advance + `OSCBackend` control-plane mailbox + snapshot→frame conversion; `test_p_cue_go_advance` (D2 latch + units incl. **emitted-linear gain fix #7**), `test_p_cue_wire_dispatch` (wire-path) green; full ctest **111/111**; **D1(a)** RT-asserts build green (18/18 RT); **D1(b)** TSan: zero NEW races, zero `cmd_fifo_`/mailbox races (only pre-existing `udp_fd_` shutdown race → F5); NON-TSan soak `xruns:0`, `inbound_drops:0`; audio diff ∅; `cmd_fifo_` single-producer preserved (one push site). DONE.
-- [ ] **E-M4** — WebGUI scene library + cue list panels + `/api/scenes` `/api/cues` + `_dispatch_to_osc` extension; playwright `test_dashboard_scene_cue_smoke` + cue TX-byte tests green.
-- [ ] **E-M5** — MIDI PC → cue index mode in `midi_bridge.py`; `test_midi_cue_trigger` green; scene mode regression-free.
-- [ ] **E-M6** — `test_scene_cue_e2e` + `docs/SCENE_AND_CUE_WORKFLOW.md` (incl. threading + quantization honesty) + README pointer; full ctest + pytest + RT-asserts + TSan/stress re-verify green.
+- [x] **E-M4** — WebGUI scene library + cue list panels + `/api/scenes` `/api/cues` + `_dispatch_to_osc` extension; playwright `test_dashboard_scene_cue_smoke` (passed) + cue TX-byte tests green (webgui 69 pass). DONE (f7b00dc).
+- [x] **E-M5** — MIDI PC → cue index mode in `midi_bridge.py`; `test_midi_cue_trigger` green (8 pass); scene mode regression-free (default mode="scene"). DONE (31b24bb).
+- [x] **E-M6** — `test_p_scene_cue_e2e` (C++ multi-scene→cuelist→dwell auto-advance) + `docs/SCENE_AND_CUE_WORKFLOW.md` (threading + quantization honesty + F5) + README pointer; full ctest **112/112** + pytest + RT-asserts **116/116** + NON-TSan soak (xruns:0) re-verify green. DONE.
+
+**Lane E COMPLETE — 6/6 milestones. All Critic GO-WITH-CONDITIONS conditions verified in code. cmd_fifo_ single-producer preserved; audio callback byte-identical.**
 
 ---
 

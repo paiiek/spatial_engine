@@ -334,6 +334,13 @@ add_executable(test_p_cue_wire_dispatch test_p_cue_wire_dispatch.cpp)
 target_link_libraries(test_p_cue_wire_dispatch PRIVATE spe_core)
 add_test(NAME p_cue_wire_dispatch COMMAND test_p_cue_wire_dispatch)
 
+# v0.9 Lane E (E-M6): full library→cuelist→auto-advance end-to-end integration.
+# Covers multi-scene multi-cue flow, manual jump mid-sequence, next/prev nav,
+# and SceneController library ops (duplicate/rename/remove) feeding into a cue.
+add_executable(test_p_scene_cue_e2e test_p_scene_cue_e2e.cpp)
+target_link_libraries(test_p_scene_cue_e2e PRIVATE spe_core)
+add_test(NAME p_scene_cue_e2e COMMAND test_p_scene_cue_e2e)
+
 # US-002: MAX_OBJECTS scale-up tests
 add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)
