@@ -255,7 +255,7 @@ int main() {
                     static_cast<unsigned long long>(r.xruns));
     }
 
-    std::printf("\n  CpuMeter cross-check (% of budget; p99 us est.):\n");
+    std::printf("\n  CpuMeter cross-check (%% of budget; p99 us est.):\n");
     std::printf("  %4s | %10s | %10s | %10s\n",
                 "obj", "cpu%(med)", "peak%", "p99_us(est)");
     for (const auto& r : results) {
