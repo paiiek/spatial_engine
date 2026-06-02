@@ -45,9 +45,9 @@ Snapshot CueEngine::snapshotToFrames(const ipc::SceneSnapshot& snap) const {
         f.gain_db = 20.f * std::log10(lin);
         // active = !muted for listed objects (fix #3; listed-but-muted → false).
         f.active = !o.muted;
-        // width_rad / reverb_send: no source in ObjectSnapshot → default 0 (F4).
-        f.width_rad   = 0.f;
-        f.reverb_send = 0.f;
+        // width_rad / reverb_send: carried through from the snapshot (F4a-T4).
+        f.width_rad   = o.width_rad;
+        f.reverb_send = o.reverb_send;
     }
     return out;
 }
@@ -100,6 +100,28 @@ void CueEngine::emitObject(int obj_id, const ObjectFrame& f) {
         ipc::PayloadObjAlgo p;
         p.obj_id = oid;
         p.algo   = safeAlgorithm(f.algorithm);
+        c.payload = p;
+        post(c);
+    }
+    // ObjWidth (source spread) — F4a-T5.
+    {
+        ipc::Command c;
+        c.tag = ipc::CommandTag::ObjWidth;
+        ipc::PayloadObjWidth p;
+        p.obj_id    = oid;
+        p.width_rad = f.width_rad;
+        c.payload = p;
+        post(c);
+    }
+    // ObjDsp param 6 (ReverbSend) — F4a-T5. Reverb send has no dedicated verb;
+    // it round-trips via the /obj/dsp parameter channel.
+    {
+        ipc::Command c;
+        c.tag = ipc::CommandTag::ObjDsp;
+        ipc::PayloadObjDsp p;
+        p.obj_id = oid;
+        p.param  = ipc::PayloadObjDsp::Param::ReverbSend;
+        p.value  = f.reverb_send;
         c.payload = p;
         post(c);
     }

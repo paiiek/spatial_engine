@@ -64,7 +64,9 @@ std::string SceneSnapshot::toJson() const {
            << "\"dist_m\":"      << ftos(o.dist_m)               << ','
            << "\"algorithm\":"   << std::to_string(o.algorithm)  << ','
            << "\"gain_linear\":" << ftos(o.gain_linear)          << ','
-           << "\"muted\":"       << (o.muted ? "true" : "false")
+           << "\"muted\":"       << (o.muted ? "true" : "false")  << ','
+           << "\"width_rad\":"   << ftos(o.width_rad)             << ','
+           << "\"reverb_send\":" << ftos(o.reverb_send)
            << '}';
     }
     os << "]}";
@@ -111,6 +113,9 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
         o.algorithm   = getI("algorithm",   o.algorithm);
         o.gain_linear = getF("gain_linear", o.gain_linear);
         o.muted       = (jsonGet(obj_str, "muted") == "true");
+        // F4: default-tolerant — old scenes lacking these keys load both as 0.
+        o.width_rad   = getF("width_rad",   o.width_rad);
+        o.reverb_send = getF("reverb_send", o.reverb_send);
         ss.objects.push_back(o);
         pos = close + 1;
     }

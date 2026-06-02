@@ -548,15 +548,20 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             makeUnknown();
         }
     } else if (addr == "/obj/dsp") {
-        cmd.tag = CommandTag::ObjDsp;
-        PayloadObjDsp p;
-        p.obj_id = static_cast<uint32_t>(getInt(0));
         const int param_int = getInt(1);
-        if (param_int >= 0 && param_int <= 6) {
-            p.param = static_cast<PayloadObjDsp::Param>(param_int);
+        // F4b-T0: accept the full valid param range 0..7 (incl. 7 = Width).
+        // An out-of-range param must NOT silently default-route to Param::EqLow
+        // (band 0) — reject it so the caller sees Unknown.
+        if (param_int >= 0 && param_int <= 7) {
+            cmd.tag = CommandTag::ObjDsp;
+            PayloadObjDsp p;
+            p.obj_id = static_cast<uint32_t>(getInt(0));
+            p.param  = static_cast<PayloadObjDsp::Param>(param_int);
+            p.value  = getFloat(0);
+            cmd.payload = p;
+        } else {
+            makeUnknown();
         }
-        p.value = getFloat(0);
-        cmd.payload = p;
     } else if (addr.size() > 7 && addr.compare(0, 7, "/noise/") == 0) {
         // Noise generator: /noise/{ch}/{type|gain}
         int ch = -1;

@@ -15,6 +15,8 @@ struct ObjectSnapshot {
     int   algorithm   = 0;   // Algorithm enum cast to int
     float gain_linear = 1.f;
     bool  muted       = false;
+    float width_rad   = 0.f; // source spread in radians (0 = point source)
+    float reverb_send = 0.f; // reverb send level (0..1, linear)
 };
 
 struct SceneSnapshot {

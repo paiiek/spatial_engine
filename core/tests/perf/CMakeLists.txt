@@ -34,6 +34,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR SPATIAL_ENGINE_RUN_SOAK)
              CONFIGURATIONS Release)
     set_tests_properties(soak_wfs_algoswap_race PROPERTIES TIMEOUT 120)
 
+    # v0.9 Lane F4 (F4b / AC9) — scene-save concurrency gate. One "audio" thread
+    # drives obj_cache_ writes through the production drain + three-buffer
+    # publish; a "control" thread calls snapshotObjects() mid-flight (>=150
+    # rounds). Asserts ZERO data races (under -fsanitize=thread) AND a
+    # correlated-field-pair no-tearing invariant in every snapshot.
+    add_executable(soak_scene_save_race soak_scene_save_race.cpp)
+    target_link_libraries(soak_scene_save_race PRIVATE spe_core Threads::Threads)
+    add_test(NAME soak_scene_save_race
+             COMMAND soak_scene_save_race
+             CONFIGURATIONS Release)
+    set_tests_properties(soak_scene_save_race PROPERTIES TIMEOUT 120)
+
     # v0.9 Lane C (C-M3 + C-M4) — RT-budget + memory-footprint measurement.
     # Drives audioBlock() at the heaviest config (8ch + VBAP + B2 binaural
     # Direct per-object) across object counts {8,16,32,64,96,128}; counts above

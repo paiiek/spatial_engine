@@ -345,6 +345,14 @@ add_executable(test_p_scene_cue_e2e test_p_scene_cue_e2e.cpp)
 target_link_libraries(test_p_scene_cue_e2e PRIVATE spe_core)
 add_test(NAME p_scene_cue_e2e COMMAND test_p_scene_cue_e2e)
 
+# v0.9 Lane F4 (F4b) — save-side object-state capture round-trip: drive objects
+# through the production command path, snapshotObjects → /scene/save → reload →
+# assert non-zero width/reverb; mute persistence; touched heuristic; empty-objects
+# regression baseline.
+add_executable(test_p_scene_obj_state_e2e test_p_scene_obj_state_e2e.cpp)
+target_link_libraries(test_p_scene_obj_state_e2e PRIVATE spe_core)
+add_test(NAME p_scene_obj_state_e2e COMMAND test_p_scene_obj_state_e2e)
+
 # US-002: MAX_OBJECTS scale-up tests
 add_executable(test_p_max_objects test_p_max_objects.cpp)
 target_link_libraries(test_p_max_objects PRIVATE spe_core)

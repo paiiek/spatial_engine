@@ -6,6 +6,7 @@
 #include "ipc/Command.h"
 #include "ipc/SceneSnapshot.h"
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -71,6 +72,12 @@ public:
     // Read access to the in-memory index.
     const SceneIndex& index() const { return index_; }
 
+    // F4b — engine-agnostic seam: lets the daemon inject a callback that
+    // captures the live authoritative per-object state into a scene's objects
+    // on SceneSave. Keeps SceneController free of any engine dependency.
+    using ObjectStateProvider = std::function<void(std::vector<ObjectSnapshot>&)>;
+    void setObjectStateProvider(ObjectStateProvider p) { objStateProvider_ = std::move(p); }
+
 private:
     // Find an index entry by name (nullptr if absent).
     SceneIndexEntry*       findEntry(const std::string& name);
@@ -85,6 +92,7 @@ private:
     SceneIndex  index_;
     std::vector<std::string> lastSceneList_;
     std::optional<SceneSnapshot> lastLoaded_;
+    ObjectStateProvider objStateProvider_; // F4b — set by the daemon (optional)
 };
 
 } // namespace spe::ipc

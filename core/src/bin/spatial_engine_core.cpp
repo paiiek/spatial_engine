@@ -494,6 +494,13 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(scenes_dir, ec);
     }
     spe::ipc::SceneController scene_ctrl(scenes_dir);
+    // F4b — wire the live object-state provider so /scene/save captures the
+    // authoritative per-object state from the engine (consistent three-buffer
+    // snapshot of obj_cache_), instead of writing an empty objects vector.
+    scene_ctrl.setObjectStateProvider(
+        [&engine](std::vector<spe::ipc::ObjectSnapshot>& out) {
+            engine.snapshotObjects(out);
+        });
     spe::scene::CueEngine cue_engine(
         &scene_ctrl, static_cast<float>(sr),
         [&engine](const spe::ipc::Command& c) {

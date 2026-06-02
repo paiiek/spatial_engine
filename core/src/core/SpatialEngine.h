@@ -9,6 +9,7 @@
 #include "geometry/SpeakerLayout.h"
 #include "ipc/Command.h"
 #include "ipc/OSCBackend.h"
+#include "ipc/SceneSnapshot.h"
 #include "ipc/StateModel.h"
 #include "hrtf/HrtfCatalog.h"
 #include "output_backend/BinauralMonitor.h"
@@ -336,6 +337,14 @@ public:
         return (obj_id < obj_cache_.size()) ? obj_cache_[obj_id].active : false;
     }
     size_t objCacheSize() const noexcept { return obj_cache_.size(); }
+
+    // F4b: consistent control-thread snapshot of authoritative object state into
+    // scene ObjectSnapshots. Synchronized via the three-buffer published_index_
+    // handshake; safe to call from the control loop concurrently with the RT
+    // audioBlock. Emits objects driven at least once (touched heuristic). NOT RT.
+    // Distinct from objCacheActiveAt (test-only / "Not RT-safe") — this is its
+    // own synchronized path.
+    void snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const;
     std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
@@ -397,6 +406,38 @@ private:
         float width_rad = 0.f;  // source spread in radians (0 = point source)
     };
     std::array<ObjCache, MAX_OBJECTS> obj_cache_{};
+
+    // F4b: control-thread-readable, audio-thread-published CONSISTENT snapshot of
+    // obj_cache_, via a LOCK-FREE single-writer/single-reader THREE-buffer
+    // reader-claim handshake. The live obj_cache_ and the renderer read path are
+    // UNCHANGED; only these three buffers are shared cross-thread. They are
+    // allocated at engine construction (NOT on the audio thread) and persist
+    // across prepare/stop-restart, like obj_cache_.
+    //
+    // Why this (not an optimistic rotation+seqlock): with an unbounded-rate
+    // audio-thread writer, an optimistic seqlock reader memcpy is a FORMAL data
+    // race under TSan even when its retry rejects the torn result (the bytes are
+    // concurrently written while being read). The project bar is ZERO races with
+    // NO suppression. Here the writer avoids any buffer that is either currently
+    // published OR claimed-busy by the reader; with 3 buffers a free third always
+    // exists. The reader claims the index it will read and re-confirms it is still
+    // the published one.
+    //
+    // Safety is NOT a hard by-construction bound — it rests on a liveness property
+    // (same class the plan acknowledges): correctness requires the writer to
+    // observe the reader's `busy` claim within ~1 publish cadence. `busy` and
+    // `published` are independent atomics with no joint atomicity, so the abstract
+    // memory model permits a writer that misses a fresh `busy` claim for >=2
+    // consecutive dirty blocks to pick a buffer the reader is mid-copy of. That
+    // window is timing-unreachable here: the reader's ~8 KB copy completes in
+    // << one audio-block period (~2.6 ms @64/48k), so the writer almost always
+    // sees the claim by the next dirty block, and single-location coherence covers
+    // the round after. Verified empirically by `soak_scene_save_race` (AC9) under
+    // TSan (0 races / 0 tears) — that gate, not pure construction, is the proof.
+    // The RT writer never blocks (two atomic loads + one release store; no alloc/lock).
+    std::array<std::array<ObjCache, MAX_OBJECTS>, 3> snap_buf_{}; // ~24 KB @128
+    std::atomic<int>         snap_published_idx_{-1};   // last index published; -1 = none yet
+    mutable std::atomic<int> snap_reader_busy_idx_{-1}; // index reader is reading; -1 = idle
 
     // Per-object sine oscillator (RT-safe: no alloc)
     std::array<float, MAX_OBJECTS> osc_phases_{};

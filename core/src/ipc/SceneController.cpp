@@ -349,6 +349,9 @@ bool SceneController::handleCommand(const Command& cmd) {
             const auto& p = std::get<PayloadSceneSave>(cmd.payload);
             SceneSnapshot snap;
             snap.name = p.name; // null-terminated fixed-size buffer
+            // F4b: capture live authoritative per-object state (if a provider
+            // was wired by the daemon). Prior behavior persisted no objects.
+            if (objStateProvider_) objStateProvider_(snap.objects);
             if (!snap.saveToDisk(scenesDir_)) return true;
             // Track new scenes in the index (created_unix on first save).
             if (!findEntry(snap.name) && isSafeSceneName(snap.name)) {

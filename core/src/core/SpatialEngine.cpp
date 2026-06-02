@@ -322,6 +322,56 @@ void SpatialEngine::setLayout(spe::geometry::SpeakerLayout layout) {
     has_layout_ = true;
 }
 
+// F4b — consistent control-thread snapshot of obj_cache_ via the three-buffer
+// published_index_ handshake (retry-until-stable seqlock reader). NOT RT-safe;
+// called from the control loop only. See SpatialEngine.h for the mechanism.
+void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const {
+    // AC8 — algo enum ↔ ObjectSnapshot.algorithm (int) round-trip is a plain
+    // static_cast in both directions; assert each variant survives compile-time.
+    static_assert(static_cast<int>(ipc::Algorithm::VBAP)      == 0, "VBAP enum value");
+    static_assert(static_cast<int>(ipc::Algorithm::WFS)       == 1, "WFS enum value");
+    static_assert(static_cast<int>(ipc::Algorithm::DBAP)      == 2, "DBAP enum value");
+    static_assert(static_cast<int>(ipc::Algorithm::Ambisonic) == 3, "Ambisonic enum value");
+    static_assert(static_cast<ipc::Algorithm>(static_cast<int>(ipc::Algorithm::WFS))
+                      == ipc::Algorithm::WFS, "algo int round-trip");
+
+    out.clear();
+    // Reader-claim fetch: load the published index, mark it busy (so the writer
+    // skips it), then re-confirm it is still the published index. If a publish
+    // slipped in between, retry from the new index. Once confirmed, the writer
+    // is guaranteed to avoid this buffer until we release the claim, so the read
+    // below races with nothing.
+    int idx = snap_published_idx_.load(std::memory_order_acquire);
+    if (idx < 0) {                               // nothing published → no objects driven
+        snap_reader_busy_idx_.store(-1, std::memory_order_release);
+        return;
+    }
+    for (;;) {
+        snap_reader_busy_idx_.store(idx, std::memory_order_release);  // claim
+        const int cur = snap_published_idx_.load(std::memory_order_acquire);
+        if (cur == idx) break;                   // claim covers the live published buffer
+        idx = cur;                               // a publish slipped in → re-claim
+    }
+
+    const std::array<ObjCache, MAX_OBJECTS>& local =
+        snap_buf_[static_cast<std::size_t>(idx)];
+
+    for (int i = 0; i < MAX_OBJECTS; ++i) {
+        const ObjCache& c = local[static_cast<std::size_t>(i)];
+        // Emit objects driven at least once: any non-default field, or active.
+        const bool touched = c.active || c.az != 0.f || c.el != 0.f || c.dist != 1.f ||
+                             c.gain_lin != 1.f || c.reverb_send != 0.f || c.width_rad != 0.f ||
+                             c.algo != ipc::Algorithm::VBAP;
+        if (!touched) continue;
+        out.push_back(ipc::ObjectSnapshot{ /*id*/ i, c.az, c.el, c.dist,
+                                           static_cast<int>(c.algo), c.gain_lin,
+                                           /*muted*/ !c.active, c.width_rad, c.reverb_send });
+    }
+    // Release the claim so the writer may reuse this buffer once it publishes
+    // elsewhere. (After this point we no longer touch snap_buf_[idx].)
+    snap_reader_busy_idx_.store(-1, std::memory_order_release);
+}
+
 void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     sample_rate_    = sample_rate;
     max_block_size_ = max_block_size;
@@ -486,8 +536,14 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
 
     // Drain OSC command FIFO directly into obj_cache_ (RT-safe, no seq issues)
     {
+        // F4b: any successful pop dirties the block → triggers the post-drain
+        // snapshot publish below. Coarse on purpose (A3): over-publish is
+        // harmless; under-publish (a missed mutation → stale save) is the
+        // dangerous mode and is eliminated by marking dirty on EVERY pop.
+        bool cache_dirty = false;
         util::QueuedCmd qc;
         while (cmd_fifo_.pop(qc)) {
+            cache_dirty = true;  // before the OOB continue, so no mutation is missed
             if (qc.obj_id >= static_cast<uint32_t>(MAX_OBJECTS)) continue;
             auto& c = obj_cache_[qc.obj_id];
             switch (qc.tag) {
@@ -613,6 +669,30 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 break;
             default: break;
             }
+        }
+
+        // F4b publish — post-drain (so SysReset's obj_cache_.fill() above is
+        // captured), iff the block was dirty. RT-safe: one fixed O(MAX_OBJECTS)
+        // copy into the writer-owned back buffer + a single CAS, no alloc/lock/
+        // syscall, and only on dirty blocks. No extra RT-assert needed:
+        // audioBlock already opened SPE_RT_NO_ALLOC_SCOPE() at entry, so this is
+        // CI-verified no-alloc under -DSPATIAL_ENGINE_RT_ASSERTS.
+        //
+        // Reader-claim publish: pick a buffer that is NEITHER the currently-
+        // published one NOR the one the reader has claimed busy, copy into it,
+        // then release-publish its index. With 3 buffers at most two are
+        // forbidden, so a free third always exists. Safety rests on the writer
+        // observing the reader's `busy` claim within ~1 publish cadence (reader
+        // copy << audio-block period); it is a liveness property, not a hard
+        // by-construction bound (see the SpatialEngine.h note), and is gated by
+        // soak_scene_save_race (AC9) under TSan.
+        if (cache_dirty) {
+            const int pub  = snap_published_idx_.load(std::memory_order_relaxed);
+            const int busy = snap_reader_busy_idx_.load(std::memory_order_acquire);
+            int w = 0;
+            while (w == pub || w == busy) ++w;  // 0..2; at most two forbidden
+            snap_buf_[static_cast<std::size_t>(w)] = obj_cache_;  // full consistent copy
+            snap_published_idx_.store(w, std::memory_order_release);
         }
     }
 

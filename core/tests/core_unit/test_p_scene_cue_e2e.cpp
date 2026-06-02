@@ -63,6 +63,29 @@ struct EmitCapture {
         }
         return false;
     }
+
+    // Last ObjWidth.width_rad emitted for obj_id, or NaN. (F4a-T5 / AC3)
+    float lastWidth(uint32_t obj_id) const {
+        float w = std::nanf("");
+        for (const auto& c : cmds) {
+            if (c.tag != ipc::CommandTag::ObjWidth) continue;
+            if (auto* p = std::get_if<ipc::PayloadObjWidth>(&c.payload))
+                if (p->obj_id == obj_id) w = p->width_rad;
+        }
+        return w;
+    }
+
+    // Last ObjDsp value emitted for obj_id with param==ReverbSend(6), or NaN.
+    float lastReverbSend(uint32_t obj_id) const {
+        float r = std::nanf("");
+        for (const auto& c : cmds) {
+            if (c.tag != ipc::CommandTag::ObjDsp) continue;
+            if (auto* p = std::get_if<ipc::PayloadObjDsp>(&c.payload))
+                if (p->obj_id == obj_id && p->param == ipc::PayloadObjDsp::Param::ReverbSend)
+                    r = p->value;
+        }
+        return r;
+    }
 };
 
 // Write a minimal scene snapshot with a single object.
@@ -305,6 +328,46 @@ static void test_library_ops_then_cue(const std::string& dir) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 5 (AC3): cue-fire emits ObjWidth + ObjDsp(ReverbSend) for the object.
+//
+// A scene with non-zero width_rad / reverb_send, fired with crossfade=0, must
+// emit ObjWidth{width_rad≈W} AND ObjDsp{param=ReverbSend, value≈R}.
+// ---------------------------------------------------------------------------
+
+static void test_cue_fire_emits_width_reverb(const std::string& dir) {
+    // Hand-write a scene carrying width/reverb on a single object (id 20).
+    {
+        ipc::SceneSnapshot snap;
+        snap.name = "sc_wr";
+        ipc::ObjectSnapshot o;
+        o.id = 20; o.az_rad = 0.3f; o.el_rad = 0.0f; o.dist_m = 2.0f;
+        o.algorithm = 0; o.gain_linear = 0.9f; o.muted = false;
+        o.width_rad = 1.25f; o.reverb_send = 0.4f;
+        snap.objects.push_back(o);
+        CHECK(snap.saveToDisk(dir), "AC3: write sc_wr");
+    }
+
+    EmitCapture cap;
+    ipc::SceneController ctrl(dir);
+    scene::CueEngine cue(&ctrl, 48000.f, std::ref(cap));
+    scene::CueList cl;
+    { scene::Cue c; c.scene = "sc_wr"; c.crossfade_ms = 0.f; cl.cues.push_back(c); }
+    cue.setCueList(cl);
+
+    cap.clear();
+    cue.go(0, 0);
+
+    const float w = cap.lastWidth(20);
+    const float r = cap.lastReverbSend(20);
+    CHECK(!std::isnan(w), "AC3: ObjWidth emitted for obj 20");
+    CHECK(std::fabs(w - 1.25f) < 0.01f, "AC3: obj20 width_rad ≈ 1.25");
+    CHECK(!std::isnan(r), "AC3: ObjDsp ReverbSend emitted for obj 20");
+    CHECK(std::fabs(r - 0.4f) < 0.01f, "AC3: obj20 reverb_send ≈ 0.4");
+
+    std::printf("PASS: test_cue_fire_emits_width_reverb\n");
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -324,6 +387,7 @@ int main() {
     test_manual_jump_mid_sequence(dir);
     test_next_prev_navigation(dir);
     test_library_ops_then_cue(dir);
+    test_cue_fire_emits_width_reverb(dir);
 
     fs::remove_all(tmp);
     std::printf("ALL PASS\n");
