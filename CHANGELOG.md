@@ -7,11 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Post-v0.7.0 work, not yet released.
+Post-v0.9.0 follow-ups, not yet released.
 
-- **ADR 0018 — Phase B sync handlers** (Accepted): handshake / heartbeat / transport-timetag type-tag contract; control-tick player-heartbeat staleness watchdog (`9311902`).
-- **ADR 0019 — Phase C PCM IPC** (Accepted, shipping): sample-accurate POSIX shared-memory ring backend, PRs 1–5 — shm region + wire header, `SharedRingBackend`, engine `--input-backend shm:` wiring + backend pairing, `/sys/warning shm_*` + `/sys/state` telemetry, and the adm_player `IpcRingSink` Python producer + `--sink ipc://` CLI (`9cd6d57` → `868f750`). PR6 (60 s cross-process soak) + PR7 (cross-platform CI) remain.
-- **v0.8 audit remediation** (in progress, `.omc/plans/spatial-engine-v0.8-audit-remediation.md`): full-engine multi-reviewer audit; P0 flaky-test stabilization — OSC/binaural sleep-barriers → event/condvar sync (`32bfd5a`).
+- (none yet)
+
+## [0.9.0] — 2026-06-02
+
+Feature-extension cycle: five autonomous lanes (A/B/C/E/F5) mapping the
+§4.4 limitation gaps from `docs/ENGINE_OVERVIEW_AND_COMPARISON.md`. Each
+lane went through `ralplan` (Planner→Architect→Critic consensus) before
+autopilot execution. NO_JUCE ctest 114/114, RT-asserts ×2, pytest green.
+Plan: `.omc/plans/spatial-engine-v0.9-feature-extension.md`.
+
+### Added
+- **Lane A — real-time metrics dashboard.** `CpuMeter` + `/sys/metrics`
+  1 Hz OSC emit (cpu_pct/cpu_peak_pct/p99_us scalar P² estimator/xrun/
+  engine_overrun/binaural_demote), `osc_bridge` classification, WebGUI
+  `MetricsHub` + `/ws/metrics` + `/dashboard` route with self-hosted
+  canvas minicharts (zero external CDN) and a binaural reset-demote
+  button. **ADR 0020.** (`81271dc`→`d24b530`)
+- **Lane B — HRTF dataset diversification.** 4 SOFA datasets (KEMAR /
+  CIPIC-003 / SADIE-II-H08 / HUTUBS-pp1) with a JSON catalog + loader,
+  runtime hot-swap (`/sys/binaural_sofa_select ,s`, 2-slot table/tree +
+  B2 virtual-source double-buffer), fetch script + license docs
+  (`docs/HRTF_DATASETS.md`), dashboard selector, per-dataset ITD oracle
+  regression guard. (`192b8d6`→`4539873`)
+- **Lane E — scene/cue workflow.** `/scene/{save,load,list,rename,
+  duplicate,delete,meta}` + `index.json`, `CueList` model +
+  `cuelist.json`, `CueEngine` (UDP-funnelled cue automation + dwell
+  auto-advance), MIDI Program Change → cue index, WebGUI scene/cue
+  panels, e2e regression + `docs/SCENE_AND_CUE_WORKFLOW.md`.
+  (`e9b78aa`→`a3fcec6`)
+
+### Changed
+- **Lane C — `MAX_OBJECTS` compile-time option (64/128).**
+  `SPATIAL_ENGINE_MAX_OBJECTS` four-cap unification + RT-budget & memory
+  measurement harness. Evidence-gated decision: **default stays 64** —
+  128 is a validated opt-in for WFS-inactive deployments only (RT-peak
+  headroom 46.9% > 35% + WFS-active footprint block the default flip).
+  (`94c5d52`→`a686f86`)
+- **Lane F5 — WFS/DelayLine memory remediation.** `DelayLine`
+  templatized on compile-time capacity (WFS→16384, user/spk→48k) with a
+  capacity clamp in `processSample` (over-cap clamps, no longer wraps);
+  right-sized propagation DelayLine; **Option C lazy WFS allocation**
+  (allocate-then-publish atomic handshake) drops @128 WFS-inactive RSS
+  250 MB → 46.7 MB, clearing the 100 MB gate at both caps. TSan 0 races
+  / 150 rounds. **ADR 0021.** (`2e07a67`→`2ed9c71`)
+- **`docs/ENGINE_OVERVIEW_AND_COMPARISON.md` §4.1/§4.4/§5 refreshed** to
+  reflect Lanes A/B/C/E (HRTF 4-dataset, 128 opt-in, scene/cue, IR
+  convolution reverb now real via `IRConvReverb`).
+
+### Known limitations
+- **WFS-active @128 footprint ≈ 111 MB > 100 MB** — lazy alloc clears the
+  gate only when WFS is inactive; activating WFS re-allocates the ~64 MB
+  `delays_` term. Follow-up: per-active-object WFS allocation (ADR 0021).
+- **Default `MAX_OBJECTS` flip 64→128 blocked** on RT-peak headroom, not
+  memory (ADR 0021 §C-M7).
+- **Scene snapshot drops `width_rad`/`reverb_send`** (reset to 0 on cue
+  load, F4) — serialization fix tracked as next lane.
+- **ADR 0019 PR6 (60 s cross-process soak) + PR7 (cross-platform CI)**
+  still open.
+
+## [0.8.0] — 2026-05-29
+
+Audit-remediation + Phase B/C IPC cycle (never separately tagged; rolled
+forward into the v0.9.0 release). Tracks
+`.omc/plans/spatial-engine-v0.8-audit-remediation.md` and the ADR 0018/
+0019 PR plans.
+
+### Added
+- **ADR 0018 — Phase B sync handlers** (Accepted): handshake / heartbeat /
+  transport-timetag type-tag contract; control-tick player-heartbeat
+  staleness watchdog (`f22f9ca`→`9311902`).
+- **ADR 0019 — Phase C PCM IPC** (Accepted, shipping): sample-accurate
+  POSIX shared-memory ring backend, PRs 2–5 — shm region + wire header,
+  `SharedRingBackend`, engine `--input-backend shm:` wiring + backend
+  pairing, `/sys/warning shm_*` + `/sys/state` telemetry, and the
+  adm_player `IpcRingSink` Python producer + `--sink ipc://` CLI
+  (`f9c0fec`→`868f750`). `O_NOFOLLOW` hardening on shm regular-file open
+  (P6.1, PR3-Q7).
+
+### Fixed
+- **v0.8 audit DSP remediation.** P1 — runtime decoder-type
+  double-buffered apply (M2HOA-Q14) + VBAP RT-alloc removal +
+  SN3D-constant lock test; P2 — EPAD rank-aware energy scale (DSP-4) +
+  VBAP fallback Σg²≈1 guard (DSP-5); **P2.3 — FdnReverb effective-delay
+  fix (DSP-6, `readPos = writePos`)** + T60 oracle reinstated.
+  (`64352df`, `98741a4`, `d7f3e6c`)
+- **P0 flaky-test stabilization** — OSC/binaural sleep-barriers replaced
+  with event/condvar sync (`32bfd5a`).
+
+### Added (test/docs)
+- P3 (partial) — ambisonic absolute-gain golden + HRTF interp oracle +
+  OSC malformed-extras coverage; ADR status/index reconcile; CHANGELOG +
+  hygiene record.
+
+### Deferred
+- **P3.1** (VST3 state-contract test → NO_JUCE CI), **P3.5**
+  (`vst3_bind_collision` race) — supervised VST3 sprint (stale
+  `build_vst3`); **P7.1** (`SpatialEngine` god-object refactor);
+  **ADR 0019 PR6/PR7** (cross-process soak + cross-platform CI).
 
 ## [0.7.0] — 2026-05-21
 
