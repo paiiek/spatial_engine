@@ -10,8 +10,8 @@
 - 분석 출처: 2026-06-02 병렬 3-에이전트 감사 + 직접 코드 검증. 상세는 메모리 `project_v09_feature_extension.md` "다음 작업 후보" 참조.
 
 ## 현재 진행 포인터
-- **ACTIVE**: 레인 1 (F4 직렬화) — ralplan 착수
-- 완료한 레인: (없음)
+- **ACTIVE**: 레인 2 (ADR 0019 PR6) — ralplan 착수 예정
+- 완료한 레인: **레인 1 (F4) ✅ 2026-06-02** — commits `2392730`(plan REV5) + `c6c8415`(impl), push 완료. 5-iter ralplan consensus → executor → 독립 code-review APPROVE-WITH-NITS(MAJOR=주석 over-claim만, 수정함). 게이트: ctest 115/115 @64+@128, RT-asserts, TSan soak_scene_save_race 0 races/0 tears 양캡, pytest 260p/4s. 구현: F4a 직렬화+emit, F4b 3-buffer reader-claim publish handshake(seqlock optimistic은 그 자체가 formal race라 교체), param-7 decoder reject. **후속(optional)**: AC9 soak에 reader-slow 변종 추가, tearing tolerance absolute화(둘 다 non-blocking, 리뷰어 MINOR).
 
 ## 순서별 백로그
 
