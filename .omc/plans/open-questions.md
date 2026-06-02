@@ -235,3 +235,33 @@ Round-2 Critic R1 review applied 4 CRITICAL + 4 MAJOR + 2 MINOR fixes. M2HOA-Q i
 - [ ] B-M1: JSON parser already in C++ deps vs hand-roll fixed schema — avoid adding nlohmann/json for a 4-entry catalog (dependency footprint).
 - [ ] B-M2 (B2 perception, still open): momentary Direct flash on a B2-active swap acceptable, or take the deferred full B2 VS double-buffer (`active_vs_slot_`, no TOCTOU) in-scope? — perceptual call, not safety.
 - [ ] Lane B Risk #3: recommended "reset demote on swap, keep 60s user-reset cooldown clock" (strike detector re-accrues continuously; cooldown prevents swap-spam reset bypass) — Critic to confirm.
+
+## spatial-engine-v0.9 Lane F4 (REV2) - 2026-06-02
+- [ ] **F4-Q1 (F4b save-source)**: Confirm Option B2 (snapshot SpatialEngine::obj_cache_ on the control thread) over B1 (route through StateModel) — StateModel is bypassed for ADM-OSC object traffic (ADR 0006), lacks width/reverb_send, and reviving it as authoritative reintroduces the seq=0 drop bug. — Why it matters: picking the wrong source either reintroduces a closed bug or persists a divergent/partial mirror.
+- [ ] **F4-Q2 (cross-thread read acceptability)**: Confirm the bounded benign read of audio-thread-owned obj_cache_ from the control thread is acceptable (matches existing objCacheActiveAt idiom), with atomic-scalar/control-tick hardening deferred to Follow-up. — Why it matters: determines whether F4b needs atomic widening now or later.
+- [ ] **F4-Q3 (param-7 reject fold-in)**: Confirm folding the /obj/dsp param-7 decoder reject (CommandDecoder.cpp:555) INTO this lane vs deferring. Today param 7 mis-routes to EQ band 0 (silent corruption), not a drop. — Why it matters: a width-via-dsp client silently corrupts EQ until fixed.
+- [ ] **F4-Q4 (second JSON writer)**: Re-confirm no other "objects":[ scene-snapshot JSON writer exists besides C++ SceneSnapshot::toJson before merge. — Why it matters: an un-updated writer would still drop the new fields.
+
+## spatial-engine-v0.9 Lane F4 (REV3) - 2026-06-02
+- [x] **F4-Q1 (CLOSED REV3)**: F4b source = snapshot obj_cache_ (B2), StateModel/B1 invalidated (bypassed for ADM-OSC per ADR 0006). Accepted by Architect.
+- [ ] **F4-Q5 (concurrency mechanism, NEW REV3)**: Confirm Option 2d (publish-on-dirty double-buffer + seqlock generation, F5/ADR 0021 idiom) over 2b (atomicize ObjCache scalars). 2b rejected primary: forces .load() across dozens of RT renderer read sites (SpatialEngine.cpp:647-934) and gives only per-field, not per-object, consistency. 2a (TSan suppression) off the table — would be the only suppression in a 0-races project. — Why it matters: wrong choice either ripples into the RT hot path or fails the project's zero-races TSan/Relacy gate.
+- [ ] **F4-Q6 (mute persistence, NEW REV3)**: Confirm the `touched` heuristic (emit object iff active OR any captured field is non-default) for mute persistence is acceptable with its one documented corner (object driven to exact defaults then muted → treated as untouched/omitted), vs adding a `valid` flag to ObjCache now. — Why it matters: ObjCache has no valid flag (SpatialEngine.h:387-398); mute state would otherwise be lost on save.
+- [ ] **F4-Q3 (param-7 reject fold-in, carried)**: Confirm folding /obj/dsp param-7 decoder reject into this lane. Param 7 currently mis-routes to EQ band 0 (silent corruption).
+- [ ] **F4-Q4 (second JSON writer, carried)**: Re-confirm no other "objects":[ scene-snapshot JSON writer exists besides C++ SceneSnapshot::toJson before merge.
+
+## spatial-engine-v0.9 Lane F4 (REV4) - 2026-06-02
+- [x] **F4-Q5 (RESOLVED REV4)**: Concurrency = Option 2d publish-on-dirty THREE-buffer rotation (race-free by construction for an unbounded-rate writer). REV3's two-buffer even/odd seqlock was livelock-prone and replaced (Architect amendment A1). 2b/2a remain rejected.
+- [ ] **F4-Q5b (confirm REV4 three-buffer)**: Architect to confirm the three-buffer writer rotation (skip published index, then advance) + reader bounded single re-check is correct, and that AC9 (soak_scene_save_race) CONFIRMS rather than solely guarantees it. — Why it matters: the two-buffer form was a real defect; three-buffer is the fix.
+- [x] **F4-Q-A2 (RESOLVED REV4)**: RT-assert macro corrected to SPE_RT_NO_ALLOC_SCOPE() (RtAssertNoAlloc.h:54); the existing scope guard at audioBlock entry (SpatialEngine.cpp:464) already covers the publish — no new macro call. Gated on -DSPATIAL_ENGINE_RT_ASSERTS (RT-assert/TSan build).
+- [x] **F4-Q-A3 (RESOLVED REV4)**: dirty=popped_any is DELIBERATELY coarse; dangerous mode is UNDER-publish (eliminated), over-publish harmless. Publish runs POST-drain so SysReset's obj_cache_.fill() (SpatialEngine.cpp:508) is captured.
+- [ ] **F4-Q6 (mute touched-heuristic, carried)**: Confirm touched heuristic for mute persistence with its one documented corner vs adding a valid flag to ObjCache.
+- [ ] **F4-Q4 (second JSON writer, carried)**: Re-confirm no other "objects":[ scene-snapshot JSON writer exists besides C++ SceneSnapshot::toJson before merge.
+
+## spatial-engine-v0.9 Lane F4 (REV5) - 2026-06-02
+- [x] **F4-C1 (RESOLVED REV5)**: Reader single-bounded-re-check was still racy (no re-check after the 2nd copy → lap during deschedule). Replaced with a retry-until-stable seqlock loop; liveness = reader copy « 2 audio-block periods. Kept 3 buffers (no need for 4).
+- [x] **F4-M1 (RESOLVED REV5)**: AC9's "az from N / dist from ≤N" was unprovable (ObjCache has no gen/seq field). Replaced with a correlated-field-pair invariant (writer sets az=k, width=encode(k); reader asserts width==encode(az)), structurally detecting cross-buffer tearing, plus TSan 0-races, ≥150 rounds.
+- [x] **F4-M2 (RESOLVED REV5)**: Mute corner bounded — ObjMove sets active=true (SpatialEngine.cpp:495-496), so any positioned object is touched; corner is only objects driven to FULL defaults then deactivated (vanishingly rare).
+- [x] **F4-item (RESOLVED REV5)**: published_index_/snap_buf_/writer_next_ persist across prepare/stop-restart; stale published_index_>=0 is benign (points at still-valid state); SysReset's obj_cache_.fill() is captured by the dirty post-drain publish.
+- [x] **F4-item (RESOLVED REV5)**: No assumed popped_any — executor declares `bool cache_dirty=false;` before the drain loop (verified none exists at SpatialEngine.cpp:488-491), set true at top of loop body before the OOB continue.
+- [x] **F4-item (RESOLVED REV5)**: Two width write paths documented — ObjWidth verb (:161/:605-607) live; ObjDsp case 7 (:579) dead until F4b-T0; both write c.width_rad, snapshot captures either.
+- [ ] **F4-Q4 (carried, pre-merge)**: Re-confirm no other "objects":[ scene-snapshot JSON writer exists besides C++ SceneSnapshot::toJson before merge.
