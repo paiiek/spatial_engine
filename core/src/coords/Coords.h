@@ -79,4 +79,37 @@ inline float stereo_pan_from_pipeline_az(float az_pipe) {
     return std::sin(az_pipe);
 }
 
+// ── Dreamscape Convergence: canonical render-frame adapter ───────────────────
+// Two Cartesian frames meet at the port boundary:
+//   mmhoa  (engine-native): +X = right, +Y = up,      +Z = front.  az = atan2(x,z)
+//   ported (Dreamscape/iae): +X = right, +Y = forward, +Z = up.
+// The ported VBAP / VAP / DBAP / WFS kernels consume speaker + source geometry
+// in the PORTED frame. The conversion is a Y<->Z swap — its own inverse
+// (involution). Per-speaker gains are frame-independent (just per-index weights),
+// so ONLY the input geometry is converted; outputs need no conversion.
+//
+// L/R INVARIANT (locked by test_convergence_coords): mmhoa az>0 (RIGHT) maps to
+// ported x>0 (RIGHT). NEVER negate here — same bug class as the 2026-03-01
+// stereo_pan inversion. Source and speakers MUST both pass through this adapter
+// so VBAP sees one consistent frame.
+
+inline std::array<float, 3> mmhoa_to_ported(float x, float y, float z) {
+    return {x, z, y};  // right stays x; up(y) -> z; front(z) -> y
+}
+
+inline std::array<float, 3> ported_to_mmhoa(float x, float y, float z) {
+    return {x, z, y};  // involution: swapping back
+}
+
+// mmhoa (az, el) unit direction -> ported-frame unit vector.
+// mmhoa dir: x = cosEl*sinAz (right), y = sinEl (up), z = cosEl*cosAz (front);
+// after Y<->Z swap: ported = (cosEl*sinAz, cosEl*cosAz, sinEl).
+//   az=0,el=0   -> (0,1,0)  ported +Y front
+//   az=+90°,el=0-> (1,0,0)  ported +X right
+//   el=+90°     -> (0,0,1)  ported +Z up
+inline std::array<float, 3> pipeline_dir_to_ported(float az_rad, float el_rad) {
+    const float ce = std::cos(el_rad);
+    return {ce * std::sin(az_rad), ce * std::cos(az_rad), std::sin(el_rad)};
+}
+
 }  // namespace spe::coords

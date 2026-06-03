@@ -32,6 +32,21 @@ struct CartCase {
     float exp_x, exp_y, exp_z;
 };
 
+// Dreamscape Convergence: pipeline (az,el) -> ported-frame unit vector.
+// ported = (cosEl*sinAz, cosEl*cosAz, sinEl). +X=right, +Y=front, +Z=up.
+struct DirCase {
+    float az_rad, el_rad;
+    float exp_x, exp_y, exp_z;
+};
+
+inline const DirCase kPipelineDirToPorted[] = {
+    {  0.0f,   0.0f,   0.0f,          1.0f,          0.0f       },  // front
+    {  kPi2,   0.0f,   1.0f,          0.0f,          0.0f       },  // RIGHT -> +X
+    { -kPi2,   0.0f,  -1.0f,          0.0f,          0.0f       },  // LEFT  -> -X
+    {  0.0f,   kPi2,   0.0f,          0.0f,          1.0f       },  // UP    -> +Z
+    {  kPi4,   0.0f,   0.70710678f,   0.70710678f,   0.0f       },  // front-right
+};
+
 // pipeline_to_ambix cases
 inline constexpr PairCase kPipeToAmbix[] = {
     // (az, el) -> (-az, el)

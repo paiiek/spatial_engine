@@ -41,6 +41,12 @@ add_executable(test_p2_coords test_p2_coords.cpp)
 target_link_libraries(test_p2_coords PRIVATE spe_core)
 add_test(NAME p2_coords COMMAND test_p2_coords)
 
+# Dreamscape Convergence Phase 0 — canonical render-frame adapter
+# (mmhoa<->ported Y<->Z swap) + L/R invariant lock for the ported panning ports.
+add_executable(test_convergence_coords test_convergence_coords.cpp)
+target_link_libraries(test_convergence_coords PRIVATE spe_core)
+add_test(NAME convergence_coords COMMAND test_convergence_coords)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE
