@@ -72,6 +72,12 @@ add_executable(test_convergence_mdap test_convergence_mdap.cpp)
 target_link_libraries(test_convergence_mdap PRIVATE spe_core)
 add_test(NAME convergence_mdap COMMAND test_convergence_mdap)
 
+# Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
+# + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
+add_executable(test_convergence_wfs test_convergence_wfs.cpp)
+target_link_libraries(test_convergence_wfs PRIVATE spe_core)
+add_test(NAME convergence_wfs COMMAND test_convergence_wfs)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE

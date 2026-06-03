@@ -114,6 +114,7 @@ set(SPE_CORE_SOURCES
     src/render/ported/Vbap.cpp
     src/render/ported/Vap.cpp
     src/render/ported/VbapMask.cpp
+    src/render/ported/Wfs.cpp
     src/render/VAPRenderer.cpp
     # P4: IPC layer
     src/ipc/ProtocolVersion.cpp
