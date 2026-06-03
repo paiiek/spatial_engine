@@ -148,6 +148,7 @@ static inline Algorithm algoFromInt(int v) noexcept {
         case 1: return Algorithm::WFS;
         case 2: return Algorithm::DBAP;
         case 3: return Algorithm::Ambisonic;
+        case 4: return Algorithm::VAP;
         default: return Algorithm::VBAP;
     }
 }

@@ -19,6 +19,7 @@ enum class Algorithm : uint8_t {
     WFS       = 1,
     DBAP      = 2,
     Ambisonic = 3,
+    VAP       = 4,  // Volumetric Amplitude Panning (Dreamscape convergence)
 };
 
 // ---- Command tag (one per OSC address pattern) ------------------------------

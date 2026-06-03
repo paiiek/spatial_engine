@@ -15,6 +15,7 @@
 #include "output_backend/BinauralMonitor.h"
 #include "render/AmbisonicRenderer.h"
 #include "render/DBAPRenderer.h"
+#include "render/VAPRenderer.h"
 #include "render/VBAPRenderer.h"
 #include "render/WFSRenderer.h"
 #include "reverb/FdnReverb.h"
@@ -377,6 +378,7 @@ private:
     render::DBAPRenderer          dbap_;
     render::WFSRenderer           wfs_;
     render::AmbisonicRenderer     ambisonic_;
+    render::VAPRenderer           vap_;
 
     // FDN reverb (mono send → mono wet) and binaural side-output (mono → L/R).
     reverb::FdnReverb                        fdn_;
@@ -464,6 +466,7 @@ private:
     std::array<render::ObjectState, MAX_OBJECTS> dbap_objs_{};
     std::array<render::ObjectState, MAX_OBJECTS> wfs_objs_{};
     std::array<render::ObjectState, MAX_OBJECTS> ambisonic_objs_{};
+    std::array<render::ObjectState, MAX_OBJECTS> vap_objs_{};
     // mix_buf_: interleaved final output [sample * num_speakers + spk]
     // Per-algorithm scratches summed into mix_buf_.
     std::vector<float>  mix_buf_;
@@ -471,6 +474,7 @@ private:
     std::vector<float>  dbap_scratch_;
     std::vector<float>  wfs_scratch_;
     std::vector<float>  ambisonic_scratch_;
+    std::vector<float>  vap_scratch_;
     // Per-speaker time-alignment (delay + gain).
     // spk_delays_ is user-settable & UNCLAMPED (layout YAML delay_ms →
     // delay_ms*0.001*sr) and may legitimately exceed 341 ms → KEEP the large

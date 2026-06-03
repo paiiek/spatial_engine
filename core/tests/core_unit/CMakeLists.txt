@@ -53,6 +53,12 @@ add_executable(test_convergence_vap_port test_convergence_vap_port.cpp)
 target_link_libraries(test_convergence_vap_port PRIVATE spe_core)
 add_test(NAME convergence_vap_port COMMAND test_convergence_vap_port)
 
+# Dreamscape Convergence Phase 1 — VAPRenderer live integration (RenderingAlgorithm
+# wrapper): prepareToPlay + processBlock route a RIGHT object to the right speaker.
+add_executable(test_convergence_vap_renderer test_convergence_vap_renderer.cpp)
+target_link_libraries(test_convergence_vap_renderer PRIVATE spe_core)
+add_test(NAME convergence_vap_renderer COMMAND test_convergence_vap_renderer)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE
