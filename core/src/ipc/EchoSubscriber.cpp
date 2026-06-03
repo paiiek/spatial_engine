@@ -60,7 +60,9 @@ bool EchoPlane::addSubscriber(uint32_t peer_ip_net, uint16_t echo_port,
     // Find free slot.
     for (auto& e : entries_) {
         if (!e.active) {
-            std::memset(&e, 0, sizeof(e));
+            e = EchoSubscriberEntry{};  // value-init: EchoSubscriberEntry is
+                                        // non-trivial (member inits), so memset
+                                        // trips -Werror=class-memaccess (GCC 13).
             e.dest.sin_family      = AF_INET;
             e.dest.sin_addr.s_addr = peer_ip_net;
             e.dest.sin_port        = htons(echo_port);
