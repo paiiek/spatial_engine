@@ -66,6 +66,12 @@ add_executable(test_convergence_vbap_elevation test_convergence_vbap_elevation.c
 target_link_libraries(test_convergence_vbap_elevation PRIVATE spe_core)
 add_test(NAME convergence_vbap_elevation COMMAND test_convergence_vbap_elevation)
 
+# Dreamscape Convergence Phase 1 — MDAP source spread (vbap_mdap_gain_into):
+# spread≈0 == point, spread widens distribution, Σg²=1, 40° clamp, L/R invariant.
+add_executable(test_convergence_mdap test_convergence_mdap.cpp)
+target_link_libraries(test_convergence_mdap PRIVATE spe_core)
+add_test(NAME convergence_mdap COMMAND test_convergence_mdap)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE

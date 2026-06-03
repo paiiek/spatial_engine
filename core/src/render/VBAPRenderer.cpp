@@ -96,32 +96,24 @@ void VBAPRenderer::processBlock(
                     // SPE_RT_NO_ALLOC_SCOPE(). The new vbap_gain_into()
                     // writes into the caller-provided member scratch and
                     // uses stack arrays internally (capped at 64 speakers).
-                    const int written = AlgorithmAnalyticReference::vbap_gain_into(
-                        layout_, objects[obj].az_rad, objects[obj].el_rad,
-                        gain_scratch_.data(),
-                        static_cast<int>(gain_scratch_.size()));
-                    // Width fan-out: blend point-source gains with uniform spread.
-                    // width=0 → pure VBAP; width=π → half uniform / half VBAP.
-                    // Blend factor w ∈ [0,1]: w = width_rad / π.
-                    // g_out[i] = (1-w)*g[i] + w*(1/sqrt(N))
-                    // This guarantees ≥3 nonzero gains when w>0 and N≥3.
+                    // Source width → MDAP (Multiple-Direction Amplitude
+                    // Panning): width_rad is the spread angle (radians),
+                    // converted to degrees and clamped to 40° inside the
+                    // helper. width≈0 degenerates to the point-source VBAP.
+                    // MDAP samples K=8 directions around (az,el) and sums their
+                    // (elevation-masked) VBAP gains, energy-normalised — a real
+                    // spatial spread, replacing the old uniform-blend approximation.
                     const float w_rad = objects[obj].width_rad;
-                    if (w_rad > 1e-4f && written > 0) {
-                        const float w = w_rad / 3.14159265f;  // [0,1]
-                        const float uniform = 1.0f / std::sqrt(static_cast<float>(written));
-                        float energy = 0.f;
-                        for (int g_i = 0; g_i < written; ++g_i) {
-                            float& g = gain_scratch_[static_cast<size_t>(g_i)];
-                            g = (1.f - w) * g + w * uniform;
-                            energy += g * g;
-                        }
-                        // Re-normalise to energy = 1
-                        if (energy > 1e-8f) {
-                            const float inv_rms = 1.0f / std::sqrt(energy);
-                            for (int g_i = 0; g_i < written; ++g_i)
-                                gain_scratch_[static_cast<size_t>(g_i)] *= inv_rms;
-                        }
-                    }
+                    const int written = (w_rad > 1e-4f)
+                        ? AlgorithmAnalyticReference::vbap_mdap_gain_into(
+                              layout_, objects[obj].az_rad, objects[obj].el_rad,
+                              w_rad * (180.0f / 3.14159265f),
+                              gain_scratch_.data(),
+                              static_cast<int>(gain_scratch_.size()))
+                        : AlgorithmAnalyticReference::vbap_gain_into(
+                              layout_, objects[obj].az_rad, objects[obj].el_rad,
+                              gain_scratch_.data(),
+                              static_cast<int>(gain_scratch_.size()));
                     cache_slots_[probe].key = key;
                     // Copy from scratch into the cached slot (slot.gains
                     // already sized at prepareToPlay — no realloc).
@@ -146,23 +138,18 @@ void VBAPRenderer::processBlock(
                 // and no empty slot was found is impossible — but defend
                 // by computing into scratch and pointing gains_ptr there).
                 ++cache_misses_;
-                (void)AlgorithmAnalyticReference::vbap_gain_into(
-                    layout_, objects[obj].az_rad, objects[obj].el_rad,
-                    gain_scratch_.data(),
-                    static_cast<int>(gain_scratch_.size()));
                 const float w_rad2 = objects[obj].width_rad;
                 if (w_rad2 > 1e-4f) {
-                    const float w2 = w_rad2 / 3.14159265f;
-                    const float uniform2 = 1.0f / std::sqrt(static_cast<float>(gain_scratch_.size()));
-                    float energy2 = 0.f;
-                    for (auto& g : gain_scratch_) {
-                        g = (1.f - w2) * g + w2 * uniform2;
-                        energy2 += g * g;
-                    }
-                    if (energy2 > 1e-8f) {
-                        const float inv2 = 1.0f / std::sqrt(energy2);
-                        for (auto& g : gain_scratch_) g *= inv2;
-                    }
+                    (void)AlgorithmAnalyticReference::vbap_mdap_gain_into(
+                        layout_, objects[obj].az_rad, objects[obj].el_rad,
+                        w_rad2 * (180.0f / 3.14159265f),
+                        gain_scratch_.data(),
+                        static_cast<int>(gain_scratch_.size()));
+                } else {
+                    (void)AlgorithmAnalyticReference::vbap_gain_into(
+                        layout_, objects[obj].az_rad, objects[obj].el_rad,
+                        gain_scratch_.data(),
+                        static_cast<int>(gain_scratch_.size()));
                 }
                 gains_ptr = &gain_scratch_;
             }

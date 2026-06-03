@@ -37,6 +37,21 @@ public:
         float az_rad, float el_rad,
         float* out, int out_capacity) noexcept;
 
+    // --- MDAP (Multiple-Direction Amplitude Panning) ----------------------
+    // Source spread/width: sample K=8 directions around the nominal (az,el)
+    // and sum their VBAP gains, then energy-normalise (Σg²=1). 2D layouts
+    // (max|y| < 1e-3) sample an azimuth arc; 3D layouts sample a cone of
+    // half-angle spread/2 about the nominal direction (Pulkki MDAP). Each
+    // sample reuses vbap_gain_into, so the 5-tier elevation participation
+    // mask and the 2D/3D dispatch apply per sample. spread_deg is clamped to
+    // [0, 40] (kMdapSpreadMaxDegrees); spread ≈ 0 degenerates to a point
+    // source (== vbap_gain_into). RT-SAFE: stack scratch, zero allocation.
+    // Returns N on success, 0 on capacity violation.
+    static int vbap_mdap_gain_into(
+        const geometry::SpeakerLayout& layout,
+        float az_rad, float el_rad, float spread_deg,
+        float* out, int out_capacity) noexcept;
+
     // --- DBAP (Lossius 2009) -----------------------------------------------
     // g_i = (1/d_i^a) / sqrt(Σ 1/d_i^(2a))
     // Source position in Cartesian metres (same frame as layout speakers).

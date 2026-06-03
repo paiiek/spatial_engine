@@ -395,6 +395,111 @@ int AlgorithmAnalyticReference::vbap_gain_into(
     return N;
 }
 
+// ---------------------------------------------------------------------------
+// MDAP (Multiple-Direction Amplitude Panning) — source spread/width.
+// Samples K=8 directions around the nominal (az,el) and sums their VBAP gains,
+// then energy-normalises. 2D layouts sample an azimuth arc; 3D layouts sample a
+// cone of half-angle spread/2 about the nominal direction (mirrors the ported
+// computeHorizontal/SpatialMdap geometry). Each sample reuses vbap_gain_into so
+// the elevation participation mask + 2D/3D dispatch apply per sample.
+// spread_deg is clamped to [0, 40]; spread ≈ 0 returns the point source.
+// RT-SAFE — stack scratch only.
+// ---------------------------------------------------------------------------
+int AlgorithmAnalyticReference::vbap_mdap_gain_into(
+    const geometry::SpeakerLayout& layout,
+    float az_rad, float el_rad, float spread_deg,
+    float* out, int out_capacity) noexcept
+{
+    const int N = static_cast<int>(layout.speakers.size());
+    if (out == nullptr || out_capacity < N || N > kMaxVbapSpeakers || N == 0) {
+        return 0;
+    }
+
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kMdapSpreadMaxDeg = 40.f;   // ref kMdapSpreadMaxDegrees
+    constexpr float kSpreadEpsDeg     = 1.0e-3f;
+    constexpr int   K                 = 8;      // ref kMdapDefaultSpreadSegments
+
+    float spread = spread_deg;
+    if (spread < 0.f)               spread = 0.f;
+    if (spread > kMdapSpreadMaxDeg) spread = kMdapSpreadMaxDeg;
+
+    // Tiny spread → point source (bit-identical to the non-MDAP path).
+    if (spread <= kSpreadEpsDeg)
+        return vbap_gain_into(layout, az_rad, el_rad, out, out_capacity);
+
+    std::fill_n(out, N, 0.f);
+
+    // Layout dimensionality — same probe as vbap_gain_into's dispatch.
+    float max_abs_y = 0.f;
+    for (const auto& s : layout.speakers) {
+        const float ay = std::abs(s.y);
+        if (ay > max_abs_y) max_abs_y = ay;
+    }
+    const bool layout2d = max_abs_y < 1e-3f;
+
+    std::array<float, kMaxVbapSpeakers> tmp{};
+
+    if (layout2d) {
+        // Azimuth arc across [az - spread/2, az + spread/2].
+        const float spreadRad = spread * (kPi / 180.f);
+        for (int k = 0; k < K; ++k) {
+            const float t = (K <= 1) ? 0.f
+                          : (-0.5f + static_cast<float>(k) / static_cast<float>(K - 1));
+            const float az_k = az_rad + t * spreadRad;
+            if (vbap_gain_into(layout, az_k, el_rad, tmp.data(), N) <= 0) continue;
+            for (int i = 0; i < N; ++i) out[i] += tmp[static_cast<size_t>(i)];
+        }
+    } else {
+        // Cone about the nominal direction (engine frame x=right,y=up,z=front).
+        const float ce = std::cos(el_rad), se = std::sin(el_rad);
+        const float ca = std::cos(az_rad), sa = std::sin(az_rad);
+        const float ux = ce * sa, uy = se, uz = ce * ca;   // nominal unit vector
+        // Tangent basis e1, e2 ⟂ u (same construction as the ported kernel).
+        const float ax = (std::abs(ux) < 0.9f) ? 1.f : 0.f;
+        const float ay = (std::abs(ux) < 0.9f) ? 0.f : 1.f;
+        float e1x = ay * uz - 0.f * uy;   // a × u, with a = (ax, ay, 0)
+        float e1y = 0.f * ux - ax * uz;
+        float e1z = ax * uy - ay * ux;
+        float e1n = std::sqrt(e1x * e1x + e1y * e1y + e1z * e1z);
+        if (e1n < 1e-8f) e1n = 1.f;
+        e1x /= e1n; e1y /= e1n; e1z /= e1n;
+        const float e2x = uy * e1z - uz * e1y;   // u × e1
+        const float e2y = uz * e1x - ux * e1z;
+        const float e2z = ux * e1y - uy * e1x;
+
+        const float beta = (spread * 0.5f) * (kPi / 180.f);
+        const float sb = std::sin(beta), cb = std::cos(beta);
+        constexpr float twoPi = 6.28318530717958647693f;
+        for (int k = 0; k < K; ++k) {
+            const float phi = twoPi * static_cast<float>(k) / static_cast<float>(K);
+            const float c = sb * std::cos(phi);
+            const float s = sb * std::sin(phi);
+            float dx = ux * cb + e1x * c + e2x * s;
+            float dy = uy * cb + e1y * c + e2y * s;
+            float dz = uz * cb + e1z * c + e2z * s;
+            const float dn = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dn > 1e-8f) { dx /= dn; dy /= dn; dz /= dn; }
+            const float az_k = std::atan2(dx, dz);   // az = atan2(x, z)
+            float yv = dy;
+            if (yv >  1.f) yv =  1.f;
+            if (yv < -1.f) yv = -1.f;
+            const float el_k = std::asin(yv);
+            if (vbap_gain_into(layout, az_k, el_k, tmp.data(), N) <= 0) continue;
+            for (int i = 0; i < N; ++i) out[i] += tmp[static_cast<size_t>(i)];
+        }
+    }
+
+    // Energy-normalise Σg² = 1.
+    float ss = 0.f;
+    for (int i = 0; i < N; ++i) ss += out[i] * out[i];
+    if (ss < 1e-8f)
+        return vbap_gain_into(layout, az_rad, el_rad, out, out_capacity); // degenerate → point
+    const float inv = 1.f / std::sqrt(ss);
+    for (int i = 0; i < N; ++i) out[i] *= inv;
+    return N;
+}
+
 std::vector<float> AlgorithmAnalyticReference::vbap_gain(
     const geometry::SpeakerLayout& layout,
     float az_rad, float el_rad)
