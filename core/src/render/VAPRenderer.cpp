@@ -3,6 +3,7 @@
 #include "render/VAPRenderer.h"
 #include "render/ported/Vap.h"
 #include "coords/Coords.h"
+#include <cassert>
 #include <cstring>
 #include <cmath>
 
@@ -14,6 +15,11 @@ void VAPRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
     layout_       = layout;
     sr_           = sample_rate;
     num_speakers_ = static_cast<int>(layout.speakers.size());
+    // Match VBAPRenderer's contract: fail loudly on the control thread if a
+    // layout exceeds the fixed 64-speaker scratch (gains[64], spk_*_ported_[64]).
+    // The clamp is defense-in-depth under NDEBUG. Lifted with Phase 0.5 (128).
+    assert(num_speakers_ <= 64
+           && "VAPRenderer: layout exceeds 64-speaker cap (scratch fixed)");
     if (num_speakers_ > 64) num_speakers_ = 64;
 
     // Pre-convert speaker positions (mmhoa frame: x=right,y=up,z=front) to the
@@ -48,6 +54,9 @@ void VAPRenderer::processBlock(
         const float* src = dry_mono[static_cast<size_t>(obj)];
         if (!src) continue;
 
+        // NOTE: ObjectState::width_rad is intentionally unused for VAP (source
+        // spread is the VBAP/MDAP path's concern, future increment). VAP renders
+        // the object as a point through the volumetric/VBAP blend.
         // Source position: mmhoa (az,el,dist) -> ported-frame metres via the
         // canonical adapter (pipeline_dir_to_ported is the unit dir).
         const float d = objects[obj].dist_m;

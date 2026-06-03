@@ -29,6 +29,7 @@ CompatResult LayoutCompatibilityChecker::validate(
     constexpr float WFS_MAX_SPACING = SOUND_C / (2.0f * F_MAX);
 
     switch (algo) {
+        case Algorithm::VAP:   // VAP shares VBAP's directional component → same layout rule
         case Algorithm::VBAP: {
             const int n = static_cast<int>(layout.speakers.size());
             if (n < 3)
