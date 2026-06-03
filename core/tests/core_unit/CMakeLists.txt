@@ -59,6 +59,13 @@ add_executable(test_convergence_vap_renderer test_convergence_vap_renderer.cpp)
 target_link_libraries(test_convergence_vap_renderer PRIVATE spe_core)
 add_test(NAME convergence_vap_renderer COMMAND test_convergence_vap_renderer)
 
+# Dreamscape Convergence Phase 1 — VBAP 3D 5-tier elevation layering
+# (ported fillVbapMaskForObject): flat object stays horizontal, elevated object
+# routes to the ceiling, opposite corner stays silent, Σg²=1, L/R invariant.
+add_executable(test_convergence_vbap_elevation test_convergence_vbap_elevation.cpp)
+target_link_libraries(test_convergence_vbap_elevation PRIVATE spe_core)
+add_test(NAME convergence_vbap_elevation COMMAND test_convergence_vbap_elevation)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE

@@ -1,6 +1,9 @@
 // core/src/render/AlgorithmAnalyticReference.cpp
 
 #include "render/AlgorithmAnalyticReference.h"
+#include "render/ported/SpatialMath.h"
+#include "render/ported/VbapMask.h"
+#include "coords/Coords.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -169,6 +172,39 @@ static void vbap_gain_3d_into(
         ang[static_cast<size_t>(i)] = std::acos(dot);
     }
 
+    // --- 5-tier elevation layering (Dreamscape convergence) ----------------
+    // Restrict the VBAP candidate set to speakers angularly near the source,
+    // with progressive relaxation and a steep-source opposite-layer cut. The
+    // mask is built in the ported frame (z = up) via the canonical Y<->Z swap
+    // adapter — both speaker positions and the source direction pass through
+    // coords::mmhoa_to_ported so the ported logic sees one consistent frame
+    // (same L/R invariant locked by test_convergence_coords).
+    std::array<iae::Vec3, kMaxVbapSpeakers> spk_ported{};
+    for (int i = 0; i < N; ++i) {
+        const auto& sp = layout.speakers[static_cast<size_t>(i)];
+        const auto p = spe::coords::mmhoa_to_ported(sp.x, sp.y, sp.z);
+        spk_ported[static_cast<size_t>(i)] = iae::Vec3{p[0], p[1], p[2]};
+    }
+    const auto psrc = spe::coords::mmhoa_to_ported(sx, sy, sz);
+    const iae::Vec3 src_ported{psrc[0], psrc[1], psrc[2]};
+    // Reference derives flatness from the Cartesian object position (a hard
+    // |z_ported| <= 1e-4 gate then |atan2(z,horiz)°| <= 0.02). For a unit-length
+    // source z = sin(el), so the Cartesian early-out is subsumed by the angle
+    // check — this single |el°| <= eps form is equivalent at the el≈0 boundary.
+    const float el_deg = el_rad * (180.f / 3.14159265358979323846f);
+    const bool object_flat = std::abs(el_deg) <= iae::kVbapObjectElevationDegEps;
+
+    std::array<bool, iae::kPrototypeChannels> participate{};
+    iae::fillVbapMaskForObject(spk_ported.data(), N, /*spatialGroupMask=*/nullptr,
+                               object_flat, src_ported, participate.data());
+    // Safety: the reference's final tier admits the whole spatial group, so a
+    // mask with <3 candidates only happens when the layout itself has <3
+    // eligible speakers (e.g. a flat object on a rig with only 2 horizontal
+    // speakers). In that case ignore the mask rather than under-select.
+    if (iae::countVbapMaskTrue(participate.data(), N) < 3)
+        for (int i = 0; i < N; ++i)
+            participate[static_cast<size_t>(i)] = true;
+
     // Search all triplets
     int best_i = -1, best_j = -1, best_k = -1;
     float best_g[3] = {0.f, 0.f, 0.f};
@@ -180,8 +216,11 @@ static void vbap_gain_3d_into(
     };
 
     for (int i = 0; i < N - 2; ++i) {
+        if (!participate[static_cast<size_t>(i)]) continue;
         for (int j = i + 1; j < N - 1; ++j) {
+            if (!participate[static_cast<size_t>(j)]) continue;
             for (int k = j + 1; k < N; ++k) {
+                if (!participate[static_cast<size_t>(k)]) continue;
                 // Build matrix L (columns = speaker unit vectors)
                 // L = [ ux[i] ux[j] ux[k];
                 //       uy[i] uy[j] uy[k];
@@ -258,13 +297,18 @@ static void vbap_gain_3d_into(
 
     // ---- Fallback: nearest-3 by angular distance ----
     // Pair (angle, channel-index, array-index) for tie-breaking.
+    // Only the participating (elevation-masked) speakers are candidates; the
+    // safety clamp above guarantees >=3 of them whenever N>=3.
     struct Cand { float a; int chan; int idx; };
     std::array<Cand, kMaxVbapSpeakers> cands{};
-    for (int i = 0; i < N; ++i)
-        cands[static_cast<size_t>(i)] =
+    int nc = 0;
+    for (int i = 0; i < N; ++i) {
+        if (!participate[static_cast<size_t>(i)]) continue;
+        cands[static_cast<size_t>(nc++)] =
             { ang[static_cast<size_t>(i)], layout.speakers[i].channel, i };
+    }
 
-    std::sort(cands.begin(), cands.begin() + N,
+    std::sort(cands.begin(), cands.begin() + nc,
               [](const Cand& A, const Cand& B) {
         if (std::abs(A.a - B.a) < 1e-6f) {
             return A.idx < B.idx;

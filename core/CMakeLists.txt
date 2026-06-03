@@ -113,6 +113,7 @@ set(SPE_CORE_SOURCES
     # Dreamscape convergence — ported panning kernels (namespace iae, juce-free)
     src/render/ported/Vbap.cpp
     src/render/ported/Vap.cpp
+    src/render/ported/VbapMask.cpp
     src/render/VAPRenderer.cpp
     # P4: IPC layer
     src/ipc/ProtocolVersion.cpp
