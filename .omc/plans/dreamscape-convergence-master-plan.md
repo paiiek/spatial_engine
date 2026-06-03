@@ -12,6 +12,21 @@
 
 ---
 
+## ⚙️ 증분 작업 프로토콜 (MANDATORY — 세션 끊겨도 유지)
+
+각 증분은 **반드시** 아래를 끝까지 밟은 뒤에만 다음으로 넘어간다. 구현하고 곧장 다음으로 넘어가지 말 것 (사용자 지침 2026-06-03).
+
+1. **구현** — 하나의 응집된 변경.
+2. **단위 테스트 + no-alloc 게이트** — ctest, RT 경로 무할당.
+3. **스모크 테스트** — 실제 헤드리스 바이너리 `spatial_engine_core`를 돌려 end-to-end 동작 확인: OSC로 알고리즘 선택+활성+위치 주입 → `--wav` 출력 → **비무음 + L/R 정합** 검사. 유닛 통과만으로 완료 처리 금지. 스모크 스크립트는 `scripts/smoke_*.py`(또는 tests/)에 재사용 가능하게 둔다.
+4. **독립 검증** — 전체 ctest 회귀 0, 필요 시 `code-reviewer` 패스(authoring과 분리).
+5. **"잘 구현됐고 실제로 돌아간다" 증거 확인 후** 커밋.
+6. **durable 상태 갱신**(§8 + 자동 메모리) → 다음 증분.
+
+빌드/스모크는 background 실행 → 완료 통지 후 결과 검증. 참고: [[convergence-increment-protocol]] (자동 메모리).
+
+---
+
 ## 0. 성공 기준 (Definition of Done)
 
 엔진이 다음을 **모두** 만족하면 수렴 완료:
@@ -171,5 +186,6 @@
 - 2026-06-03: **Phase 1a VAP 라이브 통합 완료 ✅** — `Algorithm::VAP=4`(Command.h/decoder), `VAPRenderer`(prepare 시 스피커 ported 프레임 사전계산, per-obj 좌표어댑터 변환, no-alloc), SpatialEngine 버킷/디스패치/scratch/sum 결선. `test_convergence_vap_renderer`(우 객체→우 스피커). **전체 ctest 122/122 green(WERROR off 빌드) — VAP 통합 기능 회귀 0**. 내 신규 코드는 WERROR=ON에서도 클린(spe_core WERROR 빌드 통과).
 - **알려진 baseline 이슈(convergence 범위 밖, 별도 위생작업)**: GCC 13.3 + `-Werror`에서 기존 테스트파일 6종 경고로 빌드 실패 — test_p_ambi(unused var), test_p_speaker_alignment/test_p_ambi_decoder_max_re(unused function), test_shm_telemetry_emitter/test_shared_ring_backend(memset(RingHeader) class-memaccess + unused test fns). CI는 더 관대한 툴체인이라 green. → executor로 `[[maybe_unused]]`/value-init 정리 위임 중.
 - 2026-06-03: **baseline 위생 완료 ✅** — GCC13+`-Werror` 테스트 경고 6파일 정리(executor + placement-new 수정 `new (h) RingHeader{}`). **전체 ctest 122/122 green under WERROR=ON** (`just build-test` 게이트 로컬 완전 통과). 커밋: c326f2d(VAP) / 161ca49(plan) / <test-fix> / <plan>.
-- **현재 안정 지점**: VAP 라이브 통합 + 전체 회귀 0 + WERROR=ON 122/122. 브랜치 `feat/dreamscape-convergence`.
+- 2026-06-03: **VAP 증분 프로토콜 전단계 검증 완료 ✅** — 스모크(`scripts/smoke_vap.py`, 실제 바이너리: az=+90°→ch3/4 우측링만, xruns=0, L/R end-to-end 확정) + code-reviewer 패스(COMMENT/shippable, CRITICAL/HIGH 0) + MEDIUM 2건 수정(LayoutCompatibilityChecker VAP 케이스, VAPRenderer >64 assert). 커밋 26e9515. **스모크 템플릿 확립** → 이후 증분 재사용.
+- **현재 안정 지점**: VAP 라이브 통합 + 스모크 검증 + 전체 회귀 0 + WERROR=ON 122/122. 브랜치 `feat/dreamscape-convergence`, 11 커밋.
 - **다음 증분(순서)**: ② VBAP 3D 5단 고도 레이어링(`fillVbapMaskForObject`: 52/62/74/86° + steep-source, 레퍼런스 AudioEngine.cpp 106-215 → mmhoa VBAP 마스크 경로) ③ MDAP 정식(ported `computeHorizontal/SpatialMdap`의 std::vector→고정버퍼 no-alloc 선행 → VBAPRenderer width 경로 교체) ④ WFS 전모드(평면파/곡률/obliquity/shaping/blend) ⑤ Phase 0.5 128 리프트 ⑥ 룸엔진(Shoebox/FDN N=8) ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 모니터 체인 ⑨ ADM 확장(부호/메시지/송신/행렬/50슬롯) ⑩ per-object EQ·딜레이.
