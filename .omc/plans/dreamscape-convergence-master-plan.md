@@ -166,4 +166,6 @@
 - 2026-06-03: 결정 D1–D4 확정(§7).
 - 2026-06-03: **Phase 0.2/0.3 완료 ✅** — 정준 좌표 어댑터(`coords/Coords.h`: `mmhoa_to_ported`/`ported_to_mmhoa`/`pipeline_dir_to_ported`, Y↔Z 스왑) + 골든 테스트(`test_convergence_coords.cpp`, CMake 등록). **ctest 100% green**(convergence_coords + p2_coords 회귀 없음). L/R 불변식 락인.
   - 부수: baseline 빌드 블로커 수정 — `ipc/EchoSubscriber.cpp:63` `memset`→값초기화(GCC 13 `-Werror=class-memaccess`). `just build-test`(WERROR=ON) 로컬 빌드 복구.
-- **다음**: Phase 0.6 이식 모듈 스캐폴딩 + Phase 0.5 128 리프트, 이후 Phase 1 PoC(VAP 단일 알고리즘 이식, T0 drop-in)로 이식 논리 end-to-end 검증.
+- 2026-06-03: **Phase 0.6 + Phase 1 PoC 완료 ✅** — `core/src/render/ported/`(SpatialMath.h/Vbap.{h,cpp}/Vap.{h,cpp}, 출처헤더, namespace iae, juce-free) spe_core 결선. `test_convergence_vap_port`: 좌표어댑터로 mmhoa→ported 변환한 옥타헤드론 리그에 VAP 구동 → 등음량·L/R 불변식·체적vs방향성 검증. **ctest green**. 커밋 fb061be. **D4 PoC 게이트 달성** — 이식 논리 end-to-end 증명(레퍼런스 DSP가 mmhoa 트리에서 컴파일·동작).
+- 커밋: 3d6e0ef fix / b4f2228 coords / 52fd85a plan / fb061be VAP-PoC.
+- **다음(D4 재평가 지점)**: ① Phase 1 정식 통합 — VAP를 `ipc/Command.h` Algorithm enum + AudioEngine 디스패치에 결선(라이브 선택 가능), MDAP/VBAP3D-5단레이어/WFS 전모드 이식, 2D-VBAP/MDAP `std::vector`→고정버퍼(no-alloc) ② Phase 0.5 128 리프트(`RenderingAlgorithm.h gains[64]`→128). PoC가 성공했으므로 통합 리스크 낮음.
