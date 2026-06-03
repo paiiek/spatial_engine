@@ -194,6 +194,14 @@
   - **단위**: `test_convergence_vbap_elevation` — 마스크 단독(flat→수평층만, elevated→인접/반대코너 제외, steep→천장참가) + vbap_gain 통합(flat→하부링 Σupper E≈0, elevated→상부링 Σupper E↑·반대코너=0, Σg²=1, L/R). **PASS**.
   - **스모크**: `scripts/smoke_vbap_elevation.py`(실제 바이너리, lab_8ch 3D 리그) — elevated(az+45,el+30)→ch7 상부우측 100%, flat(az+45,el0)→ch3 하부우측 100%, right>left, **xruns=0**. 고도 상승이 음상을 돔 상부로 라우팅함을 end-to-end 확정.
   - **검증**: 전체 ctest **123/123 green under WERROR=ON**(122 + 신규1), 회귀 0, no-alloc(p1_rt_no_alloc) pass. **code-reviewer APPROVE/shippable**(CRITICAL/HIGH 0; MEDIUM 1=기존 no-alloc 센티넬이 신규 3D 경로 미커버[증분이 도입한 결함 아님, 후속]; LOW 2=옵션). LOW#2(objectFlat 카르테시안 형태 주석) 적용.
-- **현재 안정 지점**: VAP + VBAP3D 고도 레이어링 라이브 + 스모크 2종 + 전체 회귀 0 + WERROR=ON 123/123. 브랜치 `feat/dreamscape-convergence`.
-- **다음 증분(순서)**: ③ MDAP 정식(ported `computeHorizontal/SpatialMdap`의 std::vector→고정버퍼 no-alloc 선행 → VBAPRenderer width 경로 교체) ④ WFS 전모드(평면파/곡률/obliquity/shaping/blend) ⑤ Phase 0.5 128 리프트 ⑥ 룸엔진(Shoebox/FDN N=8) ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 모니터 체인 ⑨ ADM 확장(부호/메시지/송신/행렬/50슬롯) ⑩ per-object EQ·딜레이.
-- **후속 메모(증분 중 발견)**: no-alloc 센티넬(`test_p1_rt_no_alloc`)에 비정상 고도 `/obj/move` 케이스 추가 → 신규 VBAP3D 마스크 빌드 경로를 `rt_alloc_violations` 센티넬로 직접 커버(현재는 스모크 xruns=0 + 정적분석으로만 보증).
+- 2026-06-03: **③ MDAP(소스 width/spread) 증분 — 프로토콜 전단계 검증 완료 ✅**
+  - **설계 결정(③-B, 기록)**: ported `computeSpatialMdap` 와이어링 대신 **mmhoa 네이티브 콘/아크 샘플링**으로 구현 — 증분 ②에서 고도 마스크+게인캐시가 네이티브 `vbap_gain_3d_into`에 들어갔으므로, MDAP를 그 위에 얹어 width=0↔width>0 일관성·캐시·마스크 재사용·2엔진 분기 회피. (ported 2D-VBAP/MDAP의 `std::vector` no-alloc 정리는 ported `computeHorizontalVbap` 자체가 alloc → 별도 증분 ③'로 분리; 라이브 경로 아님.)
+  - **구현**: `AlgorithmAnalyticReference::vbap_mdap_gain_into(layout, az, el, spread_deg, out, cap)` — K=8, spread [0,40°] 클램프(ref `kMdapSpreadMaxDegrees`), 2D(max|y|<1e-3)=방위각 아크 / 3D=접선기저 콘(반각 spread/2), 샘플마다 `vbap_gain_into`(고도 마스크+2D/3D 디스패치 상속) 합산→L2 정규화, 퇴화 시 점원 폴백. 스택 전용 no-alloc. VBAPRenderer width 경로(주 + 테이블-풀 폴백)의 구식 uniform-blend 제거 → width>0이면 MDAP, 아니면 점원. 캐시 키에 width 이미 포함.
+  - **단위** `test_convergence_mdap`: spread=0==점원, 분포 확장(2→4), Σg²=1, 40° 클램프, L/R, 2D 아크 strict 확장(dense 24링 2→4). **PASS**.
+  - **스모크** `scripts/smoke_mdap.py`: 실제 바이너리, 생성한 dense 24스피커 링(15° 간격<40°반각 → 이웃 모집), width=0 vs 40° → active 2→4, right>left, MDAP가 베이스라인 대비 xrun 추가 0(24ch null 백엔드 콜드스타트 1-block xrun은 point/spread 동일 → MDAP 무관). **PASS**.
+  - **검증**: 전체 ctest **124/124 green WERROR=ON**(123+신규1), 회귀 0, no-alloc green. **code-reviewer APPROVE/shippable**(CRITICAL/HIGH/MEDIUM 0; LOW 2=width-디스패치 중복/매직넘버, COMMENT 3). 리뷰가 내 스모크 주석의 "ObjMove가 width를 clobber" 설명 오류 지적 → 코드 재확인(ObjMove는 az/el/dist/active만 설정, width 미변경; ObjDsp-7·ObjWidth 직접 커밋) → 주석 수정.
+- **현재 안정 지점**: VAP + VBAP3D 고도 레이어링 + MDAP width 라이브 + 스모크 3종 + 전체 회귀 0 + WERROR=ON 124/124. 브랜치 `feat/dreamscape-convergence`.
+- **다음 증분(순서)**: ④ WFS 전모드(평면파/곡률/obliquity/shaping/blend) ⑤ Phase 0.5 128 리프트 ⑥ 룸엔진(Shoebox/FDN N=8) ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 모니터 체인 ⑨ ADM 확장(부호/메시지/송신/행렬/50슬롯) ⑩ per-object EQ·딜레이. **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
+- **후속 메모(증분 중 발견)**:
+  - no-alloc 센티넬(`test_p1_rt_no_alloc`)에 비정상 고도/width `/obj/move`+`/adm/obj/N/width` 케이스 추가 → 신규 VBAP3D 마스크·MDAP 빌드 경로를 `rt_alloc_violations` 센티넬로 직접 커버(현재는 스모크 xrun + 정적분석으로만 보증).
+  - (리뷰 LOW) VBAPRenderer width 디스패치 2블록(주/폴백) 중복·매직넘버(1e-4f, 180/π) → private 헬퍼+명명 상수로 정리 가능(비차단; 폴백은 구조상 도달 불가).
