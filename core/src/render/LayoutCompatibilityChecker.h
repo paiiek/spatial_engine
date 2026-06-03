@@ -15,6 +15,10 @@ enum class Algorithm : uint8_t {
     VBAP = 0,
     WFS  = 1,
     DBAP = 2,
+    // VAP shares VBAP's directional layout rule (see validate()'s fall-through).
+    // Mirrors ipc::Algorithm::VAP = 4 (Ambisonic = 3 has no distinct compat rule
+    // and is intentionally absent from this checker's enum).
+    VAP  = 4,
 };
 
 enum class CompatStatus : uint8_t {
