@@ -13,6 +13,7 @@
 // AC-4c (detached guard) · AC-5 (state no-peer latch) · AC-5b (warning no-peer
 // retry).
 
+#include <new>
 #include "audio_io/SharedRingBackend.h"
 #include "audio_io/shm/RingHeader.h"
 #include "audio_io/shm/SharedMemoryRegion.h"
@@ -72,7 +73,7 @@ struct RingFixture {
         RegionError err = region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes);
         assert(err == RegionError::Ok);
         RingHeader* h = region.header();
-        std::memset(h, 0, sizeof(RingHeader));
+        new (h) RingHeader{};  // in-place value-init (RingHeader has atomics: no memset/assign)
         h->magic           = kSpeRingMagic;
         h->version         = kRingHeaderVersion;
         h->header_size     = kRingHeaderSize;

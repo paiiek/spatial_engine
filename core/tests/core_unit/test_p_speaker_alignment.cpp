@@ -58,7 +58,7 @@ static SpeakerLayout make_layout(float ch0_delay_ms = 0.f, float ch0_gain_db = 0
 
 // Run engine with an impulse at sample 0 on obj0, collect all output into
 // per-channel vectors. Returns per-speaker collected samples.
-static std::vector<std::vector<float>> run_impulse(
+[[maybe_unused]] static std::vector<std::vector<float>> run_impulse(
     SpeakerLayout layout,
     int n_spk = 4)
 {

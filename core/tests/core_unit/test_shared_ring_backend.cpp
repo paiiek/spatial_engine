@@ -13,6 +13,7 @@
 // case-8 RT-sentinel portion (invariant i: rt_alloc_violations()==0). When not
 // defined, main() runs cases 1–7 + case 8 structural invariants (ii/iii/iv).
 
+#include <new>
 #include "audio_io/SharedRingBackend.h"
 #include "audio_io/shm/RingHeader.h"
 #include "audio_io/shm/SharedMemoryRegion.h"
@@ -124,7 +125,7 @@ struct RingFixture {
         RegionError err = region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes);
         assert(err == RegionError::Ok);
         RingHeader* h = region.header();
-        std::memset(h, 0, sizeof(RingHeader));
+        new (h) RingHeader{};  // in-place value-init (RingHeader has atomics: no memset/assign)
         h->magic           = magic;
         h->version         = version;
         h->header_size     = kRingHeaderSize;
@@ -188,7 +189,7 @@ static std::vector<std::vector<float>> ramp_blocks(std::uint32_t channels,
 
 // ── Case 1: header_magic_and_version_validated ───────────────────────────
 
-static int test_header_magic_and_version_validated() {
+[[maybe_unused]] static int test_header_magic_and_version_validated() {
     // Bad magic: attach succeeds (no validation), start() rejects.
     {
         RingFixture fx(48000, 64, 2, 8192, /*magic=*/0xDEADBEEFCAFEBABEULL);
@@ -234,7 +235,7 @@ static int test_header_magic_and_version_validated() {
 
 // ── Case 2: block_size_divisor_and_max_gates ─────────────────────────────
 
-static int test_block_size_divisor_and_max_gates() {
+[[maybe_unused]] static int test_block_size_divisor_and_max_gates() {
     constexpr int kEngineBlock = 256;  // <= MAX_BLOCK(512)
 
     // block_size = 100 does NOT divide 256 → BlockConfigMismatch.
@@ -288,7 +289,7 @@ static int test_block_size_divisor_and_max_gates() {
 
 // ── Case 7: ring_capacity_non_pow2_rejected_on_attach ─────────────────────
 
-static int test_ring_capacity_non_pow2_rejected() {
+[[maybe_unused]] static int test_ring_capacity_non_pow2_rejected() {
     constexpr int kEngineBlock = 256;
     // capacity_frames = 6000 (non-pow2) → DeviceOpenFailed at start().
     {
@@ -317,7 +318,7 @@ static int test_ring_capacity_non_pow2_rejected() {
 
 // ── Case 3: underrun_fills_silence_and_increments_xrun ────────────────────
 
-static int test_underrun_fills_silence_and_increments_xrun() {
+[[maybe_unused]] static int test_underrun_fills_silence_and_increments_xrun() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -405,7 +406,7 @@ static int test_underrun_fills_silence_and_increments_xrun() {
 
 // ── Case 4: producer_drain_state_plays_remaining_then_silence ─────────────
 
-static int test_producer_drain_state_plays_remaining_then_silence() {
+[[maybe_unused]] static int test_producer_drain_state_plays_remaining_then_silence() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -481,7 +482,7 @@ static int test_producer_drain_state_plays_remaining_then_silence() {
 // AC-5 test below needs a prefilled ring for the worker thread to pump.
 static void prefill_ring(RingFixture& fx);
 
-static int test_attach_to_pre_existing_ring_resyncs_read_idx() {
+[[maybe_unused]] static int test_attach_to_pre_existing_ring_resyncs_read_idx() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 256;
     constexpr std::uint32_t kCh = 2;
@@ -600,7 +601,7 @@ static int test_attach_to_pre_existing_ring_resyncs_read_idx() {
 // AC-4 stale-lock reclaim (own ring): a dead PID in the lock word → fresh
 //      start() reclaims (lock → getpid()), stop() releases (lock → 0).
 
-static int test_multi_attach_rejected() {
+[[maybe_unused]] static int test_multi_attach_rejected() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -640,7 +641,7 @@ static int test_multi_attach_rejected() {
     return 0;
 }
 
-static int test_stale_consumer_lock_reclaimed() {
+[[maybe_unused]] static int test_stale_consumer_lock_reclaimed() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -672,7 +673,7 @@ static int test_stale_consumer_lock_reclaimed() {
 // The ONLY case that drives the real worker thread (3-arg start). A non-atomic
 // running_ lost-store would hang the join → ctest timeout = FAIL.
 
-static int test_worker_thread_start_stop_join() {
+[[maybe_unused]] static int test_worker_thread_start_stop_join() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -710,7 +711,7 @@ static int test_worker_thread_start_stop_join() {
 // the no-realloc-on-the-fill-path guarantee is also covered by the RT-sentinel
 // lane's rt_alloc_violations()==0).
 
-static int test_output_staging_populated_rt_stable() {
+[[maybe_unused]] static int test_output_staging_populated_rt_stable() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -756,7 +757,7 @@ static int test_output_staging_populated_rt_stable() {
 
 // ── Case 5: producer_pid_dead_emits_stale_warning_once ────────────────────
 
-static int test_producer_pid_dead_emits_stale_warning_once() {
+[[maybe_unused]] static int test_producer_pid_dead_emits_stale_warning_once() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     RingFixture fx(48000, kBlock, 2, 8192);
@@ -809,7 +810,7 @@ static int test_producer_pid_dead_emits_stale_warning_once() {
 
 // ── Case 6: pacing_drift_emits_warning_rate_limited ───────────────────────
 
-static int test_pacing_drift_emits_warning_rate_limited() {
+[[maybe_unused]] static int test_pacing_drift_emits_warning_rate_limited() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kSr = 48000;
@@ -880,7 +881,7 @@ static int test_pacing_drift_emits_warning_rate_limited() {
 // region). Also verifies pump_block's signed-safe clamping: if write_idx
 // regresses mid-run, pump yields silence+xrun with no OOB copy.
 
-static int test_stale_read_idx_ahead_of_write_rejected() {
+[[maybe_unused]] static int test_stale_read_idx_ahead_of_write_rejected() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCap = 8192;
@@ -948,7 +949,7 @@ static int test_stale_read_idx_ahead_of_write_rejected() {
 // FIX-2: channels==0, channels>64, capacity>kMaxCapacityFrames must all be
 // rejected before any allocation, whether caught in attach() or start().
 
-static int test_oversized_geometry_rejected() {
+[[maybe_unused]] static int test_oversized_geometry_rejected() {
     constexpr int kEngineBlock = 256;
 
     // channels = 65 (> kMaxChannels=64): attach() returns nullptr.
@@ -963,7 +964,7 @@ static int test_oversized_geometry_rejected() {
         const std::size_t bytes = total_region_bytes(1, 1024);
         assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
         RingHeader* h = region.header();
-        std::memset(h, 0, sizeof(RingHeader));
+        new (h) RingHeader{};  // in-place value-init (RingHeader has atomics: no memset/assign)
         h->magic           = kSpeRingMagic;
         h->version         = kRingHeaderVersion;
         h->header_size     = kRingHeaderSize;
@@ -989,7 +990,7 @@ static int test_oversized_geometry_rejected() {
         const std::size_t bytes = total_region_bytes(1, 1024);
         assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
         RingHeader* h = region.header();
-        std::memset(h, 0, sizeof(RingHeader));
+        new (h) RingHeader{};  // in-place value-init (RingHeader has atomics: no memset/assign)
         h->magic           = kSpeRingMagic;
         h->version         = kRingHeaderVersion;
         h->header_size     = kRingHeaderSize;
@@ -1015,7 +1016,7 @@ static int test_oversized_geometry_rejected() {
         const std::size_t bytes = total_region_bytes(0, 1024);
         assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
         RingHeader* h = region.header();
-        std::memset(h, 0, sizeof(RingHeader));
+        new (h) RingHeader{};  // in-place value-init (RingHeader has atomics: no memset/assign)
         h->magic           = kSpeRingMagic;
         h->version         = kRingHeaderVersion;
         h->header_size     = kRingHeaderSize;
@@ -1054,7 +1055,7 @@ static int test_oversized_geometry_rejected() {
 // header overwritten to claim capacity=16384 must be rejected by attach() so
 // the audio thread never addresses beyond the backing store (SIGBUS).
 
-static int test_region_smaller_than_header_claims_rejected() {
+[[maybe_unused]] static int test_region_smaller_than_header_claims_rejected() {
     // Create a region sized for (2 channels, 8192 frames).
     const std::string name = unique_shm_name();
     {
@@ -1062,7 +1063,7 @@ static int test_region_smaller_than_header_claims_rejected() {
         const std::size_t bytes = total_region_bytes(2, 8192);
         assert(region.attach(name.c_str(), AttachMode::CreateOrOpen, bytes) == RegionError::Ok);
         RingHeader* h = region.header();
-        std::memset(h, 0, sizeof(RingHeader));
+        new (h) RingHeader{};  // in-place value-init (RingHeader has atomics: no memset/assign)
         h->magic           = kSpeRingMagic;
         h->version         = kRingHeaderVersion;
         h->header_size     = kRingHeaderSize;
@@ -1091,7 +1092,7 @@ static int test_region_smaller_than_header_claims_rejected() {
 // FIX-5: sample_rate==0 in the header causes div-by-zero in poll_diagnostics.
 // start() must return SampleRateUnsupported.
 
-static int test_zero_sample_rate_rejected() {
+[[maybe_unused]] static int test_zero_sample_rate_rejected() {
     constexpr int kEngineBlock = 256;
 
     // sample_rate = 0 → SampleRateUnsupported.
@@ -1156,7 +1157,7 @@ static void prefill_ring(RingFixture& fx) {
 
 #if !defined(SRB_RT_SENTINEL)
 
-static int test_audio_thread_structural_invariants() {
+[[maybe_unused]] static int test_audio_thread_structural_invariants() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;
@@ -1199,7 +1200,7 @@ static int test_audio_thread_structural_invariants() {
 
 #else  // SRB_RT_SENTINEL
 
-static int test_audio_thread_rt_sentinel() {
+[[maybe_unused]] static int test_audio_thread_rt_sentinel() {
     constexpr int kEngineBlock = 256;
     constexpr std::uint32_t kBlock = 64;
     constexpr std::uint32_t kCh = 2;

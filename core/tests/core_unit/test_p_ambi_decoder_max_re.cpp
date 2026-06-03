@@ -31,7 +31,7 @@ static spe::geometry::SpeakerLayout make_circular_8ch() {
     return layout;
 }
 
-static spe::geometry::SpeakerLayout make_3d_16ch() {
+[[maybe_unused]] static spe::geometry::SpeakerLayout make_3d_16ch() {
     spe::geometry::SpeakerLayout layout;
     int ch = 0;
     for (int i = 0; i < 8; ++i) {

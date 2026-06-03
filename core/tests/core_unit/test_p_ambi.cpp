@@ -218,8 +218,8 @@ int main() {
         const float az = kPi / 4.0f;
         const float el = 0.0f;
         constexpr float kSqrt3_2 = 0.8660254037844387f;  // √3/2
-        constexpr float kSqrt3   = 1.7320508075688772f;  // √3
-        constexpr float kSqrt2_2 = 0.7071067811865476f;  // √2/2
+        [[maybe_unused]] constexpr float kSqrt3   = 1.7320508075688772f;  // √3
+        [[maybe_unused]] constexpr float kSqrt2_2 = 0.7071067811865476f;  // √2/2
 
         auto c2 = AmbisonicEncoder::encode_2nd_order(az, el);
         // ACN 4 (Y_2^-2): (√3/2)·sin(π/2)·1 = √3/2
