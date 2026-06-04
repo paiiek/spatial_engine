@@ -496,6 +496,15 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         er_eq_hp_[static_cast<size_t>(i)].setHighPass(sample_rate, iae::kRoomEarlyClusterHpfHz);
         er_eq_lp_[static_cast<size_t>(i)].setLowPass(sample_rate, iae::kRoomEarlyClusterLpfHz);
     }
+    // ⑥e-2 cluster diffusion — shared mono bus + delay line + bus absorption EQ
+    // (HP120→LP10000, the reference cEcHp/cEcLp = earlyCluster corners). Defaults
+    // diffusion=0.48 / virtual-volume=630 m³ (RoomEngine.cpp:204-206/610-611).
+    room_cluster_.prepare(sample_rate);
+    room_cluster_.setParams(iae::RoomClusterParams{});  // reference defaults
+    cluster_bus_.assign(static_cast<size_t>(max_block_size), 0.f);
+    cluster_out_.assign(static_cast<size_t>(max_block_size), 0.f);
+    cluster_eq_hp_.setHighPass(sample_rate, iae::kRoomEarlyClusterHpfHz);
+    cluster_eq_lp_.setLowPass(sample_rate, iae::kRoomEarlyClusterLpfHz);
 
     // Per-object DSP chain (EQ → user delay → distance gain → HF rolloff → propagation delay → reverb send)
     // Heap-allocated to avoid stack overflow (each chain owns ~384 KB of delay buffers).
@@ -559,6 +568,13 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
     static constexpr float kErTri3Inv    = 1.f / 4.f;
     static constexpr float kEarlyWidthDeg = 45.f;   // reference default; OSC plumbing in ⑥e
 
+    // ⑥e-2 — the cluster bus accumulates every object's xdel this block; clear it
+    // before the per-object loop. cSend = jlimit(0,1,roomClusterSend01)*0.48
+    // (RoomEngine.cpp:415); fixed default until ⑥e-4 OSC.
+    std::fill(cluster_bus_.begin(), cluster_bus_.begin() + num_frames, 0.f);
+    const float cSend =
+        std::clamp(room_cluster_send01_.load(std::memory_order_relaxed), 0.f, 1.f) * 0.48f;
+
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         const auto& c = obj_cache_[static_cast<size_t>(i)];
         if (!c.active || c.reverb_send <= 1.0e-6f) continue;
@@ -602,6 +618,11 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
                 xdel[n] = lp.processSample(y);
             }
         }
+
+        // ⑥e-2 — feed this object's predelayed+EQ'd mono into the shared cluster
+        // bus (RoomEngine.cpp:414-419). Same xdel the 6 image rings read below.
+        for (int n = 0; n < num_frames; ++n)
+            cluster_bus_[static_cast<size_t>(n)] += xdel[static_cast<size_t>(n)] * cSend;
 
         for (int t = 0; t < iae::kNumFirstOrderImages; ++t) {
             if (!refl[t].valid) continue;
@@ -783,6 +804,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                         er_eq_hp_[static_cast<size_t>(i)].reset();
                         er_eq_lp_[static_cast<size_t>(i)].reset();
                     }
+                    // ⑥e-2 — clear the cluster delay line + bus EQ state.
+                    room_cluster_.reset();
+                    cluster_eq_hp_.reset();
+                    cluster_eq_lp_.reset();
                 }
                 break;
             }
@@ -1083,8 +1108,39 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                         mix_buf_[static_cast<size_t>(n * n_spk + s)] += t * g[s];
                 }
             }
-            // ⑥d — per-object Shoebox early reflections onto the same bus.
+            // ⑥d — per-object Shoebox early reflections onto the same bus. This
+            // also fills cluster_bus_ with each object's xdel*cSend (⑥e-2).
             renderRoomEarly(n_spk, block.num_frames);
+
+            // ⑥e-2 cluster — run the shared cluster bus through its absorption EQ
+            // (HP120→LP10000) and the 6-tap feedforward diffusion line, then fan
+            // the mono cluster output across the array via the opp-biased clusterU
+            // gains (slight +up component). Byte-faithful to RoomEngine.cpp:
+            // 553-565 (clusterU + diffuseGains) and :594-647 (bus EQ, process,
+            // per-speaker distribution). RT-safe: cluster line + buffers are
+            // prepare-allocated; EQ/VBAP/blend use stack scratch.
+            for (int n = 0; n < block.num_frames; ++n) {
+                const float xc = cluster_eq_hp_.processSample(
+                    cluster_bus_[static_cast<size_t>(n)]);
+                cluster_bus_[static_cast<size_t>(n)] = cluster_eq_lp_.processSample(xc);
+            }
+            room_cluster_.process(cluster_bus_.data(), block.num_frames,
+                                  cluster_out_.data());
+            const iae::Vec3 clusterU = iae::normalized(iae::Vec3{
+                opp.x * 0.93f, opp.y * 0.93f + 0.35f * 0.07f, opp.z * 0.93f });
+            const float caz = std::atan2(clusterU.x, clusterU.z);
+            const float cel = std::asin(std::clamp(clusterU.y, -1.f, 1.f));
+            cluster_gains_.fill(0.f);
+            render::AlgorithmAnalyticReference::vbap_gain_into(
+                layout_, caz, cel, cluster_gains_.data(), spe::MAX_SPEAKERS);
+            iae::blendVbapWithUniformDiffuse(cluster_gains_.data(), n_spk, lateDiffuse);
+            for (int n = 0; n < block.num_frames; ++n) {
+                const float outC = cluster_out_[static_cast<size_t>(n)];
+                if (std::abs(outC) < 1.0e-9f) continue;
+                for (int s = 0; s < n_spk; ++s)
+                    mix_buf_[static_cast<size_t>(n * n_spk + s)] +=
+                        outC * cluster_gains_[static_cast<size_t>(s)];
+            }
         } else {
             // Distribute reverb wet uniformly across all speakers (energy-preserving)
             const float reverb_per_spk = 1.0f / std::sqrt(static_cast<float>(n_spk));

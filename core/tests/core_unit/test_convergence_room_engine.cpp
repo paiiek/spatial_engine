@@ -47,10 +47,12 @@ static spe::geometry::SpeakerLayout make_dome() {
 // Run a fresh engine with room reverb selected and the given per-object reverb
 // send; drive `blocks` blocks and return per-speaker accumulated energy. The
 // object sits below the horizon (el=-20°) at azimuth `az_rad`.
-static std::vector<double> run(float reverb_send, int n_spk, float az_rad = 0.f) {
+static std::vector<double> run(float reverb_send, int n_spk, float az_rad = 0.f,
+                               float cluster_send = 0.4f) {
     spe::core::SpatialEngine engine(0);
     engine.setLayout(make_dome());
     engine.prepareToPlay(48000.0, 256);
+    engine.setRoomClusterSend01(cluster_send);
 
     auto dsp = [&](spe::ipc::CommandTag tag, auto payload) {
         spe::ipc::Command c; c.tag = tag; c.payload = payload; engine.dispatchCommand(c);
@@ -144,6 +146,34 @@ int main() {
         CHECK(allLeft,  "opp-bias: opp=-x steers every late line to the -x hemisphere");
         CHECK(steered,  "opp-bias: +x opp lands every line right of -x opp (signed steer)");
     }
+
+    // ⑥e-2 cluster wiring: the cluster bus (every object's xdel*cSend, EQ'd and
+    // run through the 6-tap feedforward diffusion line, fanned via the opp-biased
+    // clusterU which carries a +up component) adds a mid-field diffuse component.
+    // We isolate it on the upper ring (the dry sits below the horizon) and assert
+    // turning the cluster send off vs on changes the rendered upper-ring field.
+    // Direction-agnostic (summed energy is phase-sensitive); a non-trivial change
+    // proves the bus is fed, EQ'd, diffused and distributed. The cluster core math
+    // is unit-tested separately in test_convergence_room_cluster.
+    auto upperEnergy = [&](const std::vector<double>& e) {
+        double t = 0.0; for (int s = half; s < N; ++s) t += e[(size_t) s]; return t;
+    };
+    // Only cluster_send differs between the two runs (identical FDN + early
+    // paths), so any change is unambiguously the cluster. Use sum of per-speaker
+    // ABSOLUTE deltas (does not cancel under phase redistribution, unlike the
+    // delta of summed energy) and the max cluster send for a robust margin.
+    const auto eClusterOff = run(0.8f, N, 0.f, /*cluster_send=*/0.0f);
+    const auto eClusterOn  = run(0.8f, N, 0.f, /*cluster_send=*/1.0f);
+    const double upOffCl = upperEnergy(eClusterOff);
+    double absDelta = 0.0;
+    for (int s = half; s < N; ++s)
+        absDelta += std::fabs(eClusterOn[(size_t) s] - eClusterOff[(size_t) s]);
+    const double relAbsChange = absDelta / (upOffCl + 1e-30);
+    std::printf("[room-engine] cluster wiring: upper off=%.6g  Σ|Δspk|=%.6g (%.3g%% of off)\n",
+                upOffCl, absDelta, 100.0 * relAbsChange);
+    CHECK(upOffCl > 1.0e-9, "⑥e-2 baseline upper-ring reverb present with cluster off");
+    CHECK(relAbsChange > 0.05,
+          "⑥e-2 cluster send measurably changes the upper-ring room field (bus wired)");
 
     if (failures == 0) { std::printf("test_convergence_room_engine: ALL PASS\n"); return 0; }
     return 1;

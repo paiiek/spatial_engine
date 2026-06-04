@@ -23,6 +23,7 @@
 #include "render/ported/RoomFdn.h"
 #include "render/ported/RoomEarly.h"
 #include "render/ported/RoomBiquad.h"
+#include "render/ported/RoomCluster.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/CpuMeter.h"
@@ -31,6 +32,7 @@
 #include "util/XrunCounter.h"
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <vector>
@@ -212,6 +214,13 @@ public:
     // RoomEngine.cpp:567-572. Pure math (no engine state) — exposed for unit
     // tests; computeLateFdnGains() applies the VBAP/diffuse on top of this.
     static iae::Vec3 lateFdnLineDirection(int k, const iae::Vec3& opp) noexcept;
+
+    // ⑥e-2 — per-object cluster send amount [0,1] (scaled by 0.48 internally,
+    // RoomEngine.cpp:415). RT-safe to call from the control thread; the audio
+    // thread reads it once per block. ⑥e-4 OSC will route an address here.
+    void setRoomClusterSend01(float v) noexcept {
+        room_cluster_send01_.store(std::clamp(v, 0.f, 1.f), std::memory_order_relaxed);
+    }
 
     // v0.9 Lane A (A-M1) — engine-internal overrun count (audioBlock saw a
     // block with num_frames > MAX_BLOCK and refused it). Distinct from the
@@ -436,6 +445,23 @@ private:
     std::array<iae::RoomBiquad, spe::MAX_OBJECTS>           er_eq_lp_{};
     // Render the early reflections for all active objects into mix_buf_.
     void renderRoomEarly(int n_spk, int num_frames) noexcept;
+
+    // ⑥e-2 Cluster (mid-field) diffusion — a shared mono bus fed by every active
+    // object's predelayed+EQ'd send (xdel*cSend), run through an absorption EQ
+    // (HP120→LP10000, the same earlyCluster corners) and the 6-tap feedforward
+    // diffusion line, then fanned across the array via the opp-biased clusterU
+    // gains. Byte-faithful to RoomEngine.cpp:414-419 / :553-565 / :594-647.
+    // roomClusterSend01 / diffusion / virtual-volume are fixed at the reference
+    // defaults until ⑥e-4 OSC tuning.
+    iae::RoomCluster                                       room_cluster_;
+    std::vector<float>                                     cluster_bus_;    // [maxBlock] mono send bus
+    std::vector<float>                                     cluster_out_;    // [maxBlock] diffused mono
+    iae::RoomBiquad                                        cluster_eq_hp_{};
+    iae::RoomBiquad                                        cluster_eq_lp_{};
+    std::array<float, spe::MAX_SPEAKERS>                   cluster_gains_{}; // per-block diffuse VBAP
+    // Read once per block on the audio thread; atomic so the ⑥e-4 OSC handler (or
+    // a test) can set it from the control thread without a data race.
+    std::atomic<float>                                    room_cluster_send01_{0.4f};
     output::BinauralMonitor       binaural_;
     bool                          binaural_ok_ = false;
 
