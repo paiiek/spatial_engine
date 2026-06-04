@@ -1,6 +1,8 @@
 // core/src/render/DBAPRenderer.cpp
 
 #include "render/DBAPRenderer.h"
+#include "core/Constants.h"
+#include <cassert>
 #include <cstring>
 #include <cmath>
 
@@ -12,6 +14,14 @@ void DBAPRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
     layout_       = layout;
     sr_           = sample_rate;
     num_speakers_ = static_cast<int>(layout.speakers.size());
+    // Match VBAP/VAP: fail loudly on the control thread if a layout exceeds the
+    // fixed MAX_SPEAKERS scratch (ramps_ / final_gains/gain_acc/g_v[MAX_SPEAKERS]).
+    // The clamp is defense-in-depth under NDEBUG. (LayoutLoader already bounds
+    // YAML layouts to kMaxYamlChannel==MAX_SPEAKERS; this guards programmatic
+    // callers too.) Phase 0.5 (128 lift): cap is the compile-time MAX_SPEAKERS.
+    assert(num_speakers_ <= spe::MAX_SPEAKERS
+           && "DBAPRenderer: layout exceeds MAX_SPEAKERS cap (scratch fixed)");
+    if (num_speakers_ > spe::MAX_SPEAKERS) num_speakers_ = spe::MAX_SPEAKERS;
     for (auto& obj_ramps : ramps_)
         for (int s = 0; s < num_speakers_; ++s)
             obj_ramps[s].reset(0.f);
@@ -33,7 +43,7 @@ void DBAPRenderer::processBlock(
         const float* src = dry_mono[obj];
         if (!src) continue;
 
-        float final_gains[64] = {};
+        float final_gains[spe::MAX_SPEAKERS] = {};
 
         if (objects[obj].width_rad > 1e-3f) {
             // Multi-virtual-source model (N=3): az offsets -half_w, 0, +half_w
@@ -41,8 +51,8 @@ void DBAPRenderer::processBlock(
             const float half_w = objects[obj].width_rad * 0.5f;
             const float az_offsets[VSRC] = { -half_w, 0.f, +half_w };
 
-            float gain_acc[64] = {};  // accumulated power (gain^2)
-            float g_v[64]      = {};
+            float gain_acc[spe::MAX_SPEAKERS] = {};  // accumulated power (gain^2)
+            float g_v[spe::MAX_SPEAKERS]      = {};
 
             for (int v = 0; v < VSRC; ++v) {
                 const float az_v = objects[obj].az_rad + az_offsets[v];

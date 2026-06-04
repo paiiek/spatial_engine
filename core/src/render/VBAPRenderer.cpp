@@ -16,12 +16,12 @@ void VBAPRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
     num_speakers_ = static_cast<int>(layout.speakers.size());
 
     // v0.8 P1.3 (DSP-3) — bound the audio-thread scratch + ramp cap. ramps_
-    // is std::array<…, 64> already; before P1.3 there was no >64 guard, so
-    // a layout with 65+ speakers would have written OOB into ramps_. The
-    // assert fires at prepareToPlay (control thread) so the audio thread
-    // never sees an oversized N.
-    assert(num_speakers_ <= 64
-           && "VBAPRenderer: layout exceeds 64-speaker cap "
+    // is std::array<…, spe::MAX_SPEAKERS>; without the guard a layout with more
+    // speakers than the cap would have written OOB into ramps_. The assert fires
+    // at prepareToPlay (control thread) so the audio thread never sees an
+    // oversized N. Phase 0.5 (128 lift): cap is the compile-time MAX_SPEAKERS.
+    assert(num_speakers_ <= spe::MAX_SPEAKERS
+           && "VBAPRenderer: layout exceeds MAX_SPEAKERS cap "
               "(ramps_/scratch fixed)");
     gain_scratch_.assign(static_cast<size_t>(num_speakers_), 0.f);
 

@@ -30,7 +30,7 @@ private:
     float rolloff_a_ = 2.0f;
     geometry::SpeakerLayout layout_;
     double sr_ = 48000.0;
-    std::array<std::array<spe::dsp::GainRamp, 64>, spe::MAX_OBJECTS> ramps_;
+    std::array<std::array<spe::dsp::GainRamp, spe::MAX_SPEAKERS>, spe::MAX_OBJECTS> ramps_;
 
     // Compute single-position DBAP gains into out_gains[0..num_speakers_-1].
     // RT-safe: no allocation.

@@ -16,11 +16,12 @@ void VAPRenderer::prepareToPlay(const geometry::SpeakerLayout& layout,
     sr_           = sample_rate;
     num_speakers_ = static_cast<int>(layout.speakers.size());
     // Match VBAPRenderer's contract: fail loudly on the control thread if a
-    // layout exceeds the fixed 64-speaker scratch (gains[64], spk_*_ported_[64]).
-    // The clamp is defense-in-depth under NDEBUG. Lifted with Phase 0.5 (128).
-    assert(num_speakers_ <= 64
-           && "VAPRenderer: layout exceeds 64-speaker cap (scratch fixed)");
-    if (num_speakers_ > 64) num_speakers_ = 64;
+    // layout exceeds the fixed MAX_SPEAKERS scratch (gains[MAX_SPEAKERS],
+    // spk_*_ported_[MAX_SPEAKERS]). The clamp is defense-in-depth under NDEBUG.
+    // Phase 0.5 (128 lift): cap is the compile-time spe::MAX_SPEAKERS.
+    assert(num_speakers_ <= spe::MAX_SPEAKERS
+           && "VAPRenderer: layout exceeds MAX_SPEAKERS cap (scratch fixed)");
+    if (num_speakers_ > spe::MAX_SPEAKERS) num_speakers_ = spe::MAX_SPEAKERS;
 
     // Pre-convert speaker positions (mmhoa frame: x=right,y=up,z=front) to the
     // ported frame (x=right,y=front,z=up) via the Y<->Z swap adapter. Unit
@@ -64,7 +65,7 @@ void VAPRenderer::processBlock(
                                                             objects[obj].el_rad);
         const iae::Vec3 obj_pos{u[0] * d, u[1] * d, u[2] * d};
 
-        float gains[64] = {};
+        float gains[spe::MAX_SPEAKERS] = {};
         iae::computeVolumetricAmplitudePanning(
             spk_pos_ported_.data(), spk_dir_ported_.data(),
             /*participateInVbap=*/nullptr, static_cast<size_t>(S),

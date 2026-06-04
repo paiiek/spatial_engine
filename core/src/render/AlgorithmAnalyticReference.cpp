@@ -4,6 +4,7 @@
 #include "render/ported/SpatialMath.h"
 #include "render/ported/VbapMask.h"
 #include "coords/Coords.h"
+#include "core/Constants.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,11 +14,12 @@ namespace spe::render {
 
 // v0.8 P1.3 (DSP-3) — RT-no-alloc bound for VBAP audio-thread scratch.
 // All per-call temporaries (azs, idx, ux/uy/uz, ang, cands) are sized at
-// most this many entries. Mirrors VBAPRenderer::ramps_'s fixed [64] cap and
-// the new VBAPRenderer::prepareToPlay assert. If a layout ever asks for
-// >64 speakers the assert fires loudly and the renderer refuses the layout
-// at prepare time — the audio thread never sees an oversized N.
-static constexpr int kMaxVbapSpeakers = 64;
+// most this many entries. Mirrors VBAPRenderer::ramps_'s fixed cap and the
+// VBAPRenderer::prepareToPlay assert. If a layout ever asks for more than
+// this many speakers the assert fires loudly and the renderer refuses the
+// layout at prepare time — the audio thread never sees an oversized N.
+// Phase 0.5 (128 lift): derives from the single source of truth.
+static constexpr int kMaxVbapSpeakers = spe::MAX_SPEAKERS;
 
 // ---------------------------------------------------------------------------
 // VBAP 2D (Pulkki 1997) — pair-based amplitude panning (used for horizontal layouts).

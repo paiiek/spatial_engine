@@ -35,7 +35,8 @@ class WFSRenderer : public RenderingAlgorithm {
 public:
     static constexpr float F_MAX = 8000.f;
     // Speaker fan-out ceiling (matches the engine layout cap / other renderers).
-    static constexpr int   MAX_SPEAKERS = 64;
+    // Phase 0.5 (128 lift): derives from the single source of truth.
+    static constexpr int   MAX_SPEAKERS = spe::MAX_SPEAKERS;
 
     void prepareToPlay(const geometry::SpeakerLayout& layout,
                        double sample_rate) override;

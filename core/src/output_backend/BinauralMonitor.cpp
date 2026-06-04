@@ -299,7 +299,7 @@ void BinauralMonitor::initializeB2()
 
     // 1. Build vs_layout_ from kTDesign24. Each t-design Cartesian point
     //    (x, y, z) maps to a synthetic speaker with channel = i+1 ∈ [1..24].
-    //    SpeakerLayout::kMaxYamlChannel = 64 ≥ 24, so channel_to_idx_ fits.
+    //    SpeakerLayout::kMaxYamlChannel (≥ 64) ≥ 24, so channel_to_idx_ fits.
     vs_layout_.name       = "binaural_b2_tdesign24";
     vs_layout_.version    = "v0.5";
     vs_layout_.regularity = spe::geometry::Regularity::IRREGULAR;

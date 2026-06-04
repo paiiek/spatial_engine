@@ -22,7 +22,7 @@ struct ObjectState {
 // Pre-allocated at prepareToPlay.
 struct AlgoScratch {
     // gains[speaker_idx] for MAX_OBJECTS objects.
-    std::array<std::array<float, spe::MAX_OBJECTS>, 64> gains{};
+    std::array<std::array<float, spe::MAX_OBJECTS>, spe::MAX_SPEAKERS> gains{};
     int num_speakers = 0;
 };
 

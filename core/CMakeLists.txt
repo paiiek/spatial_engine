@@ -80,6 +80,15 @@ if(NOT SPATIAL_ENGINE_MAX_OBJECTS STREQUAL "64" AND NOT SPATIAL_ENGINE_MAX_OBJEC
 endif()
 target_compile_definitions(spe_util PUBLIC SPE_MAX_OBJECTS=${SPATIAL_ENGINE_MAX_OBJECTS})
 
+# Phase 0.5 (128 lift) — speaker (output-channel) cap, same plumbing/contract.
+if(NOT DEFINED SPATIAL_ENGINE_MAX_SPEAKERS)
+    set(SPATIAL_ENGINE_MAX_SPEAKERS 64)
+endif()
+if(NOT SPATIAL_ENGINE_MAX_SPEAKERS STREQUAL "64" AND NOT SPATIAL_ENGINE_MAX_SPEAKERS STREQUAL "128")
+    message(FATAL_ERROR "SPATIAL_ENGINE_MAX_SPEAKERS must be 64 or 128 (got '${SPATIAL_ENGINE_MAX_SPEAKERS}')")
+endif()
+target_compile_definitions(spe_util PUBLIC SPE_MAX_SPEAKERS=${SPATIAL_ENGINE_MAX_SPEAKERS})
+
 # --- yaml-cpp via FetchContent (used only by spe_core / LayoutLoader) ----
 include(FetchContent)
 FetchContent_Declare(

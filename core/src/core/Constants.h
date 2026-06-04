@@ -20,6 +20,20 @@ namespace spe {
 #endif
 inline constexpr int MAX_OBJECTS = SPE_MAX_OBJECTS;
 
+// Speaker (output-channel) slot count. Phase 0.5 (128 lift): mirrors the
+// MAX_OBJECTS option exactly — a compile-time cap driven by the cmake cache var
+// SPATIAL_ENGINE_MAX_SPEAKERS ∈ {64,128}, which defines the SPE_MAX_SPEAKERS
+// macro. Default stays 64 so a bare build is byte-identical. Every
+// speaker-dimension scratch (AlgoScratch.gains, the renderers' ramps_/position
+// buffers, AlgorithmAnalyticReference::kMaxVbapSpeakers, WFSRenderer::
+// MAX_SPEAKERS, SpeakerLayout::kMaxYamlChannel) derives from this single source
+// of truth. The ported reference buffers are already sized 128
+// (ported/SpatialMath.h kPrototypeChannels), so the 128 ceiling is safe.
+#ifndef SPE_MAX_SPEAKERS
+#define SPE_MAX_SPEAKERS 64
+#endif
+inline constexpr int MAX_SPEAKERS = SPE_MAX_SPEAKERS;
+
 // Hard upper bound on per-callback block size. JUCE host refuses to start
 // if the device reports a larger buffer (P1 startup gate).
 inline constexpr int MAX_BLOCK = 512;

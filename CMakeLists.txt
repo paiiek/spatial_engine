@@ -51,6 +51,14 @@ if(NOT SPATIAL_ENGINE_MAX_OBJECTS STREQUAL "64" AND NOT SPATIAL_ENGINE_MAX_OBJEC
     message(FATAL_ERROR "SPATIAL_ENGINE_MAX_OBJECTS must be 64 or 128 (got '${SPATIAL_ENGINE_MAX_OBJECTS}')")
 endif()
 
+# Phase 0.5 (128 lift) — compile-time max speaker/output channels (64 or 128).
+# Same Option-A contract as MAX_OBJECTS: default STAYS 64 so a bare build is
+# byte-identical. Propagated to spe_util (PUBLIC) as SPE_MAX_SPEAKERS.
+set(SPATIAL_ENGINE_MAX_SPEAKERS 64 CACHE STRING "Max speaker output channels (64 or 128)")
+if(NOT SPATIAL_ENGINE_MAX_SPEAKERS STREQUAL "64" AND NOT SPATIAL_ENGINE_MAX_SPEAKERS STREQUAL "128")
+    message(FATAL_ERROR "SPATIAL_ENGINE_MAX_SPEAKERS must be 64 or 128 (got '${SPATIAL_ENGINE_MAX_SPEAKERS}')")
+endif()
+
 # VST3 plugin (Option B — direct hand-roll, no juce_add_plugin).
 # OFF by default to preserve byte-identical core artifacts (Principle 5).
 option(SPATIAL_ENGINE_VST3 "Build VST3 plugin (Option B hand-roll)" OFF)

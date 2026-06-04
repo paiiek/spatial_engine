@@ -30,9 +30,9 @@ public:
     void resetCacheStats() noexcept { cache_hits_ = cache_misses_ = 0; }
 
 private:
-    // Per-object, per-speaker GainRamp (SoA scratch, MAX_OBJECTS * 64 speakers).
+    // Per-object, per-speaker GainRamp (SoA scratch, MAX_OBJECTS * MAX_SPEAKERS).
     // Pre-allocated — no runtime allocation.
-    std::array<std::array<spe::dsp::GainRamp, 64>, spe::MAX_OBJECTS> ramps_;
+    std::array<std::array<spe::dsp::GainRamp, spe::MAX_SPEAKERS>, spe::MAX_OBJECTS> ramps_;
     geometry::SpeakerLayout layout_;
     double sr_ = 48000.0;
 
@@ -60,8 +60,9 @@ private:
     // compute. Sized at prepareToPlay() to num_speakers_; never reallocated
     // afterwards. Replaces the pre-P1.3 std::vector temporaries inside
     // AlgorithmAnalyticReference::vbap_gain() that allocated on the audio
-    // thread inside SPE_RT_NO_ALLOC_SCOPE(). Capacity is bounded by the
-    // fixed ramps_[64] cap above; prepareToPlay() asserts num_speakers ≤ 64.
+    // thread inside SPE_RT_NO_ALLOC_SCOPE(). Capacity is bounded by the fixed
+    // ramps_[MAX_SPEAKERS] cap above; prepareToPlay() asserts num_speakers ≤
+    // spe::MAX_SPEAKERS.
     std::vector<float> gain_scratch_;
 };
 

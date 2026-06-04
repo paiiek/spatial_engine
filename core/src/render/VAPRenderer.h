@@ -30,8 +30,8 @@ public:
 private:
     // Ported-frame speaker geometry, precomputed at prepareToPlay (no per-block
     // conversion of static speaker positions).
-    std::array<iae::Vec3, 64> spk_pos_ported_{};
-    std::array<iae::Vec3, 64> spk_dir_ported_{};
+    std::array<iae::Vec3, spe::MAX_SPEAKERS> spk_pos_ported_{};
+    std::array<iae::Vec3, spe::MAX_SPEAKERS> spk_dir_ported_{};
     iae::Vec3 room_center_ported_{0.f, 0.f, 0.f};
 
     // VAP shaping params. Defaults match the Dreamscape reference mid-range;
@@ -41,7 +41,7 @@ private:
     float curve_power_     = 2.0f;  // insideRadialCurvePower (0.15..8)
     float dist_exponent_   = 2.0f;  // volumetricDistanceExponent (0.25..8)
 
-    std::array<std::array<spe::dsp::GainRamp, 64>, spe::MAX_OBJECTS> ramps_;
+    std::array<std::array<spe::dsp::GainRamp, spe::MAX_SPEAKERS>, spe::MAX_OBJECTS> ramps_;
     geometry::SpeakerLayout layout_;
     double sr_ = 48000.0;
 };

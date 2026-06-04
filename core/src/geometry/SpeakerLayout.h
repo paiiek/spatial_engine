@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "core/Constants.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -25,9 +26,10 @@ struct Speaker {
 
 struct SpeakerLayout {
     // Maximum YAML channel number addressable by per-channel handlers
-    // (OSC + algorithm fan-out). Covers any realistic count; matches the
-    // engine MAX_OBJECTS ceiling.
-    static constexpr int kMaxYamlChannel = 64;
+    // (OSC + algorithm fan-out). Tracks the speaker-dimension cap, since each
+    // YAML channel maps to one output speaker.
+    // Phase 0.5 (128 lift): derives from the single source of truth.
+    static constexpr int kMaxYamlChannel = spe::MAX_SPEAKERS;
 
     std::string           name;
     std::string           version;

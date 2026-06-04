@@ -78,6 +78,13 @@ add_executable(test_convergence_wfs test_convergence_wfs.cpp)
 target_link_libraries(test_convergence_wfs PRIVATE spe_core)
 add_test(NAME convergence_wfs COMMAND test_convergence_wfs)
 
+# Dreamscape Convergence ⑤ — Phase 0.5 speaker-dimension lift (64 -> 128).
+# Cap-agnostic: every renderer accepts an N==MAX_SPEAKERS layout and a high-index
+# speaker (5N/8 -> 80 at the 128 build) actually renders. Passes at both builds.
+add_executable(test_convergence_max_speakers test_convergence_max_speakers.cpp)
+target_link_libraries(test_convergence_max_speakers PRIVATE spe_core)
+add_test(NAME convergence_max_speakers COMMAND test_convergence_max_speakers)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE
