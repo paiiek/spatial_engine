@@ -444,6 +444,14 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
                 render::AlgorithmAnalyticReference::vbap_gain_into(
                     layout_, az, el,
                     fdn_line_gains_[static_cast<size_t>(k)].data(), spe::MAX_SPEAKERS);
+                // ⑥e — spread each late line across the array (anti-isolation,
+                // RMS-preserving). Source-direction (opp) bias is a later step.
+                // TODO(⑥e+): replace the fixed kLateDiffuseMin with
+                // jmap(wfsFraction, 0,1, kLateDiffuseMin, kLateDiffuseMax) once
+                // per-object WFS-fraction tracking lands.
+                iae::blendVbapWithUniformDiffuse(
+                    fdn_line_gains_[static_cast<size_t>(k)].data(), n_spk,
+                    iae::kLateDiffuseMin);
             }
             room_ready_ = true;
         }
@@ -592,6 +600,10 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
                 const float el = std::asin(std::clamp(d.y, -1.f, 1.f));
                 render::AlgorithmAnalyticReference::vbap_gain_into(
                     layout_, az, el, spread_gains[wi], spe::MAX_SPEAKERS);
+                // ⑥e — diffuse blend so early reflections lay across the array
+                // instead of isolating on the VBAP triplet (RMS-preserving).
+                iae::blendVbapWithUniformDiffuse(spread_gains[wi], n_spk,
+                                                 iae::kErDiffuseNonWfs);
             }
 
             float* ring = er_rings_.data() +

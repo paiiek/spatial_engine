@@ -45,6 +45,35 @@ Vec3 earlySpreadDirection(Vec3 u, float widthDeg, int wi, int numWidthSamples) n
                              u.z * ct + v.z * st });
 }
 
+void blendVbapWithUniformDiffuse(float* gainsIO, int nSpk, float diffuse01) noexcept {
+    // RoomEngine.cpp:113-165 (participate mask omitted — all nSpk are spatial).
+    diffuse01 = std::clamp(diffuse01, 0.f, 1.f);
+    if (!std::isfinite(diffuse01)) return;
+    if (nSpk <= 0 || diffuse01 <= 1.0e-5f) return;
+
+    const float u = 1.f / std::sqrt((float) nSpk);   // spatialCount == nSpk
+
+    float vbapSumSq = 0.f;
+    for (int sp = 0; sp < nSpk; ++sp) vbapSumSq += gainsIO[sp] * gainsIO[sp];
+    if (vbapSumSq < 1.0e-20f) {
+        for (int sp = 0; sp < nSpk; ++sp) gainsIO[sp] = u;
+        return;
+    }
+
+    float blendedSumSq = 0.f;
+    float tmp[kPrototypeChannels] = {};
+    const int n = nSpk < kPrototypeChannels ? nSpk : kPrototypeChannels;
+    for (int sp = 0; sp < n; ++sp) {
+        const float b = (1.f - diffuse01) * gainsIO[sp] + diffuse01 * u;
+        tmp[sp] = b;
+        blendedSumSq += b * b;
+    }
+    float scale = std::sqrt(vbapSumSq / std::max(1.0e-20f, blendedSumSq));
+    if (!std::isfinite(scale)) scale = 1.f;
+    scale = std::clamp(scale, 0.4f, 2.5f);
+    for (int sp = 0; sp < n; ++sp) gainsIO[sp] = tmp[sp] * scale;
+}
+
 int computeFirstOrderReflections(const Vec3& objPos, const RoomEarlyParams& p,
                                  double sampleRate, int ringLen,
                                  EarlyReflection out[kNumFirstOrderImages]) noexcept {

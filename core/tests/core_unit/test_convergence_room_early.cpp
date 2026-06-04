@@ -98,6 +98,38 @@ int main() {
         CHECK(approx(d0, d2, 1.0e-3f));                // symmetric about the axis
     }
 
+    // --- blendVbapWithUniformDiffuse: RMS-preserving spread toward uniform -----
+    {
+        const int nSpk = 8;
+        auto sumsq = [&](const float* g) { float s = 0.f; for (int i = 0; i < nSpk; ++i) s += g[i]*g[i]; return s; };
+        auto maxg  = [&](const float* g) { float m = g[0]; for (int i = 1; i < nSpk; ++i) m = std::max(m, g[i]); return m; };
+        auto ming  = [&](const float* g) { float m = g[0]; for (int i = 1; i < nSpk; ++i) m = std::min(m, g[i]); return m; };
+
+        // A point VBAP gain (all energy on one speaker).
+        auto fresh = [&](float* g){ for (int i = 0; i < nSpk; ++i) g[i] = 0.f; g[0] = 1.f; };
+        float g0[8], g3[8], g6[8], g9[8];
+        fresh(g0); fresh(g3); fresh(g6); fresh(g9);
+        const float ref = 1.f;                 // pre-blend RMS energy
+        iae::blendVbapWithUniformDiffuse(g3, nSpk, 0.3f);
+        iae::blendVbapWithUniformDiffuse(g6, nSpk, 0.6f);
+        iae::blendVbapWithUniformDiffuse(g9, nSpk, 0.9f);
+
+        // RMS preserved (scale unclamped for these moderate ratios).
+        CHECK(approx(sumsq(g3), ref, 1.0e-3f));
+        CHECK(approx(sumsq(g6), ref, 1.0e-3f));
+        CHECK(approx(sumsq(g9), ref, 1.0e-3f));
+        // Monotonically more uniform: peak falls, floor rises with diffuse.
+        CHECK(maxg(g3) > maxg(g6) && maxg(g6) > maxg(g9));
+        CHECK(ming(g3) > 0.f && ming(g9) > ming(g3));
+        for (int i = 0; i < nSpk; ++i) CHECK(std::isfinite(g6[i]));
+
+        // diffuse <= 1e-5 is a no-op.
+        iae::blendVbapWithUniformDiffuse(g0, nSpk, 0.f);
+        CHECK(approx(g0[0], 1.f) && approx(g0[1], 0.f));
+        std::printf("[diffuse] max 0.3/0.6/0.9 = %.3f/%.3f/%.3f  (RMS=%.3f)\n",
+                    maxg(g3), maxg(g6), maxg(g9), sumsq(g6));
+    }
+
     if (failures == 0) std::printf("test_convergence_room_early: ALL PASS\n");
     return failures;
 }

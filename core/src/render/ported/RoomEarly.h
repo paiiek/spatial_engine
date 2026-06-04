@@ -49,6 +49,24 @@ Vec3 firstOrderImage(const Vec3& p, const Vec3& half, int wallAxis) noexcept;
 // `numWidthSamples` uniform angles. width<0.02 or <2 samples -> u. (:52-78)
 Vec3 earlySpreadDirection(Vec3 u, float widthDeg, int wi, int numWidthSamples) noexcept;
 
+// Reference diffuse amounts (RoomEngine.cpp): early non-WFS / WFS objects, and
+// the late-field min/max (the WFS-fraction interpolation is a later increment).
+constexpr float kErDiffuseNonWfs  = 0.55f;
+constexpr float kErDiffuseWfsObj  = 0.87f;
+constexpr float kLateDiffuseMin   = 0.64f;
+constexpr float kLateDiffuseMax   = 0.93f;
+
+// Blend per-speaker VBAP gains toward a uniform pan (spread energy across the
+// array, reduce single-speaker isolation) while preserving the pre-blend RMS
+// (anti level-pumping, scale clamped to [0.4,2.5]). All nSpk speakers are treated
+// as spatial participants (mmhoa has no Aux/LFE speaker kinds yet — the reference
+// participate mask is omitted). diffuse01 in [0,1]; <=1e-5 is a no-op.
+// (RoomEngine.cpp:113-165). gainsIO has nSpk entries (nSpk <= kPrototypeChannels).
+// Edge case (faithful to ref): an all-zero input (VBAP silence) is replaced by a
+// uniform pan u=1/sqrt(nSpk), which injects unit RMS rather than preserving the
+// zero — the only case where RMS is not preserved.
+void blendVbapWithUniformDiffuse(float* gainsIO, int nSpk, float diffuse01) noexcept;
+
 // Compute the 6 first-order reflections for a source at `objPos` (listener at the
 // origin). `ringLen` bounds the delay; gains derive from the early/late balance.
 // Returns the number of VALID reflections (a wall whose image collapses to the
