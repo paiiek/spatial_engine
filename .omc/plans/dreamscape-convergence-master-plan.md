@@ -216,8 +216,14 @@
   - **스모크** `scripts/smoke_max_speakers.py`(실제 바이너리, build-128): 100스피커(>64) 엔진이 100채널 버스 렌더 + VBAP 소스를 **채널 인덱스 70(>64)**로 라우팅. xrun은 채널수 무관(24ch=0, 100ch=0; smoke의 2 xruns는 OSC 버스트/콜드스타트, 차원 무관). **PASS**.
   - **검토**: **code-reviewer APPROVE**(CRITICAL/HIGH 0; MEDIUM 1=DBAP 가드 → 즉시 반영; LOW 3 중 stale 주석 1건 반영, VAP under-assert·cmake DRY 비차단). 반영 후 재빌드 양 빌드 126/126 재확인.
   - **⚠ 발견(기록·후속)**: VAP가 합성 돔(2링)에서 고도(el=+35°) 소스를 하부링 스피커로 오라우팅(argmax 하부) — 버퍼 리프트와 무관(VAP 패닝 정확성, convergence_vap_renderer가 별도 검증). 64 빌드(=개정전 동치)서도 동일 → 리프트가 도입한 결함 아님. VAP 고도 라우팅 정합성 별도 조사 필요.
-- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS 라이브 + **128 스피커 리프트** + 스모크 5종 + 전체 회귀 0 + WERROR=ON **양 빌드(64/128) 126/126**. 브랜치 `feat/dreamscape-convergence`.
-- **다음 증분(순서)**: ⑥ 룸엔진(Shoebox/FDN N=8) ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 모니터 체인 ⑨ ADM 확장(부호/메시지/송신/행렬/50슬롯) ⑩ per-object EQ·딜레이. **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
+- 2026-06-04: **⑥a 룸엔진 — 후기 FDN 코어 이식 완료 ✅** (커밋 f450b71)
+  - **이식**: `core/src/render/ported/RoomFdn.{h,cpp}`(iae, juce-free, 출처 f2cb796) — 레퍼런스 RoomEngine 후기 FDN 신호경로 **바이트충실 이식**: 입력확산 allpass 2단(0.72/0.62, 256탭), SR스케일 8딜레이라인(601..1487@48k, clamp[64,8192], 버퍼 L+maxBlock+8), per-line 1-pole HF damping(a=exp(−2π fc/SR), bright=0.14+0.86·ratio), Sylvester-8 Hadamard 피드백(gLoop=exp(−ln1000·tMean/t60)·0.918, gH=gLoop/√8, inj=0.88/√8). 코어는 per-line 탭 d[k] 출력(레퍼런스가 패너에 넣는 신호). juce→std(jlimit→clamp 인자순서 검증, 2π 리터럴=MathConstants::twoPi 비트동일).
+  - **범위 경계**: 공간분배(cube-corner VBAP+uniform-diffuse 블렌드)·early reflections·cluster·라이브 SpatialEngine 결선은 후속 ⑥b/⑥c. ⑥a=자기완결 DSP 코어.
+  - **단위** `test_convergence_room_fdn`: 안정·유한성, 감쇠(eLate≪eEarly), **T60 순서(long/short 후기에너지비 ~1.2e7)**, HF damping(bright2.0 vs damped0.011), 8라인 디코릴, reset() 비트정확(diff=0). **양 빌드 ctest 127/127 green WERROR+RT_ASSERTS, 회귀0**. process() RT-safe(alloc는 prepare()만).
+  - **검토**: **code-reviewer APPROVE** — DSP 무편차(clamp 인자순서·wrap off-by-one·상수 모두 일치). LOW 2(allpass 로컬 wrap 람다 중복=출처충실, params 디폴트=SpatialAudioPull 값 일치 확인) 비차단.
+  - **다음(⑥b)**: RoomFdn 8라인 탭 → cube-corner VBAP(네이티브 `vbap_gain_into` 재사용, kLatePerLineGain=0.068) + SpatialEngine 룸버스 결선(per-object wet send → late bus → finishBlock 패턴 → outputBus 합산). 그 후 실바이너리 스모크. 레퍼런스 RoomEngine.cpp:520-592(late 방향바이어스/cube corner VBAP), 729-740(per-line 출력), AudioEngine.cpp:842/908(결선점). cluster+Shoebox early는 ⑥c.
+- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS 라이브 + **128 스피커 리프트** + **FDN 코어(⑥a)** + 전체 회귀 0 + WERROR=ON **양 빌드(64/128) 127/127**. 브랜치 `feat/dreamscape-convergence`.
+- **다음 증분(순서)**: **⑥b FDN 공간분배+라이브결선+스모크** → ⑥c Shoebox early+cluster → ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 ⑨ ADM 확장 ⑩ per-object EQ·딜레이. **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
 - **후속 메모(증분 중 발견)**:
   - **(⑤ 발견) VAP 고도 라우팅 정합성 조사** — VAP가 2링 돔에서 +el 소스를 하부링으로 오라우팅. ported `computeVolumetricAmplitudePanning`의 고도/프레임 처리 또는 mmhoa→ported 어댑터 조합 의심. ⑧(바이노럴/헤드트래킹) 또는 별도 위생 증분서 추적.
   - (리뷰 LOW) cmake `{64,128}` 검증이 top+core 중복 → `spe_validate_pow2_cap()` 함수화 가능(MAX_OBJECTS도 동일 패턴이라 일관·비차단).
