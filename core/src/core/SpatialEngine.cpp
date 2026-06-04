@@ -423,38 +423,14 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         // Size > 1 avoids OOB if a /noise/{ch}/* command arrives before layout.
         noise_chans_.assign(static_cast<size_t>(std::max(n_spk, 1)), NoiseChan{});
 
-        // ⑥b — precompute the 8 cube-corner VBAP gain vectors for the spatial
-        // room engine's late FDN lines. Each corner {±1,±1,±1}/√3 (mmhoa frame:
-        // x=right, y=up, z=front) becomes (az,el) and routes through the native
-        // analytic VBAP (same elevation-aware core the renderers use). Computed
-        // on the control thread; read RT-safe in audioBlock under room_ready_.
-        {
-            static constexpr float kCorner[iae::RoomFdn::kOrder][3] = {
-                { 1.f, 1.f, 1.f}, { 1.f, 1.f,-1.f}, { 1.f,-1.f, 1.f}, { 1.f,-1.f,-1.f},
-                {-1.f, 1.f, 1.f}, {-1.f, 1.f,-1.f}, {-1.f,-1.f, 1.f}, {-1.f,-1.f,-1.f},
-            };
-            const float inv = 1.f / std::sqrt(3.f);
-            for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
-                const float x = kCorner[k][0] * inv;
-                const float y = kCorner[k][1] * inv;
-                const float z = kCorner[k][2] * inv;
-                const float az = std::atan2(x, z);
-                const float el = std::asin(std::clamp(y, -1.f, 1.f));
-                fdn_line_gains_[static_cast<size_t>(k)].fill(0.f);
-                render::AlgorithmAnalyticReference::vbap_gain_into(
-                    layout_, az, el,
-                    fdn_line_gains_[static_cast<size_t>(k)].data(), spe::MAX_SPEAKERS);
-                // ⑥e — spread each late line across the array (anti-isolation,
-                // RMS-preserving). Source-direction (opp) bias is a later step.
-                // TODO(⑥e+): replace the fixed kLateDiffuseMin with
-                // jmap(wfsFraction, 0,1, kLateDiffuseMin, kLateDiffuseMax) once
-                // per-object WFS-fraction tracking lands.
-                iae::blendVbapWithUniformDiffuse(
-                    fdn_line_gains_[static_cast<size_t>(k)].data(), n_spk,
-                    iae::kLateDiffuseMin);
-            }
-            room_ready_ = true;
-        }
+        // ⑥b/⑥e — initialise the 8 late FDN line gain vectors. The authoritative
+        // gains are recomputed every block in audioBlock via computeLateFdnGains()
+        // with the live source-energy opp-bias; this control-thread call seeds them
+        // with the reference no-energy default (opp = +up, minimum diffuse) so the
+        // member is valid before the first room block. Native analytic VBAP, same
+        // elevation-aware core the renderers use. room_ready_ gates the RT reads.
+        computeLateFdnGains(iae::Vec3{ 0.f, 1.f, 0.f }, iae::kLateDiffuseMin, n_spk);
+        room_ready_ = true;
 
         // Per-speaker time-alignment: delay lines + gain scalars
         spk_delays_.resize(static_cast<size_t>(n_spk));
@@ -666,6 +642,44 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
                 }
             }
         }
+    }
+}
+
+// ⑥e (late opp source-bias) — recompute the 8 late FDN line gain vectors for the
+// current block. Each Hadamard line starts at its static cube corner {±1,±1,±1}/√3
+// and is steered toward `opp` (the axis opposite the late source-energy centroid)
+// by kLateCornerTowardOpposite=0.5, then blended toward uniform diffuse by
+// `lateDiffuse01`. Byte-faithful to RoomEngine.cpp:567-583 (cube-corner ordering
+// matches cubeCornerDirection). Frame: mmhoa x=right,y=up,z=front with
+// az=atan2(x,z)/el=asin(y), same as the ⑥b corner mapping. RT-safe: vbap_gain_into
+// uses stack scratch; blendVbapWithUniformDiffuse allocates nothing.
+iae::Vec3 SpatialEngine::lateFdnLineDirection(int k, const iae::Vec3& opp) noexcept {
+    static constexpr float kCorner[iae::RoomFdn::kOrder][3] = {
+        { 1.f, 1.f, 1.f}, { 1.f, 1.f,-1.f}, { 1.f,-1.f, 1.f}, { 1.f,-1.f,-1.f},
+        {-1.f, 1.f, 1.f}, {-1.f, 1.f,-1.f}, {-1.f,-1.f, 1.f}, {-1.f,-1.f,-1.f},
+    };
+    static constexpr float kLateCornerTowardOpposite = 0.5f;
+    const float inv = 1.f / std::sqrt(3.f);
+    const int kk = k & 7;
+    const iae::Vec3 corner{ kCorner[kk][0] * inv,
+                            kCorner[kk][1] * inv,
+                            kCorner[kk][2] * inv };
+    return iae::normalized(corner * (1.f - kLateCornerTowardOpposite)
+                         + opp * kLateCornerTowardOpposite);
+}
+
+void SpatialEngine::computeLateFdnGains(const iae::Vec3& opp, float lateDiffuse01,
+                                        int n_spk) noexcept {
+    for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
+        const iae::Vec3 u = lateFdnLineDirection(k, opp);
+        const float az = std::atan2(u.x, u.z);
+        const float el = std::asin(std::clamp(u.y, -1.f, 1.f));
+        fdn_line_gains_[static_cast<size_t>(k)].fill(0.f);
+        render::AlgorithmAnalyticReference::vbap_gain_into(
+            layout_, az, el,
+            fdn_line_gains_[static_cast<size_t>(k)].data(), spe::MAX_SPEAKERS);
+        iae::blendVbapWithUniformDiffuse(
+            fdn_line_gains_[static_cast<size_t>(k)].data(), n_spk, lateDiffuse01);
     }
 }
 
@@ -900,6 +914,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     std::fill(reverb_send_buf_.begin(),
               reverb_send_buf_.begin() + block.num_frames, 0.0f);
 
+    // ⑥e (late opp source-bias) — accumulate the late-reverb source-energy
+    // centroid for this block: each object weights its unit position by the
+    // magnitude of its reverb send, split by WFS vs non-WFS for the diffuse
+    // amount. Consumed below to steer the late FDN lines (RoomEngine.cpp:491-503).
+    // Per-block locals → fresh each block (faithful to the reference reset).
+    iae::Vec3 late_w_sum{};
+    float     late_w_denom = 0.f;
+    float     wet_wfs      = 0.f;
+    float     wet_nonwfs   = 0.f;
+
     const float transport_gain = transport_play_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         const auto& c = obj_cache_[static_cast<size_t>(i)];
@@ -918,12 +942,29 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         chains_[static_cast<size_t>(i)].setParams(p);
 
         auto& scratch = dry_scratch_[static_cast<size_t>(i)];
+        float obj_send_abs = 0.f;
         for (int n = 0; n < block.num_frames; ++n) {
             float reverb_tap = 0.f;
             scratch[static_cast<size_t>(n)] =
                 chains_[static_cast<size_t>(i)].processSample(
                     scratch[static_cast<size_t>(n)], reverb_tap);
             reverb_send_buf_[static_cast<size_t>(n)] += reverb_tap;
+            obj_send_abs += std::fabs(reverb_tap);
+        }
+
+        // ⑥e — weight this object's unit position by its late-send energy. The
+        // position formula matches renderRoomEarly (mmhoa frame x=right,y=up,
+        // z=front); srcAxis = normalized(pos) mirrors the reference p/dDirect.
+        if (obj_send_abs > 1.0e-12f) {
+            const float ce = std::cos(c.el);
+            const iae::Vec3 pos{ c.dist * ce * std::sin(c.az),
+                                 c.dist * std::sin(c.el),
+                                 c.dist * ce * std::cos(c.az) };
+            const iae::Vec3 srcAxis = iae::normalized(pos);
+            late_w_sum   = late_w_sum + srcAxis * obj_send_abs;
+            late_w_denom += obj_send_abs;
+            if (c.algo == ipc::Algorithm::WFS) wet_wfs    += obj_send_abs;
+            else                               wet_nonwfs += obj_send_abs;
         }
     }
 
@@ -1007,8 +1048,26 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
 
         const int rev_dist = active_reverb_.load(std::memory_order_relaxed);
         if (rev_dist == 2 && room_ready_) {
+            // ⑥e (late opp source-bias) — steer this block's late FDN line
+            // directions toward the axis opposite the source-energy centroid, and
+            // set the diffuse amount from the WFS energy fraction. Byte-faithful to
+            // RoomEngine.cpp:535-583. All speakers participate in mmhoa, so the
+            // reference degenerate (spatialCount<1) path cannot trigger here.
+            float lateDiffuse = iae::kLateDiffuseMin;
+            const float wetTot = wet_wfs + wet_nonwfs;
+            if (wetTot > 1.0e-9f)
+                lateDiffuse = iae::kLateDiffuseMin
+                    + (wet_wfs / wetTot) * (iae::kLateDiffuseMax - iae::kLateDiffuseMin);
+            iae::Vec3 opp{ 0.f, 1.f, 0.f };
+            if (late_w_denom > 1.0e-9f) {
+                iae::Vec3 avg = late_w_sum * (1.f / late_w_denom);
+                avg = iae::normalized(avg);
+                opp = iae::normalized(avg * (-1.f));
+            }
+            computeLateFdnGains(opp, lateDiffuse, n_spk);
+
             // ⑥b Room (spatial): run the late FDN on the mono send, then fan each
-            // of the 8 line taps across the bus via its cube-corner VBAP gains.
+            // of the 8 line taps across the bus via its (opp-biased) gain vectors.
             // kLatePerLineGain matches the reference (RoomEngine.cpp:691).
             constexpr float kLatePerLineGain = 0.068f;
             room_fdn_.process(reverb_send_buf_.data(), block.num_frames,

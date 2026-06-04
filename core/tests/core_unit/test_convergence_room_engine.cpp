@@ -45,8 +45,9 @@ static spe::geometry::SpeakerLayout make_dome() {
 }
 
 // Run a fresh engine with room reverb selected and the given per-object reverb
-// send; drive `blocks` blocks and return per-speaker accumulated energy.
-static std::vector<double> run(float reverb_send, int n_spk) {
+// send; drive `blocks` blocks and return per-speaker accumulated energy. The
+// object sits below the horizon (el=-20°) at azimuth `az_rad`.
+static std::vector<double> run(float reverb_send, int n_spk, float az_rad = 0.f) {
     spe::core::SpatialEngine engine(0);
     engine.setLayout(make_dome());
     engine.prepareToPlay(48000.0, 256);
@@ -55,7 +56,7 @@ static std::vector<double> run(float reverb_send, int n_spk) {
         spe::ipc::Command c; c.tag = tag; c.payload = payload; engine.dispatchCommand(c);
     };
     { spe::ipc::PayloadReverbSelect p; p.which = 2; dsp(spe::ipc::CommandTag::ReverbSelect, p); }
-    { spe::ipc::PayloadObjMove p; p.obj_id = 0; p.az_rad = 0.f; p.el_rad = -0.349f; p.dist_m = 2.f;
+    { spe::ipc::PayloadObjMove p; p.obj_id = 0; p.az_rad = az_rad; p.el_rad = -0.349f; p.dist_m = 2.f;
       dsp(spe::ipc::CommandTag::ObjMove, p); }
     { spe::ipc::PayloadObjDsp p; p.obj_id = 0;
       p.param = spe::ipc::PayloadObjDsp::Param::ReverbSend; p.value = reverb_send;
@@ -105,6 +106,44 @@ int main() {
     // The lower object cannot light the upper ring; only the room reverb can.
     CHECK(upOn > 10.0 * (upOff + 1.0e-12), "room reverb adds upper-ring energy a lower object cannot");
     CHECK(upActive >= 3, "room reverb fans onto multiple upper-ring speakers (+y cube corners)");
+
+    // ⑥e late opp source-bias — direct test of the per-line steering math
+    // (lateFdnLineDirection). In the live audio path the late field's directional
+    // bias is mixed with the per-object early reflections (whose ceiling tap sits
+    // at the source azimuth), so an isolated left/right energy assertion is
+    // confounded; the integration smoke covers RT-safety/sanity. Here we verify
+    // the math is faithful to RoomEngine.cpp:567-572 with no confound.
+    using SE = spe::core::SpatialEngine;
+    // (a) opp = +up (no-energy default) reproduces the static cube corners blended
+    //     halfway toward +up: every line keeps a +y component and stays unit-length.
+    {
+        const iae::Vec3 oppUp{ 0.f, 1.f, 0.f };
+        bool allUnit = true, allUp = true;
+        for (int k = 0; k < 8; ++k) {
+            const iae::Vec3 d = SE::lateFdnLineDirection(k, oppUp);
+            const float len = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
+            if (std::fabs(len - 1.f) > 1.0e-4f) allUnit = false;
+            if (d.y <= 0.f) allUp = false;     // corner.y=±0.577, +opp.y=0.5 -> net >0
+        }
+        CHECK(allUnit, "opp-bias: line directions are unit length");
+        CHECK(allUp,   "opp-bias: opp=+up lifts every line above the horizon");
+    }
+    // (b) opp steering is signed: opp pointing hard RIGHT (+x) steers EVERY line to
+    //     the +x hemisphere; opp hard LEFT mirrors it to -x. This is the source-
+    //     opposite bias the static fan-out could not produce.
+    {
+        bool allRight = true, allLeft = true, steered = true;
+        for (int k = 0; k < 8; ++k) {
+            const iae::Vec3 dR = SE::lateFdnLineDirection(k, iae::Vec3{ 1.f, 0.f, 0.f });
+            const iae::Vec3 dL = SE::lateFdnLineDirection(k, iae::Vec3{ -1.f, 0.f, 0.f });
+            if (dR.x <= 0.f) allRight = false;
+            if (dL.x >= 0.f) allLeft  = false;
+            if (dR.x <= dL.x) steered = false; // +x opp lands strictly right of -x opp
+        }
+        CHECK(allRight, "opp-bias: opp=+x steers every late line to the +x hemisphere");
+        CHECK(allLeft,  "opp-bias: opp=-x steers every late line to the -x hemisphere");
+        CHECK(steered,  "opp-bias: +x opp lands every line right of -x opp (signed steer)");
+    }
 
     if (failures == 0) { std::printf("test_convergence_room_engine: ALL PASS\n"); return 0; }
     return 1;

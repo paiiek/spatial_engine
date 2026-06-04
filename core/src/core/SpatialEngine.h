@@ -206,6 +206,13 @@ public:
     std::uint64_t blocksProcessed() const noexcept { return blocks_processed_.load(); }
     const util::TraceRing256& trace() const noexcept { return trace_; }
 
+    // ⑥e (late opp source-bias) — unit direction of late FDN line `k` (0..7),
+    // steered from its static cube corner {±1,±1,±1}/√3 toward `opp` by
+    // kLateCornerTowardOpposite=0.5 then renormalized. Byte-faithful to
+    // RoomEngine.cpp:567-572. Pure math (no engine state) — exposed for unit
+    // tests; computeLateFdnGains() applies the VBAP/diffuse on top of this.
+    static iae::Vec3 lateFdnLineDirection(int k, const iae::Vec3& opp) noexcept;
+
     // v0.9 Lane A (A-M1) — engine-internal overrun count (audioBlock saw a
     // block with num_frames > MAX_BLOCK and refused it). Distinct from the
     // backend device xrun count (driver->xrunCount()). Emitted on
@@ -390,13 +397,22 @@ private:
 
     // ⑥b Dreamscape room engine — spatial late reverb. The mono reverb send is
     // run through the ported 8-line FDN; each line tap is fanned out across the
-    // speaker bus via a precomputed cube-corner VBAP gain vector (the early-
-    // reflection / cluster stages + source-direction bias are increment ⑥c).
+    // speaker bus via a cube-corner VBAP gain vector. ⑥e (late opp source-bias)
+    // makes these gains dynamic: each block fdn_line_gains_ is recomputed by
+    // computeLateFdnGains() steering the corners toward the source-energy-
+    // opposite axis, with a WFS-fraction-driven diffuse amount.
     iae::RoomFdn                                              room_fdn_;
     std::array<std::array<float, spe::MAX_SPEAKERS>,
                iae::RoomFdn::kOrder>                          fdn_line_gains_{};
     std::vector<float>                                        room_lines_;   // [kOrder * maxBlock]
     bool                                                      room_ready_ = false;
+    // ⑥e — fill fdn_line_gains_ for the current block: each Hadamard line is
+    // steered from its static cube corner toward `opp` (the axis opposite the
+    // late source-energy centroid; kLateCornerTowardOpposite=0.5) then blended
+    // toward uniform diffuse by `lateDiffuse01`. Byte-faithful to
+    // RoomEngine.cpp:567-583. RT-safe (vbap_gain_into uses stack scratch).
+    void computeLateFdnGains(const iae::Vec3& opp, float lateDiffuse01,
+                             int n_spk) noexcept;
 
     // ⑥d Shoebox early reflections — per-object first-order image-source taps.
     // Each active object's send-scaled dry signal is delayed through 6 per-image
