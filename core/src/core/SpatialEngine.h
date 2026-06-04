@@ -21,6 +21,7 @@
 #include "reverb/FdnReverb.h"
 #include "reverb/ReverbEngine.h"
 #include "render/ported/RoomFdn.h"
+#include "render/ported/RoomEarly.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/CpuMeter.h"
@@ -395,6 +396,18 @@ private:
                iae::RoomFdn::kOrder>                          fdn_line_gains_{};
     std::vector<float>                                        room_lines_;   // [kOrder * maxBlock]
     bool                                                      room_ready_ = false;
+
+    // ⑥d Shoebox early reflections — per-object first-order image-source taps.
+    // Each active object's send-scaled dry signal is delayed through 6 per-image
+    // ring buffers and panned (width-spread VBAP) onto the bus. Predelay /
+    // absorption-EQ / cluster are increment ⑥e.
+    static constexpr int kErRingLen = 512;     // matches reference kErRingLen
+    iae::RoomEarlyParams                                     room_early_params_{};
+    std::vector<float>                                       er_rings_;       // [MAX_OBJECTS*6*kErRingLen]
+    std::array<std::array<int, iae::kNumFirstOrderImages>,
+               spe::MAX_OBJECTS>                             er_write_pos_{};
+    // Render the early reflections for all active objects into mix_buf_.
+    void renderRoomEarly(int n_spk, int num_frames) noexcept;
     output::BinauralMonitor       binaural_;
     bool                          binaural_ok_ = false;
 

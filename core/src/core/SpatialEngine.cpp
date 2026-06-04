@@ -494,6 +494,11 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     room_fdn_.prepare(sample_rate, max_block_size);
     room_lines_.assign(static_cast<size_t>(iae::RoomFdn::kOrder) *
                        static_cast<size_t>(max_block_size), 0.f);
+    // ⑥d early-reflection ring buffers: one kErRingLen ring per (object, image).
+    er_rings_.assign(static_cast<size_t>(MAX_OBJECTS) *
+                     static_cast<size_t>(iae::kNumFirstOrderImages) *
+                     static_cast<size_t>(kErRingLen), 0.f);
+    for (auto& obj_w : er_write_pos_) obj_w.fill(0);
 
     // Per-object DSP chain (EQ → user delay → distance gain → HF rolloff → propagation delay → reverb send)
     // Heap-allocated to avoid stack overflow (each chain owns ~384 KB of delay buffers).
@@ -543,6 +548,74 @@ void SpatialEngine::releaseResources() {
     osc_backend_.stop();
     render_ready_.store(false);
     prepared_.store(false);
+}
+
+// ⑥d — render per-object Shoebox early reflections into mix_buf_. For each
+// active object with a reverb send, its send-scaled dry signal is delayed
+// through 6 first-order image ring buffers and panned via width-spread VBAP
+// (3 samples, triangular {1,2,1}/4). RT-safe: ring buffers pre-allocated;
+// vbap_gain_into uses stack scratch; no allocation here. (predelay / absorption
+// EQ / cluster are ⑥e.)
+void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
+    static constexpr int   kSpread       = iae::kEarlySpreadSamples;     // 3
+    static constexpr float kErTri3[3]    = { 1.f, 2.f, 1.f };
+    static constexpr float kErTri3Inv    = 1.f / 4.f;
+    static constexpr float kEarlyWidthDeg = 45.f;   // reference default; OSC plumbing in ⑥e
+
+    for (int i = 0; i < MAX_OBJECTS; ++i) {
+        const auto& c = obj_cache_[static_cast<size_t>(i)];
+        if (!c.active || c.reverb_send <= 1.0e-6f) continue;
+
+        // Object position (listener at origin), mmhoa frame x=right,y=up,z=front.
+        const float ce = std::cos(c.el);
+        const iae::Vec3 pos{ c.dist * ce * std::sin(c.az),
+                             c.dist * std::sin(c.el),
+                             c.dist * ce * std::cos(c.az) };
+
+        iae::EarlyReflection refl[iae::kNumFirstOrderImages];
+        const int nv = iae::computeFirstOrderReflections(
+            pos, room_early_params_, sample_rate_, kErRingLen, refl);
+        if (nv <= 0) continue;
+
+        const float* dry = dry_scratch_[static_cast<size_t>(i)].data();
+        const float  send = c.reverb_send;
+
+        for (int t = 0; t < iae::kNumFirstOrderImages; ++t) {
+            if (!refl[t].valid) continue;
+
+            // Per-block: width-spread VBAP gains for this reflection direction.
+            float spread_gains[kSpread][spe::MAX_SPEAKERS] = {};
+            for (int wi = 0; wi < kSpread; ++wi) {
+                const iae::Vec3 d =
+                    iae::earlySpreadDirection(refl[t].dir, kEarlyWidthDeg, wi, kSpread);
+                const float az = std::atan2(d.x, d.z);
+                const float el = std::asin(std::clamp(d.y, -1.f, 1.f));
+                render::AlgorithmAnalyticReference::vbap_gain_into(
+                    layout_, az, el, spread_gains[wi], spe::MAX_SPEAKERS);
+            }
+
+            float* ring = er_rings_.data() +
+                (static_cast<size_t>(i) * iae::kNumFirstOrderImages +
+                 static_cast<size_t>(t)) * static_cast<size_t>(kErRingLen);
+            int& wp = er_write_pos_[static_cast<size_t>(i)][static_cast<size_t>(t)];
+            const int delay = refl[t].delaySamples;
+            const float tapGain = refl[t].gain;
+
+            for (int n = 0; n < num_frames; ++n) {
+                ring[static_cast<size_t>(wp)] = dry[static_cast<size_t>(n)] * send;
+                int rp = wp - delay; if (rp < 0) rp += kErRingLen;
+                const float s = ring[static_cast<size_t>(rp)] * tapGain;
+                if (++wp >= kErRingLen) wp = 0;
+                if (std::abs(s) < 1.0e-9f) continue;
+                for (int wi = 0; wi < kSpread; ++wi) {
+                    const float w = s * kErTri3[wi] * kErTri3Inv;
+                    const float* g = spread_gains[wi];
+                    for (int sp = 0; sp < n_spk; ++sp)
+                        mix_buf_[static_cast<size_t>(n * n_spk + sp)] += w * g[sp];
+                }
+            }
+        }
+    }
 }
 
 void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
@@ -629,12 +702,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 const int which = static_cast<int>(qc.reverb_which);
                 const int prev  = active_reverb_.exchange(which,
                                      std::memory_order_relaxed);
-                // ⑥b review (MEDIUM): the room FDN is frozen while another mode is
-                // active, so on switching INTO room mode it would resume from a
-                // stale tail. Clear it for a clean onset. reset() is no-alloc
-                // (fills only) → RT-safe under the no-alloc scope.
-                if (which == 2 && prev != 2)
+                // ⑥b/⑥d review (MEDIUM): the room late FDN and the per-object
+                // early-reflection rings are frozen while another mode is active,
+                // so on switching INTO room mode they would resume from a stale
+                // tail. Clear both for a clean onset — all fills, no allocation,
+                // RT-safe under the no-alloc scope.
+                if (which == 2 && prev != 2) {
                     room_fdn_.reset();
+                    std::fill(er_rings_.begin(), er_rings_.end(), 0.f);
+                    for (auto& obj_w : er_write_pos_) obj_w.fill(0);
+                }
                 break;
             }
             case ipc::CommandTag::SysAmbiOrder:
@@ -889,6 +966,8 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                         mix_buf_[static_cast<size_t>(n * n_spk + s)] += t * g[s];
                 }
             }
+            // ⑥d — per-object Shoebox early reflections onto the same bus.
+            renderRoomEarly(n_spk, block.num_frames);
         } else {
             // Distribute reverb wet uniformly across all speakers (energy-preserving)
             const float reverb_per_spk = 1.0f / std::sqrt(static_cast<float>(n_spk));
