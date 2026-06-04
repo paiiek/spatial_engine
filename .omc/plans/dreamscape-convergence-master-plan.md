@@ -228,8 +228,9 @@
   - **범위**: cube-corner 고정방향만. 소스방향 바이어스(opp)+uniform-diffuse 블렌드(RoomEngine.cpp:543-583)·early reflections·cluster는 ⑥c. → 공간적이나 아직 소스 비상관 후기장.
   - **단위** `test_convergence_room_spatial`: 8코너가 3D돔서 7/8 distinct 스피커, +y→상부링/−y→하부링(고도 정상). **양 빌드 ctest 128/128 green WERROR+RT_ASSERTS, 회귀0, no-alloc green**.
   - **스모크** `scripts/smoke_room_reverb.py`(실바이너리): 하부 dry 객체는 상부링 에너지 **0**, room 모드는 FDN 후기를 **상부링 8스피커 전체(3.3e8)**로 fan(dry가 못 만드는 에너지), xruns=0. ⚠ 측정주의: dry가 시끄러워 per-spk diff는 run-jitter에 가려짐 → **dry 미도달 반구(상부링) 격리**로 깨끗이 검증.
-  - **검토**: **code-reviewer APPROVE**(RT no-alloc·in-bounds·단일분배·cube수학 왕복 정확). MEDIUM 2(⑥c 이관): 오디오패스 단위커버리지, mode-switch시 room_fdn_.reset()(stale-tail 트랜지언트). LOW 3(명명상수/include순서) 비차단.
-- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS + **128 리프트** + **룸 후기 리버브 라이브(⑥a/⑥b)** + 스모크 6종 + 회귀 0 + WERROR=ON **양 빌드(64/128) 128/128**. 브랜치 `feat/dreamscape-convergence`.
+  - **검토**: **code-reviewer APPROVE**(RT no-alloc·in-bounds·단일분배·cube수학 왕복 정확).
+- 2026-06-04: **⑥b hardening 완료 ✅** (커밋 9f99cbf) — 리뷰 MEDIUM 2건 해소: (1) mode-switch(active_reverb_ 2로 진입, prev!=2)시 `room_fdn_.reset()`(no-alloc fills, RT-safe; stale-tail 제거) (2) `test_convergence_room_engine`(실제 SpatialEngine::audioBlock 구동 — 하부객체 upperOff≈9e-7 vs upperOn=0.32 상부 8스피커 전체; room_ready_ precompute+rev==2 게이팅+fan-out 라이브 커버). **양 빌드 ctest 129/129 green**.
+- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS + **128 리프트** + **룸 후기 리버브 라이브+하드닝(⑥a/⑥b)** + 스모크 6종 + 회귀 0 + WERROR=ON **양 빌드(64/128) 129/129**. 브랜치 `feat/dreamscape-convergence` (main +24).
 - **다음 증분(순서)**: **⑥c Shoebox early reflections(image-source 6벽)+cluster+소스방향 바이어스/diffuse 블렌드** → ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 ⑨ ADM 확장 ⑩ per-object EQ·딜레이.
   - ⑥c 참조: RoomEngine.cpp:20-39(firstOrderImage 6벽), 52-78(earlySpreadDirection), 312-504(processObjectWet: predelay/absorption EQ/per-reflection VBAP+diffuse), 595-647(cluster feedforward taps), 113-165(blendVbapWithUniformDiffuse), 543-583(late opp 바이어스). 파라미터: SpatialAudioPull roomEarly*/roomCluster*/roomHalfExtents. + room_fdn_.reset() on mode switch(⑥b MEDIUM). **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
 - **후속 메모(증분 중 발견)**:
