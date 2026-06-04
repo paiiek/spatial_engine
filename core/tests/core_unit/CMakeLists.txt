@@ -104,6 +104,13 @@ add_executable(test_convergence_room_cluster test_convergence_room_cluster.cpp)
 target_link_libraries(test_convergence_room_cluster PRIVATE spe_core)
 add_test(NAME convergence_room_cluster COMMAND test_convergence_room_cluster)
 
+# Dreamscape Convergence ⑥e-3a — room absorption-EQ biquad core (iae::RoomBiquad):
+# analytic transfer function (DC/Nyquist/-3dB-corner) + time-domain TDF-II
+# sine-gain agreement + reset() determinism.
+add_executable(test_convergence_room_biquad test_convergence_room_biquad.cpp)
+target_link_libraries(test_convergence_room_biquad PRIVATE spe_core)
+add_test(NAME convergence_room_biquad COMMAND test_convergence_room_biquad)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE
