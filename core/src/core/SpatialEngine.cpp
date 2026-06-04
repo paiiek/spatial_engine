@@ -625,10 +625,18 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             case ipc::CommandTag::TransportStop:
                 transport_play_.store(false, std::memory_order_relaxed);
                 break;
-            case ipc::CommandTag::ReverbSelect:
-                active_reverb_.store(static_cast<int>(qc.reverb_which),
+            case ipc::CommandTag::ReverbSelect: {
+                const int which = static_cast<int>(qc.reverb_which);
+                const int prev  = active_reverb_.exchange(which,
                                      std::memory_order_relaxed);
+                // ⑥b review (MEDIUM): the room FDN is frozen while another mode is
+                // active, so on switching INTO room mode it would resume from a
+                // stale tail. Clear it for a clean onset. reset() is no-alloc
+                // (fills only) → RT-safe under the no-alloc scope.
+                if (which == 2 && prev != 2)
+                    room_fdn_.reset();
                 break;
+            }
             case ipc::CommandTag::SysAmbiOrder:
                 ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
                 break;

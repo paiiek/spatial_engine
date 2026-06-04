@@ -888,3 +888,10 @@ add_test(NAME binaural_dataset_itd_oracle
 add_executable(test_convergence_room_spatial test_convergence_room_spatial.cpp)
 target_link_libraries(test_convergence_room_spatial PRIVATE spe_core)
 add_test(NAME convergence_room_spatial COMMAND test_convergence_room_spatial)
+
+# Dreamscape Convergence ⑥b — audio-path coverage: drive SpatialEngine::audioBlock
+# with the room reverb selected; a lower-hemisphere object yields upper-ring
+# energy only via the room FDN's +y cube-corner fan-out (none without a send).
+add_executable(test_convergence_room_engine test_convergence_room_engine.cpp)
+target_link_libraries(test_convergence_room_engine PRIVATE spe_core)
+add_test(NAME convergence_room_engine COMMAND test_convergence_room_engine)
