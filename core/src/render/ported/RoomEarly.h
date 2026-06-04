@@ -28,6 +28,7 @@ namespace iae {
 constexpr int   kNumFirstOrderImages = 6;
 constexpr int   kEarlySpreadSamples  = 3;     // reference width-spread sample count
 constexpr float kRoomSoundSpeed      = 343.f; // m/s (RoomEngine.cpp:343)
+constexpr float kRoomEarlyPredelayMs = 20.f;  // reference default (SpatialSessionState.h:137)
 
 struct RoomEarlyParams {
     Vec3  halfExtents { 6.f, 5.f, 3.f }; // room half-size (m); reference default

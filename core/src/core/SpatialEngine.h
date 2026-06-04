@@ -22,6 +22,7 @@
 #include "reverb/ReverbEngine.h"
 #include "render/ported/RoomFdn.h"
 #include "render/ported/RoomEarly.h"
+#include "render/ported/RoomBiquad.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/CpuMeter.h"
@@ -406,6 +407,17 @@ private:
     std::vector<float>                                       er_rings_;       // [MAX_OBJECTS*6*kErRingLen]
     std::array<std::array<int, iae::kNumFirstOrderImages>,
                spe::MAX_OBJECTS>                             er_write_pos_{};
+    // ⑥e-3b — early predelay (per-object ring) + absorption EQ (per-object HP→LP)
+    // applied to the send-scaled mono BEFORE the image-source ring taps. Faithful
+    // to RoomEngine.cpp:374-406 (predelay then earlyClusterHp/Lp); EQ corner freqs
+    // are the reference earlyCluster defaults (HP 120 / LP 10000 Hz) — OSC tuning
+    // of predelay-ms / corners is the later ⑥e-4 increment.
+    int                                                     er_predelay_max_ = 4801;
+    int                                                     er_predelay_stride_ = 0;
+    std::vector<float>                                      er_predelay_lines_; // [MAX_OBJECTS*stride]
+    std::array<int, spe::MAX_OBJECTS>                       er_predelay_wpos_{};
+    std::array<iae::RoomBiquad, spe::MAX_OBJECTS>           er_eq_hp_{};
+    std::array<iae::RoomBiquad, spe::MAX_OBJECTS>           er_eq_lp_{};
     // Render the early reflections for all active objects into mix_buf_.
     void renderRoomEarly(int n_spk, int num_frames) noexcept;
     output::BinauralMonitor       binaural_;

@@ -507,6 +507,19 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
                      static_cast<size_t>(iae::kNumFirstOrderImages) *
                      static_cast<size_t>(kErRingLen), 0.f);
     for (auto& obj_w : er_write_pos_) obj_w.fill(0);
+    // ⑥e-3b — per-object early predelay lines (sized for the reference 100 ms max,
+    // RoomEngine.cpp:220-222) + absorption-EQ biquads (HP 120 / LP 10000, the
+    // reference earlyCluster defaults). Coeffs are fixed until ⑥e-4 OSC tuning.
+    er_predelay_max_    = std::clamp(
+        static_cast<int>(std::lround(0.1 * sample_rate)) + 1, 1, 19200);
+    er_predelay_stride_ = er_predelay_max_ + MAX_BLOCK + 8;
+    er_predelay_lines_.assign(static_cast<size_t>(MAX_OBJECTS) *
+                              static_cast<size_t>(er_predelay_stride_), 0.f);
+    er_predelay_wpos_.fill(0);
+    for (int i = 0; i < MAX_OBJECTS; ++i) {
+        er_eq_hp_[static_cast<size_t>(i)].setHighPass(sample_rate, iae::kRoomEarlyClusterHpfHz);
+        er_eq_lp_[static_cast<size_t>(i)].setLowPass(sample_rate, iae::kRoomEarlyClusterLpfHz);
+    }
 
     // Per-object DSP chain (EQ → user delay → distance gain → HF rolloff → propagation delay → reverb send)
     // Heap-allocated to avoid stack overflow (each chain owns ~384 KB of delay buffers).
@@ -588,6 +601,32 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
         const float* dry = dry_scratch_[static_cast<size_t>(i)].data();
         const float  send = c.reverb_send;
 
+        // ⑥e-3b — predelay (per-object ring) then absorption EQ (HP→LP) on the
+        // send-scaled mono, once per object; all 6 image rings read this xdel.
+        // Faithful to RoomEngine.cpp:374-406. The single-branch ring wraps below
+        // (pr += stride / prw reset) are valid only while pds < stride; pds is
+        // clamped to er_predelay_max_-1 (< stride) here — a future ⑥e-4 OSC
+        // predelay-ms must keep that clamp (not clamp to stride) to stay valid.
+        float xdel[MAX_BLOCK];
+        {
+            const int   stride = er_predelay_stride_;
+            const int   pds = std::min(std::max(0, er_predelay_max_ - 1),
+                static_cast<int>(std::lround(iae::kRoomEarlyPredelayMs * 0.001 * sample_rate_)));
+            float* pline = er_predelay_lines_.data() +
+                           static_cast<size_t>(i) * static_cast<size_t>(stride);
+            int& prw = er_predelay_wpos_[static_cast<size_t>(i)];
+            iae::RoomBiquad& hp = er_eq_hp_[static_cast<size_t>(i)];
+            iae::RoomBiquad& lp = er_eq_lp_[static_cast<size_t>(i)];
+            for (int n = 0; n < num_frames; ++n) {
+                int pr = prw - pds; if (pr < 0) pr += stride;
+                float y = pline[static_cast<size_t>(pr)];
+                pline[static_cast<size_t>(prw)] = dry[static_cast<size_t>(n)] * send;
+                if (++prw >= stride) prw = 0;
+                y = hp.processSample(y);
+                xdel[n] = lp.processSample(y);
+            }
+        }
+
         for (int t = 0; t < iae::kNumFirstOrderImages; ++t) {
             if (!refl[t].valid) continue;
 
@@ -614,7 +653,7 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
             const float tapGain = refl[t].gain;
 
             for (int n = 0; n < num_frames; ++n) {
-                ring[static_cast<size_t>(wp)] = dry[static_cast<size_t>(n)] * send;
+                ring[static_cast<size_t>(wp)] = xdel[static_cast<size_t>(n)];
                 int rp = wp - delay; if (rp < 0) rp += kErRingLen;
                 const float s = ring[static_cast<size_t>(rp)] * tapGain;
                 if (++wp >= kErRingLen) wp = 0;
@@ -723,6 +762,13 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                     room_fdn_.reset();
                     std::fill(er_rings_.begin(), er_rings_.end(), 0.f);
                     for (auto& obj_w : er_write_pos_) obj_w.fill(0);
+                    // ⑥e-3b — clear early predelay lines + per-object EQ state.
+                    std::fill(er_predelay_lines_.begin(), er_predelay_lines_.end(), 0.f);
+                    er_predelay_wpos_.fill(0);
+                    for (int i = 0; i < MAX_OBJECTS; ++i) {
+                        er_eq_hp_[static_cast<size_t>(i)].reset();
+                        er_eq_lp_[static_cast<size_t>(i)].reset();
+                    }
                 }
                 break;
             }
