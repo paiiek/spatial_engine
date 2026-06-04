@@ -85,6 +85,12 @@ add_executable(test_convergence_max_speakers test_convergence_max_speakers.cpp)
 target_link_libraries(test_convergence_max_speakers PRIVATE spe_core)
 add_test(NAME convergence_max_speakers COMMAND test_convergence_max_speakers)
 
+# Dreamscape Convergence ⑥a — late-reverb FDN core (iae::RoomFdn): stability,
+# T60 ordering, HF damping, 8-line decorrelation, reset() determinism.
+add_executable(test_convergence_room_fdn test_convergence_room_fdn.cpp)
+target_link_libraries(test_convergence_room_fdn PRIVATE spe_core)
+add_test(NAME convergence_room_fdn COMMAND test_convergence_room_fdn)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE
