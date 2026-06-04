@@ -207,9 +207,20 @@
   - **스모크** `scripts/smoke_wfs.py`: 실제 바이너리, dense 24링, 소스 az±40 dist=4(링밖). **WFS 분산 wavefront 8스피커 vs VBAP 베이스라인 2**(WFS≠VBAP를 라이브로 입증), 좌우 소스 따라 lateralisation 반전, 콜드스타트 베이스라인 대비 xrun 추가 0. **PASS**.
   - **검증**: 전체 ctest **125/125 green WERROR=ON+RT_ASSERTS=ON**(124+신규1), 회귀 0. processBlock no-alloc(스택 std::array scratch + 사전할당 delays_/ramps_ 인덱싱 + RT-safe vbap_gain_into; S≤64 클램프) 정적확인. **code-reviewer APPROVE**(CRITICAL/HIGH 0; MEDIUM 2=둘 다 테스트/스모크 위생 → 즉시 반영: 블렌드경로 실행 단정 추가·±180° 주석 수정; LOW 3 비차단).
   - **⚠ 발견(중요·기록)**: `/obj/algo` OSC 와이어포맷은 `[seq,id,obj,algo]` **4-int**. CommandDecoder가 `,ii…` 메시지의 **앞 2 int를 seq/id 트랜잭션 헤더로 소비**(payload_int_offset=2). 기존 smoke_vap/smoke_mdap은 `[obj,algo]` 2-int만 보내 algo가 조용히 VBAP 디폴트로 폴백 → **그 스모크들은 사실상 VBAP만 렌더했고 right>left가 VBAP로도 성립해 spuriously PASS**. WFS 스모크는 VBAP 베이스라인과 active-count 비교로 알고 구분을 강제. → smoke_vap/smoke_mdap도 4-int로 고쳐야 진짜 VAP/MDAP 검증됨(후속).
-- **현재 안정 지점**: VAP + VBAP3D 고도 레이어링 + MDAP width + WFS 전모드 라이브 + 스모크 4종 + 전체 회귀 0 + WERROR=ON 125/125. 브랜치 `feat/dreamscape-convergence`.
-- **다음 증분(순서)**: ⑤ Phase 0.5 128 리프트 ⑥ 룸엔진(Shoebox/FDN N=8) ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 모니터 체인 ⑨ ADM 확장(부호/메시지/송신/행렬/50슬롯) ⑩ per-object EQ·딜레이. **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
+- 2026-06-04: **⑤ Phase 0.5 — 스피커 차원 64→128 리프트 — 프로토콜 전단계 검증 완료 ✅** (커밋 6a39e67)
+  - **단일 진실원천**: `Constants.h` `MAX_SPEAKERS`(매크로 `SPE_MAX_SPEAKERS`, 디폴트 64, 천장 128) — `MAX_OBJECTS` 패턴 정확 미러. cmake 캐시변수 `SPATIAL_ENGINE_MAX_SPEAKERS∈{64,128}`(top + core, PUBLIC on spe_util). bare 빌드 바이트동일.
+  - **리프트 범위**: 모든 스피커차원 스크래치가 `MAX_SPEAKERS` 파생 — RenderingAlgorithm AlgoScratch.gains; VBAP/VAP/DBAP ramps_ + per-block 스택버퍼(final_gains/gain_acc/g_v/gains); VAP spk_pos/dir_ported_; WFSRenderer::MAX_SPEAKERS; AAR kMaxVbapSpeakers; SpeakerLayout kMaxYamlChannel. ported `kPrototypeChannels=128`은 안전천장이라 무변경. **객체/블록/캐시/버전 상수는 의도적 불변**(over-reach 0 — 리뷰 grep 확인).
+  - **부수(리뷰 MEDIUM 반영)**: DBAPRenderer prepareToPlay에 VBAP/VAP와 동일한 assert+clamp 추가(유일하게 가드 없던 렌더러; ramps_ 리셋 루프가 >cap에서 OOB였음. LayoutLoader가 YAML은 이미 바운드하나 프로그램적 호출자 방어).
+  - **단위** `test_convergence_max_speakers`(cap-agnostic, #if 없음, 양 빌드 통과): 4 렌더러 모두 N==MAX_SPEAKERS 리그 수용, 고인덱스 스피커(5N/8 → 128빌드서 **인덱스 80**) 렌더 — VBAP/DBAP/WFS는 정확히 그 스피커가 최대(argmax=kTarget, near/total=1.0), VAP는 전 128채널 버스 exercise(유한·비묵음). **PASS**.
+  - **검증**: **양 빌드 ctest 126/126 green WERROR=ON+RT_ASSERTS=ON** — 디폴트 64 빌드 + `-DSPATIAL_ENGINE_MAX_SPEAKERS=128` 빌드 모두. 회귀 0, no-alloc 센티넬 green.
+  - **스모크** `scripts/smoke_max_speakers.py`(실제 바이너리, build-128): 100스피커(>64) 엔진이 100채널 버스 렌더 + VBAP 소스를 **채널 인덱스 70(>64)**로 라우팅. xrun은 채널수 무관(24ch=0, 100ch=0; smoke의 2 xruns는 OSC 버스트/콜드스타트, 차원 무관). **PASS**.
+  - **검토**: **code-reviewer APPROVE**(CRITICAL/HIGH 0; MEDIUM 1=DBAP 가드 → 즉시 반영; LOW 3 중 stale 주석 1건 반영, VAP under-assert·cmake DRY 비차단). 반영 후 재빌드 양 빌드 126/126 재확인.
+  - **⚠ 발견(기록·후속)**: VAP가 합성 돔(2링)에서 고도(el=+35°) 소스를 하부링 스피커로 오라우팅(argmax 하부) — 버퍼 리프트와 무관(VAP 패닝 정확성, convergence_vap_renderer가 별도 검증). 64 빌드(=개정전 동치)서도 동일 → 리프트가 도입한 결함 아님. VAP 고도 라우팅 정합성 별도 조사 필요.
+- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS 라이브 + **128 스피커 리프트** + 스모크 5종 + 전체 회귀 0 + WERROR=ON **양 빌드(64/128) 126/126**. 브랜치 `feat/dreamscape-convergence`.
+- **다음 증분(순서)**: ⑥ 룸엔진(Shoebox/FDN N=8) ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 모니터 체인 ⑨ ADM 확장(부호/메시지/송신/행렬/50슬롯) ⑩ per-object EQ·딜레이. **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
 - **후속 메모(증분 중 발견)**:
+  - **(⑤ 발견) VAP 고도 라우팅 정합성 조사** — VAP가 2링 돔에서 +el 소스를 하부링으로 오라우팅. ported `computeVolumetricAmplitudePanning`의 고도/프레임 처리 또는 mmhoa→ported 어댑터 조합 의심. ⑧(바이노럴/헤드트래킹) 또는 별도 위생 증분서 추적.
+  - (리뷰 LOW) cmake `{64,128}` 검증이 top+core 중복 → `spe_validate_pow2_cap()` 함수화 가능(MAX_OBJECTS도 동일 패턴이라 일관·비차단).
   - **(④ 발견) smoke_vap.py / smoke_mdap.py를 `/obj/algo` 4-int(`[seq,id,obj,algo]`)로 수정** — 현재 2-int는 algo가 VBAP로 폴백돼 VAP/MDAP를 실제로 검증하지 못함(right>left가 VBAP로도 성립해 spurious PASS). MDAP는 width 경로라 일부 유효하나 algo 자체는 미검증. WFS no-alloc 센티넬(아래)과 함께 후속.
   - no-alloc 센티넬(`test_p1_rt_no_alloc`)에 비정상 고도/width `/obj/move`+`/adm/obj/N/width` 케이스 추가 → 신규 VBAP3D 마스크·MDAP 빌드 경로를 `rt_alloc_violations` 센티넬로 직접 커버(현재는 스모크 xrun + 정적분석으로만 보증). WFS processBlock 경로도 동일 센티넬에 추가.
   - (리뷰 LOW) VBAPRenderer width 디스패치 2블록(주/폴백) 중복·매직넘버(1e-4f, 180/π) → private 헬퍼+명명 상수로 정리 가능(비차단; 폴백은 구조상 도달 불가).
