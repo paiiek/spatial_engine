@@ -222,8 +222,16 @@
   - **단위** `test_convergence_room_fdn`: 안정·유한성, 감쇠(eLate≪eEarly), **T60 순서(long/short 후기에너지비 ~1.2e7)**, HF damping(bright2.0 vs damped0.011), 8라인 디코릴, reset() 비트정확(diff=0). **양 빌드 ctest 127/127 green WERROR+RT_ASSERTS, 회귀0**. process() RT-safe(alloc는 prepare()만).
   - **검토**: **code-reviewer APPROVE** — DSP 무편차(clamp 인자순서·wrap off-by-one·상수 모두 일치). LOW 2(allpass 로컬 wrap 람다 중복=출처충실, params 디폴트=SpatialAudioPull 값 일치 확인) 비차단.
   - **다음(⑥b)**: RoomFdn 8라인 탭 → cube-corner VBAP(네이티브 `vbap_gain_into` 재사용, kLatePerLineGain=0.068) + SpatialEngine 룸버스 결선(per-object wet send → late bus → finishBlock 패턴 → outputBus 합산). 그 후 실바이너리 스모크. 레퍼런스 RoomEngine.cpp:520-592(late 방향바이어스/cube corner VBAP), 729-740(per-line 출력), AudioEngine.cpp:842/908(결선점). cluster+Shoebox early는 ⑥c.
-- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS 라이브 + **128 스피커 리프트** + **FDN 코어(⑥a)** + 전체 회귀 0 + WERROR=ON **양 빌드(64/128) 127/127**. 브랜치 `feat/dreamscape-convergence`.
-- **다음 증분(순서)**: **⑥b FDN 공간분배+라이브결선+스모크** → ⑥c Shoebox early+cluster → ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 ⑨ ADM 확장 ⑩ per-object EQ·딜레이. **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
+- 2026-06-04: **⑥b 룸엔진 — 공간 후기 리버브 라이브 결선 완료 ✅** (커밋 aea0f11)
+  - **결선**: OSC `/reverb/select ,s "room"`(active_reverb_==2) → 모노 reverb send이 `iae::RoomFdn` 구동 → 8 라인 탭을 cube-corner VBAP 게인(prepareToPlay서 사전계산: 8코너 {±1,±1,±1}/√3 mmhoa프레임 → az=atan2(x,z),el=asin(y) → 네이티브 `vbap_gain_into`)으로 스피커버스에 fan-out. kLatePerLineGain=0.068(레퍼런스).
+  - **RT**: 게인 컨트롤스레드 계산·room_ready_ 가드로 오디오스레드 RT-safe 읽기. room_fdn_.process no-alloc, room_lines_ prepareToPlay서 kOrder*max_block 사전할당. room 모드선 모노 fdn_/ir 스킵 + uniform else 우회 → 단일 분배경로(모노 누수/중복 없음).
+  - **범위**: cube-corner 고정방향만. 소스방향 바이어스(opp)+uniform-diffuse 블렌드(RoomEngine.cpp:543-583)·early reflections·cluster는 ⑥c. → 공간적이나 아직 소스 비상관 후기장.
+  - **단위** `test_convergence_room_spatial`: 8코너가 3D돔서 7/8 distinct 스피커, +y→상부링/−y→하부링(고도 정상). **양 빌드 ctest 128/128 green WERROR+RT_ASSERTS, 회귀0, no-alloc green**.
+  - **스모크** `scripts/smoke_room_reverb.py`(실바이너리): 하부 dry 객체는 상부링 에너지 **0**, room 모드는 FDN 후기를 **상부링 8스피커 전체(3.3e8)**로 fan(dry가 못 만드는 에너지), xruns=0. ⚠ 측정주의: dry가 시끄러워 per-spk diff는 run-jitter에 가려짐 → **dry 미도달 반구(상부링) 격리**로 깨끗이 검증.
+  - **검토**: **code-reviewer APPROVE**(RT no-alloc·in-bounds·단일분배·cube수학 왕복 정확). MEDIUM 2(⑥c 이관): 오디오패스 단위커버리지, mode-switch시 room_fdn_.reset()(stale-tail 트랜지언트). LOW 3(명명상수/include순서) 비차단.
+- **현재 안정 지점**: VAP + VBAP3D + MDAP + WFS + **128 리프트** + **룸 후기 리버브 라이브(⑥a/⑥b)** + 스모크 6종 + 회귀 0 + WERROR=ON **양 빌드(64/128) 128/128**. 브랜치 `feat/dreamscape-convergence`.
+- **다음 증분(순서)**: **⑥c Shoebox early reflections(image-source 6벽)+cluster+소스방향 바이어스/diffuse 블렌드** → ⑦ 디코릴레이션 ⑧ 헤드트래킹/바이노럴 ⑨ ADM 확장 ⑩ per-object EQ·딜레이.
+  - ⑥c 참조: RoomEngine.cpp:20-39(firstOrderImage 6벽), 52-78(earlySpreadDirection), 312-504(processObjectWet: predelay/absorption EQ/per-reflection VBAP+diffuse), 595-647(cluster feedforward taps), 113-165(blendVbapWithUniformDiffuse), 543-583(late opp 바이어스). 파라미터: SpatialAudioPull roomEarly*/roomCluster*/roomHalfExtents. + room_fdn_.reset() on mode switch(⑥b MEDIUM). **③' (분리·보류)**: ported `computeHorizontalVbap/Horizontal·SpatialMdap` std::vector→고정버퍼 no-alloc(ported-프레임 렌더러 채택 시 필요) — DoD §9 충족용.
 - **후속 메모(증분 중 발견)**:
   - **(⑤ 발견) VAP 고도 라우팅 정합성 조사** — VAP가 2링 돔에서 +el 소스를 하부링으로 오라우팅. ported `computeVolumetricAmplitudePanning`의 고도/프레임 처리 또는 mmhoa→ported 어댑터 조합 의심. ⑧(바이노럴/헤드트래킹) 또는 별도 위생 증분서 추적.
   - (리뷰 LOW) cmake `{64,128}` 검증이 top+core 중복 → `spe_validate_pow2_cap()` 함수화 가능(MAX_OBJECTS도 동일 패턴이라 일관·비차단).
