@@ -80,7 +80,7 @@ enum class CommandTag : uint8_t {
     TransportStop = 0x51, // /transport/stop
 
     // Reverb engine select
-    ReverbSelect  = 0x52, // /reverb/select ,s "fdn"|"ir"
+    ReverbSelect  = 0x52, // /reverb/select ,s "fdn"|"ir"|"room"
 
     // Per-output-channel gain trim and limiter threshold
     OutputGain    = 0x53, // /output/{ch}/gain  ,f dB
@@ -235,7 +235,7 @@ struct PayloadTransportPlay {
 struct PayloadTransportStop {};
 
 struct PayloadReverbSelect {
-    uint8_t which = 0; // 0 = fdn, 1 = ir
+    uint8_t which = 0; // 0 = fdn, 1 = ir, 2 = room (spatial late FDN)
 };
 
 // Per-object DSP parameter setter.

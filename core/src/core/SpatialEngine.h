@@ -20,6 +20,7 @@
 #include "render/WFSRenderer.h"
 #include "reverb/FdnReverb.h"
 #include "reverb/ReverbEngine.h"
+#include "render/ported/RoomFdn.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/CpuMeter.h"
@@ -383,7 +384,17 @@ private:
     // FDN reverb (mono send → mono wet) and binaural side-output (mono → L/R).
     reverb::FdnReverb                        fdn_;
     std::unique_ptr<reverb::IReverbEngine>   ir_reverb_;
-    std::atomic<int>                         active_reverb_{0}; // 0=FDN, 1=IR
+    std::atomic<int>                         active_reverb_{0}; // 0=FDN, 1=IR, 2=Room
+
+    // ⑥b Dreamscape room engine — spatial late reverb. The mono reverb send is
+    // run through the ported 8-line FDN; each line tap is fanned out across the
+    // speaker bus via a precomputed cube-corner VBAP gain vector (the early-
+    // reflection / cluster stages + source-direction bias are increment ⑥c).
+    iae::RoomFdn                                              room_fdn_;
+    std::array<std::array<float, spe::MAX_SPEAKERS>,
+               iae::RoomFdn::kOrder>                          fdn_line_gains_{};
+    std::vector<float>                                        room_lines_;   // [kOrder * maxBlock]
+    bool                                                      room_ready_ = false;
     output::BinauralMonitor       binaural_;
     bool                          binaural_ok_ = false;
 

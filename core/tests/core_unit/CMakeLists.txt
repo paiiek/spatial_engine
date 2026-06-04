@@ -881,3 +881,10 @@ target_compile_definitions(test_p_binaural_dataset_itd_oracle PRIVATE
     SPE_CATALOG_PATH="${SPE_CATALOG_PATH}")
 add_test(NAME binaural_dataset_itd_oracle
     COMMAND test_p_binaural_dataset_itd_oracle)
+
+# Dreamscape Convergence ⑥b — spatial room reverb fan-out: the 8 FDN line taps
+# panned to the 8 cube-corner directions via native analytic VBAP must spread to
+# distinct speakers (+y -> upper ring, -y -> lower), not collapse onto one.
+add_executable(test_convergence_room_spatial test_convergence_room_spatial.cpp)
+target_link_libraries(test_convergence_room_spatial PRIVATE spe_core)
+add_test(NAME convergence_room_spatial COMMAND test_convergence_room_spatial)

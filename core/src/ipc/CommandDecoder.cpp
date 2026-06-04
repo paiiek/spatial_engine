@@ -543,7 +543,10 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         if (args.n_str > 0) {
             cmd.tag = CommandTag::ReverbSelect;
             PayloadReverbSelect p;
-            p.which = (args.strings[0] == "ir") ? 1u : 0u;
+            // 0 = fdn (mono), 1 = ir (mono), 2 = room (spatial late FDN).
+            p.which = (args.strings[0] == "ir")   ? 1u
+                    : (args.strings[0] == "room") ? 2u
+                    : 0u;
             cmd.payload = p;
         } else {
             makeUnknown();

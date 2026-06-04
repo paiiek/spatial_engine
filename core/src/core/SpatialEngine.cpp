@@ -3,6 +3,7 @@
 #include "ambi/AmbisonicEncoder.h"
 #include "core/SpatialEngine.h"
 #include "geometry/LayoutLoader.h"
+#include "render/AlgorithmAnalyticReference.h"
 #include "reverb/ReverbEngine.h"
 #include "util/RtAssertNoAlloc.h"
 
@@ -422,6 +423,31 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         // Size > 1 avoids OOB if a /noise/{ch}/* command arrives before layout.
         noise_chans_.assign(static_cast<size_t>(std::max(n_spk, 1)), NoiseChan{});
 
+        // ⑥b — precompute the 8 cube-corner VBAP gain vectors for the spatial
+        // room engine's late FDN lines. Each corner {±1,±1,±1}/√3 (mmhoa frame:
+        // x=right, y=up, z=front) becomes (az,el) and routes through the native
+        // analytic VBAP (same elevation-aware core the renderers use). Computed
+        // on the control thread; read RT-safe in audioBlock under room_ready_.
+        {
+            static constexpr float kCorner[iae::RoomFdn::kOrder][3] = {
+                { 1.f, 1.f, 1.f}, { 1.f, 1.f,-1.f}, { 1.f,-1.f, 1.f}, { 1.f,-1.f,-1.f},
+                {-1.f, 1.f, 1.f}, {-1.f, 1.f,-1.f}, {-1.f,-1.f, 1.f}, {-1.f,-1.f,-1.f},
+            };
+            const float inv = 1.f / std::sqrt(3.f);
+            for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
+                const float x = kCorner[k][0] * inv;
+                const float y = kCorner[k][1] * inv;
+                const float z = kCorner[k][2] * inv;
+                const float az = std::atan2(x, z);
+                const float el = std::asin(std::clamp(y, -1.f, 1.f));
+                fdn_line_gains_[static_cast<size_t>(k)].fill(0.f);
+                render::AlgorithmAnalyticReference::vbap_gain_into(
+                    layout_, az, el,
+                    fdn_line_gains_[static_cast<size_t>(k)].data(), spe::MAX_SPEAKERS);
+            }
+            room_ready_ = true;
+        }
+
         // Per-speaker time-alignment: delay lines + gain scalars
         spk_delays_.resize(static_cast<size_t>(n_spk));
         spk_gain_lin_.resize(static_cast<size_t>(n_spk));
@@ -462,6 +488,12 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     ir_reverb_ = reverb::createReverbEngine(ir_cfg);
     reverb_send_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
     reverb_wet_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
+    // ⑥b spatial room engine — late FDN fed by the mono reverb send; per-line
+    // taps fanned out to cube-corner directions (gains computed below once the
+    // layout is known). RoomFdn defaults match the reference mid-range.
+    room_fdn_.prepare(sample_rate, max_block_size);
+    room_lines_.assign(static_cast<size_t>(iae::RoomFdn::kOrder) *
+                       static_cast<size_t>(max_block_size), 0.f);
 
     // Per-object DSP chain (EQ → user delay → distance gain → HF rolloff → propagation delay → reverb send)
     // Heap-allocated to avoid stack overflow (each chain owns ~384 KB of delay buffers).
@@ -760,6 +792,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         const int rev = active_reverb_.load(std::memory_order_relaxed);
         if (rev == 1 && ir_reverb_) {
             ir_reverb_->process(reverb_wet_buf_.data(), block.num_frames);
+        } else if (rev == 2) {
+            // Room (spatial): the late FDN runs in the spatial-distribution stage
+            // below, reading the dry send (reverb_send_buf_) directly. The mono
+            // reverb_wet_buf_ is left untouched (not distributed for this mode).
         } else {
             fdn_.process(reverb_wet_buf_.data(), block.num_frames);
         }
@@ -826,12 +862,33 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 vap_scratch_[static_cast<size_t>(idx)];
         }
 
-        // Distribute reverb wet uniformly across all speakers (energy-preserving)
-        const float reverb_per_spk = 1.0f / std::sqrt(static_cast<float>(n_spk));
-        for (int n = 0; n < block.num_frames; ++n) {
-            const float wet = reverb_wet_buf_[static_cast<size_t>(n)] * reverb_per_spk;
-            for (int s = 0; s < n_spk; ++s) {
-                mix_buf_[static_cast<size_t>(n * n_spk + s)] += wet;
+        const int rev_dist = active_reverb_.load(std::memory_order_relaxed);
+        if (rev_dist == 2 && room_ready_) {
+            // ⑥b Room (spatial): run the late FDN on the mono send, then fan each
+            // of the 8 line taps across the bus via its cube-corner VBAP gains.
+            // kLatePerLineGain matches the reference (RoomEngine.cpp:691).
+            constexpr float kLatePerLineGain = 0.068f;
+            room_fdn_.process(reverb_send_buf_.data(), block.num_frames,
+                              room_lines_.data());
+            for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
+                const float* line =
+                    room_lines_.data() + static_cast<size_t>(k) * block.num_frames;
+                const float* g = fdn_line_gains_[static_cast<size_t>(k)].data();
+                for (int n = 0; n < block.num_frames; ++n) {
+                    const float t = line[n] * kLatePerLineGain;
+                    if (std::abs(t) < 1.0e-9f) continue;
+                    for (int s = 0; s < n_spk; ++s)
+                        mix_buf_[static_cast<size_t>(n * n_spk + s)] += t * g[s];
+                }
+            }
+        } else {
+            // Distribute reverb wet uniformly across all speakers (energy-preserving)
+            const float reverb_per_spk = 1.0f / std::sqrt(static_cast<float>(n_spk));
+            for (int n = 0; n < block.num_frames; ++n) {
+                const float wet = reverb_wet_buf_[static_cast<size_t>(n)] * reverb_per_spk;
+                for (int s = 0; s < n_spk; ++s) {
+                    mix_buf_[static_cast<size_t>(n * n_spk + s)] += wet;
+                }
             }
         }
 
