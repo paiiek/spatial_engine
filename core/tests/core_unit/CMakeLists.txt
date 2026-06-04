@@ -97,6 +97,13 @@ add_executable(test_convergence_room_early test_convergence_room_early.cpp)
 target_link_libraries(test_convergence_room_early PRIVATE spe_core)
 add_test(NAME convergence_room_early COMMAND test_convergence_room_early)
 
+# Dreamscape Convergence ⑥e-2 — cluster diffusion core (iae::RoomCluster):
+# exact 6-tap feedforward IR structure (1:2:3:3:2:1, geometric offsets),
+# diffusion/volume scaling, reset() determinism.
+add_executable(test_convergence_room_cluster test_convergence_room_cluster.cpp)
+target_link_libraries(test_convergence_room_cluster PRIVATE spe_core)
+add_test(NAME convergence_room_cluster COMMAND test_convergence_room_cluster)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE
