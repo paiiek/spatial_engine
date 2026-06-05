@@ -220,6 +220,25 @@ int main() {
         CHECK(absDelta > 0.05 * base, "(cluster) /room/cluster/send measurably moves the field");
     }
 
+    // ⑥f late distance gain: /room/late/gain scales the dedicated room late bus.
+    // High close/far dB → much more late-FDN energy than a deep cut. (Cluster +
+    // early bypass the late bus, so this is a partial-but-strong upper-ring move.)
+    {
+        auto withLateGain = [](float db) {
+            return [db](spe::core::SpatialEngine& e) {
+                { spe::ipc::PayloadRoomCtl p; p.op = spe::ipc::PayloadRoomCtl::Op::Enable; p.enable = true; send(e, p); }
+                { spe::ipc::PayloadRoomCtl p; p.op = spe::ipc::PayloadRoomCtl::Op::LateGain;
+                  p.late_gain_close_db = db; p.late_gain_far_db = db; send(e, p); }
+            };
+        };
+        const double upLoud = upperSum(runPerSpk(N, withLateGain(6.f)));
+        const double upQuiet = upperSum(runPerSpk(N, withLateGain(-40.f)));
+        std::printf("[room-ctl] /room/late/gain loud(+6)=%.4g  quiet(-40)=%.4g  ratio=%.1f\n",
+                    upLoud, upQuiet, upLoud / (upQuiet + 1e-30));
+        CHECK(upQuiet > 0.0, "(late/gain) cluster+early keep the upper ring alive at -40 dB late");
+        CHECK(upLoud > 1.5 * upQuiet, "(late/gain) /room/late/gain +6 dB lifts the late FDN tail vs -40 dB");
+    }
+
     // enable ALIAS (the documented contract): /room/enable 1 must be behaviourally
     // identical to /reverb/select "room", and /room/enable 0 to /reverb/select
     // "fdn". Both paths are fully deterministic, so the per-speaker fields match

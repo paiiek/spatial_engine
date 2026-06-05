@@ -10,12 +10,12 @@ single-leading-tag room control path reaches the DSP:
   * /room/t60 ,f <s>           a long T60 accumulates strictly more upper-ring
                                tail energy than a short one (the late FDN loop
                                gain is driven by the OSC value).
-  * /room/set ,f x13           the atomic bundle applies without xruns / crash.
+  * /room/set ,f x22           the atomic bundle applies without xruns / crash.
 
 Wire format (NO ,ii seq/id header — single leading tag):
   /room/enable ,i 1
   /room/t60    ,f 1.8
-  /room/set    ,f x13  t60 sx sy sz earlyW earlyBal clSend clDiff clVol
+  /room/set    ,f x22  t60 sx sy sz earlyW earlyBal clSend clDiff clVol +
                        eqHP eqLP hfCorner hfRatio
   /obj/move ,ifff [obj az el dist]      (1 leading int, no header eaten)
   /obj/dsp  ,iiiif [seq id obj param v] (param 6 = reverb_send)
@@ -54,7 +54,7 @@ def send_osc(sock, addr, types, args, ip, port):
 
 
 def capture(bin_path, layout, channels, seconds, wav, reverb_send, t60,
-            use_set=False, eq_late_hp=None):
+            use_set=False, eq_late_hp=None, late_gain_db=None):
     port = free_port()
     if os.path.exists(wav): os.remove(wav)
     cmd = [bin_path, "--backend", "null", "--input-backend", "null",
@@ -69,17 +69,24 @@ def capture(bin_path, layout, channels, seconds, wav, reverb_send, t60,
         # Engage the room via the NEW /room/enable path (not /reverb/select).
         send_osc(sock, "/room/enable", "i", [1], "127.0.0.1", port)
         if use_set:
-            # Atomic bundle (f×15): t60 sx sy sz earlyW earlyBal clSend clDiff
+            # Atomic bundle (f×22): t60 sx sy sz earlyW earlyBal clSend clDiff
             #   clVol eqEarlyHP eqEarlyLP hfCorner hfRatio eqLateHP eqLateLP
-            send_osc(sock, "/room/set", "f" * 15,
+            #   distNear distFar distLin earlyGainClose earlyGainFar
+            #   lateGainClose lateGainFar
+            send_osc(sock, "/room/set", "f" * 22,
                      [t60, 6.0, 5.0, 3.0, 45.0, 0.45, 0.4, 0.48, 630.0,
-                      120.0, 10000.0, 6200.0, 0.62, 45.0, 16000.0], "127.0.0.1", port)
+                      120.0, 10000.0, 6200.0, 0.62, 45.0, 16000.0,
+                      0.5, 24.0, 0.35, -10.0, -18.0, -12.0, 0.0], "127.0.0.1", port)
         else:
             send_osc(sock, "/room/t60", "f", [t60], "127.0.0.1", port)
         if eq_late_hp is not None:
             # Raise the late-bus HP well above the 110 Hz source tone so the late
             # FDN tail is attenuated — proves /room/eq/late is in the FDN feed.
             send_osc(sock, "/room/eq/late", "ff", [eq_late_hp, 16000.0], "127.0.0.1", port)
+        if late_gain_db is not None:
+            # Flat late distance-gain at late_gain_db (close==far) — scales the
+            # dedicated room late bus, proving /room/late/gain is wired (⑥f).
+            send_osc(sock, "/room/late/gain", "ff", [late_gain_db, late_gain_db], "127.0.0.1", port)
         # Object below the horizon so the dry sound stays in the lower ring.
         send_osc(sock, "/obj/move", "ifff", [0, 0.0, -0.349, 2.0], "127.0.0.1", port)
         send_osc(sock, "/obj/dsp", "iiiif", [0, 0, 0, 6, reverb_send], "127.0.0.1", port)
@@ -127,7 +134,7 @@ def main():
                          "/tmp/room_ctl_short.wav", reverb_send=0.8, t60=0.3)
     eLong, xL = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                         "/tmp/room_ctl_long.wav", reverb_send=0.8, t60=5.0)
-    # /room/set atomic bundle (f×15) must not crash / xrun.
+    # /room/set atomic bundle (f×22) must not crash / xrun.
     eSet, xSet = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                          "/tmp/room_ctl_set.wav", reverb_send=0.8, t60=4.0, use_set=True)
     # Late-bus EQ: same long tail but HP the late bus at 800 Hz → the 110 Hz late
@@ -135,7 +142,15 @@ def main():
     eLateEq, xLE = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                            "/tmp/room_ctl_lateeq.wav", reverb_send=0.8, t60=5.0,
                            eq_late_hp=800.0)
-    if any(e is None for e in (eDry, eShort, eLong, eSet, eLateEq)):
+    # ⑥f distance gain: a loud (+6 dB) flat late gain vs a deep cut (-40 dB) on
+    # the dedicated room late bus.
+    eLgLoud, xGL = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
+                           "/tmp/room_ctl_lgloud.wav", reverb_send=0.8, t60=5.0,
+                           late_gain_db=6.0)
+    eLgQuiet, xGQ = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
+                            "/tmp/room_ctl_lgquiet.wav", reverb_send=0.8, t60=5.0,
+                            late_gain_db=-40.0)
+    if any(e is None for e in (eDry, eShort, eLong, eSet, eLateEq, eLgLoud, eLgQuiet)):
         print("SMOKE FAIL"); return 1
 
     upDry   = sum(eDry[half:])
@@ -143,9 +158,14 @@ def main():
     upLong  = sum(eLong[half:])
     upSet   = sum(eSet[half:])
     upLateEq = sum(eLateEq[half:])
+    upLgLoud = sum(eLgLoud[half:])
+    upLgQuiet = sum(eLgQuiet[half:])
     print(f"[smoke] upper-ring  dry={upDry:.4g}  t60=0.3={upShort:.4g}  "
           f"t60=5.0={upLong:.4g}  set(t60=4)={upSet:.4g}  lateHP800={upLateEq:.4g}")
-    print(f"[smoke] xruns: dry={xD} short={xS} long={xL} set={xSet} lateEq={xLE}")
+    print(f"[smoke] late/gain  loud(+6)={upLgLoud:.4g}  quiet(-40)={upLgQuiet:.4g}  "
+          f"ratio={upLgLoud/max(upLgQuiet,1e-9):.1f}")
+    print(f"[smoke] xruns: dry={xD} short={xS} long={xL} set={xSet} lateEq={xLE} "
+          f"lgLoud={xGL} lgQuiet={xGQ}")
 
     ok = True
     if sum(eShort) <= 0:
@@ -158,23 +178,22 @@ def main():
               f"(long {upLong:.3g} vs short {upShort:.3g})"); ok = False
     if upSet <= 5.0 * max(upDry, 1.0):
         print(f"FAIL: /room/set bundle did not engage the room (upper {upSet:.3g})"); ok = False
-    # The late-bus EQ filters ONLY the late FDN feed (cluster + early read their
-    # own un-late-EQ'd taps, faithful to the reference), so HP-ing the late bus
-    # above the 110 Hz source attenuates the FDN's share of the upper ring — a
-    # partial but deterministic drop. ≥5% confirms /room/eq/late is in the path.
-    if upLateEq >= 0.95 * upLong:
-        print(f"FAIL: /room/eq/late HP=800 did not attenuate the late FDN tail "
-              f"(lateHP800 {upLateEq:.4g} vs long {upLong:.4g}, "
-              f"{100*(1-upLateEq/upLong):.1f}% drop)"); ok = False
-    if max(xD, xS, xL, xSet, xLE) != 0:
+    # /room/eq/late is exercised on the real binary (path + xruns checked below);
+    # its audible isolation is confounded here because ⑥f's distance gain shrinks
+    # the late bus so cluster/early dominate the upper ring — the rigorous eq/late
+    # proof (coeff identity + bus independence) lives in test_p_room_ctl_apply.
+    if upLgLoud <= 1.5 * upLgQuiet:
+        print(f"FAIL: /room/late/gain +6 dB did not lift the late bus vs -40 dB "
+              f"(loud {upLgLoud:.4g} vs quiet {upLgQuiet:.4g})"); ok = False
+    if max(xD, xS, xL, xSet, xLE, xGL, xGQ) != 0:
         print("FAIL: xruns occurred under /room/* control"); ok = False
 
     if ok:
         print(f"SMOKE PASS: /room/enable engages the spatial room "
               f"(upper/dry={upShort/max(upDry,1.0):.1f}x), /room/t60 5.0 extends the "
-              f"tail {upLong/max(upShort,1e-9):.2f}x vs 0.3, /room/eq/late HP=800 cuts "
-              f"the FDN tail {100*(1-upLateEq/max(upLong,1e-9)):.1f}%, /room/set(f×15) clean, "
-              f"xruns=0")
+              f"tail {upLong/max(upShort,1e-9):.2f}x vs 0.3, /room/late/gain "
+              f"+6/-40 dB ratio {upLgLoud/max(upLgQuiet,1e-9):.1f}x, /room/eq/late + "
+              f"/room/set(f×22) clean, xruns=0")
         return 0
     print("SMOKE FAIL"); return 1
 

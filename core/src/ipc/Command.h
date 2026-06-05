@@ -87,7 +87,7 @@ enum class CommandTag : uint8_t {
     OutputLimit   = 0x54, // /output/{ch}/limit ,f dB threshold
 
     // Dreamscape room engine OSC control (⑥e-4). One tag, op-selected payload.
-    // Single-leading-tag wire format (,i / ,f / ,ff / ,fff / ,f×13) — NO ,ii
+    // Single-leading-tag wire format (,i / ,f / ,ff / ,fff / ,f×22) — NO ,ii
     // seq/id header, so the decoder's payload_int_offset trap never fires.
     RoomCtl       = 0x55, // /room/* — enable | set (atomic bundle) | per-param
 
@@ -251,7 +251,7 @@ struct PayloadReverbSelect {
 //
 // Address → op mapping (single-leading-tag wire format, no ,ii header):
 //   /room/enable          ,i      Enable            (enable)
-//   /room/set             ,f×13   SetAll            (all 13 floats below, in order)
+//   /room/set             ,f×22   SetAll            (full bundle; see SetAll order note)
 //   /room/t60             ,f      T60               (t60)
 //   /room/size            ,fff    Size              (sx, sy, sz)
 //   /room/early/width     ,f      EarlyWidth        (early_width_deg)
@@ -262,7 +262,11 @@ struct PayloadReverbSelect {
 //   /room/eq/early        ,ff     EqEarly           (eq_early_hp, eq_early_lp) — LOCKSTEP
 //   /room/eq/late         ,ff     EqLate            (eq_late_hp, eq_late_lp) — late bus
 //   /room/late/hf         ,ff     LateHf            (late_hf_corner_hz, late_hf_ratio01)
-// SetAll bundle order is f×15: the 13 below + eq_late_hp + eq_late_lp (appended).
+//   /room/distance        ,fff    Distance          (dist_near_m, dist_far_m, dist_linearity01)
+//   /room/early/gain      ,ff     EarlyGain         (early_gain_close_db, early_gain_far_db)
+//   /room/late/gain       ,ff     LateGain          (late_gain_close_db, late_gain_far_db)
+// SetAll bundle order is f×22: the 13 base + eq_late_hp/lp (15) + dist_near/far/
+// linearity + early_gain_close/far + late_gain_close/far (22), all appended.
 struct PayloadRoomCtl {
     enum class Op : uint8_t {
         Enable           = 0,
@@ -277,6 +281,9 @@ struct PayloadRoomCtl {
         EqEarly          = 9,  // recoeffs cluster-bus EQ + all per-object early EQ in lockstep
         LateHf           = 10,
         EqLate           = 11, // late-bus absorption EQ corners (separate from early/cluster)
+        Distance         = 12, // distance-gain window: near / far / linearity
+        EarlyGain        = 13, // early-tap close/far dB along the distance curve
+        LateGain         = 14, // late-send close/far dB along the distance curve
     };
     Op    op = Op::Enable;
     bool  enable = false;
@@ -296,6 +303,13 @@ struct PayloadRoomCtl {
     float late_hf_ratio01    = 0.62f;    // RoomFdn hfDecayRatio01
     float eq_late_hp         = 45.f;     // late-bus absorption HP corner (RoomLateHpfHz)
     float eq_late_lp         = 16000.f;  // late-bus absorption LP corner (RoomLateLpfHz)
+    float dist_near_m        = 0.5f;     // distance-gain window near edge (m)
+    float dist_far_m         = 24.f;     // distance-gain window far edge (m)
+    float dist_linearity01   = 0.35f;    // curve linearity (1=linear, 0=cubic)
+    float early_gain_close_db= -10.f;    // early tap gain at near (dB)
+    float early_gain_far_db  = -18.f;    // early tap gain at far (dB)
+    float late_gain_close_db = -12.f;    // late send gain at near (dB)
+    float late_gain_far_db   = 0.f;      // late send gain at far (dB)
 };
 
 // Per-object DSP parameter setter.

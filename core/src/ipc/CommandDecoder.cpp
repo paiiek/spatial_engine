@@ -566,9 +566,9 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.op = Op::Enable;
             p.enable = (getInt(0) != 0);
         } else if (addr == "/room/set") {
-            // Atomic bundle: require all 15 floats; a partial /room/set would
+            // Atomic bundle: require all 22 floats; a partial /room/set would
             // silently zero unspecified params, so reject it instead.
-            if (args.n_float >= 15) {
+            if (args.n_float >= 22) {
                 p.op = Op::SetAll;
                 p.t60                 = getFloat(0);
                 p.sx                  = getFloat(1);
@@ -585,6 +585,13 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
                 p.late_hf_ratio01     = getFloat(12);
                 p.eq_late_hp          = getFloat(13);
                 p.eq_late_lp          = getFloat(14);
+                p.dist_near_m         = getFloat(15);
+                p.dist_far_m          = getFloat(16);
+                p.dist_linearity01    = getFloat(17);
+                p.early_gain_close_db = getFloat(18);
+                p.early_gain_far_db   = getFloat(19);
+                p.late_gain_close_db  = getFloat(20);
+                p.late_gain_far_db    = getFloat(21);
             } else {
                 ok = false;
             }
@@ -608,6 +615,13 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.op = Op::EqLate; p.eq_late_hp = getFloat(0); p.eq_late_lp = getFloat(1);
         } else if (addr == "/room/late/hf") {
             p.op = Op::LateHf; p.late_hf_corner_hz = getFloat(0); p.late_hf_ratio01 = getFloat(1);
+        } else if (addr == "/room/distance") {
+            p.op = Op::Distance;
+            p.dist_near_m = getFloat(0); p.dist_far_m = getFloat(1); p.dist_linearity01 = getFloat(2);
+        } else if (addr == "/room/early/gain") {
+            p.op = Op::EarlyGain; p.early_gain_close_db = getFloat(0); p.early_gain_far_db = getFloat(1);
+        } else if (addr == "/room/late/gain") {
+            p.op = Op::LateGain; p.late_gain_close_db = getFloat(0); p.late_gain_far_db = getFloat(1);
         } else {
             ok = false;
         }
@@ -1119,6 +1133,9 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
             add_f(p.eq_early_hp); add_f(p.eq_early_lp);
             add_f(p.late_hf_corner_hz); add_f(p.late_hf_ratio01);
             add_f(p.eq_late_hp); add_f(p.eq_late_lp);
+            add_f(p.dist_near_m); add_f(p.dist_far_m); add_f(p.dist_linearity01);
+            add_f(p.early_gain_close_db); add_f(p.early_gain_far_db);
+            add_f(p.late_gain_close_db); add_f(p.late_gain_far_db);
             break;
         case Op::T60:
             addr = "/room/t60"; add_f(p.t60); break;
@@ -1140,6 +1157,13 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
             addr = "/room/eq/late"; add_f(p.eq_late_hp); add_f(p.eq_late_lp); break;
         case Op::LateHf:
             addr = "/room/late/hf"; add_f(p.late_hf_corner_hz); add_f(p.late_hf_ratio01); break;
+        case Op::Distance:
+            addr = "/room/distance";
+            add_f(p.dist_near_m); add_f(p.dist_far_m); add_f(p.dist_linearity01); break;
+        case Op::EarlyGain:
+            addr = "/room/early/gain"; add_f(p.early_gain_close_db); add_f(p.early_gain_far_db); break;
+        case Op::LateGain:
+            addr = "/room/late/gain"; add_f(p.late_gain_close_db); add_f(p.late_gain_far_db); break;
         }
         break;
     }

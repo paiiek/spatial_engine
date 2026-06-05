@@ -59,6 +59,9 @@ struct QueuedCmd {
     float    room_eq_early_hp = 120.f, room_eq_early_lp = 10000.f;
     float    room_late_hf_corner_hz = 6200.f, room_late_hf_ratio01 = 0.62f;
     float    room_eq_late_hp = 45.f, room_eq_late_lp = 16000.f;
+    float    room_dist_near_m = 0.5f, room_dist_far_m = 24.f, room_dist_linearity01 = 0.35f;
+    float    room_early_gain_close_db = -10.f, room_early_gain_far_db = -18.f;
+    float    room_late_gain_close_db = -12.f, room_late_gain_far_db = 0.f;
 };
 
 // SPSC ring buffer. T defaults to QueuedCmd so the existing audio-path

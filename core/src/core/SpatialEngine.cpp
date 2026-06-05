@@ -136,6 +136,13 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.room_late_hf_ratio01      = p->late_hf_ratio01;
                     qc.room_eq_late_hp           = p->eq_late_hp;
                     qc.room_eq_late_lp           = p->eq_late_lp;
+                    qc.room_dist_near_m          = p->dist_near_m;
+                    qc.room_dist_far_m           = p->dist_far_m;
+                    qc.room_dist_linearity01     = p->dist_linearity01;
+                    qc.room_early_gain_close_db  = p->early_gain_close_db;
+                    qc.room_early_gain_far_db    = p->early_gain_far_db;
+                    qc.room_late_gain_close_db   = p->late_gain_close_db;
+                    qc.room_late_gain_far_db     = p->late_gain_far_db;
                 }
                 break;
             case ipc::CommandTag::OutputGain:
@@ -511,6 +518,8 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     late_in_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
     late_eq_hp_.setHighPass(sample_rate, iae::kRoomLateHpfHz);
     late_eq_lp_.setLowPass(sample_rate, iae::kRoomLateLpfHz);
+    // ⑥f — dedicated room late bus (per-object lateMul-scaled send).
+    room_late_send_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
     // ⑥d early-reflection ring buffers: one kErRingLen ring per (object, image).
     er_rings_.assign(static_cast<size_t>(MAX_OBJECTS) *
                      static_cast<size_t>(iae::kNumFirstOrderImages) *
@@ -629,6 +638,13 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
 
         const float* dry = dry_scratch_[static_cast<size_t>(i)].data();
         const float  send = c.reverb_send;
+        // ⑥f — this object's early distance multiplier (reference earlyDistMul,
+        // AudioEngine.cpp:824) scales the predelay input, so it attenuates BOTH
+        // the 6 image-source rings and the cluster bus (both read xdel), exactly
+        // as the reference scales wetMono before the predelay (RoomEngine.cpp:386).
+        const float earlyMul = iae::roomDistanceGainDbLinear(
+            c.dist, room_dist_near_m_, room_dist_far_m_,
+            room_early_gain_close_db_, room_early_gain_far_db_, room_dist_linearity01_);
 
         // ⑥e-3b — predelay (per-object ring) then absorption EQ (HP→LP) on the
         // send-scaled mono, once per object; all 6 image rings read this xdel.
@@ -649,7 +665,7 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
             for (int n = 0; n < num_frames; ++n) {
                 int pr = prw - pds; if (pr < 0) pr += stride;
                 float y = pline[static_cast<size_t>(pr)];
-                pline[static_cast<size_t>(prw)] = dry[static_cast<size_t>(n)] * send;
+                pline[static_cast<size_t>(prw)] = dry[static_cast<size_t>(n)] * send * earlyMul;
                 if (++prw >= stride) prw = 0;
                 y = hp.processSample(y);
                 xdel[n] = lp.processSample(y);
@@ -794,6 +810,25 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
         late_eq_hp_.setHighPass(sample_rate_, clampHz(hp));
         late_eq_lp_.setLowPass(sample_rate_, clampHz(lp));
     };
+    // ⑥f distance-gain params. iae::roomDistanceGainDbLinear re-clamps internally;
+    // we also clamp the stored members to the reference pull ranges so
+    // introspection is authoritative (SpatialSessionState.cpp:386-398).
+    auto applyDistance = [&](float nearM, float farM, float lin) {
+        room_dist_near_m_      = std::clamp(nearM, 0.05f, 40.f);
+        // far: reference window [0.1,120] m, then floored to near+0.1
+        // (SpatialSessionState.cpp:386-390) — keep the 120 m cap so the stored
+        // member matches the reference pull range.
+        room_dist_far_m_       = std::clamp(std::max(room_dist_near_m_ + 0.1f, farM), 0.1f, 120.f);
+        room_dist_linearity01_ = std::clamp(lin, 0.f, 1.f);
+    };
+    auto applyEarlyGain = [&](float closeDb, float farDb) {
+        room_early_gain_close_db_ = std::clamp(closeDb, -48.f, 12.f);
+        room_early_gain_far_db_   = std::clamp(farDb, -48.f, 12.f);
+    };
+    auto applyLateGain = [&](float closeDb, float farDb) {
+        room_late_gain_close_db_ = std::clamp(closeDb, -48.f, 12.f);
+        room_late_gain_far_db_   = std::clamp(farDb, -48.f, 12.f);
+    };
 
     switch (static_cast<Op>(qc.room_op)) {
     case Op::Enable: {
@@ -815,6 +850,9 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
         applyEqEarly(qc.room_eq_early_hp, qc.room_eq_early_lp);
         applyLateHf(qc.room_late_hf_corner_hz, qc.room_late_hf_ratio01);
         applyEqLate(qc.room_eq_late_hp, qc.room_eq_late_lp);
+        applyDistance(qc.room_dist_near_m, qc.room_dist_far_m, qc.room_dist_linearity01);
+        applyEarlyGain(qc.room_early_gain_close_db, qc.room_early_gain_far_db);
+        applyLateGain(qc.room_late_gain_close_db, qc.room_late_gain_far_db);
         break;
     case Op::T60:              applyT60(qc.room_t60); break;
     case Op::Size:             applySize(qc.room_sx, qc.room_sy, qc.room_sz); break;
@@ -826,6 +864,9 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
     case Op::EqEarly:          applyEqEarly(qc.room_eq_early_hp, qc.room_eq_early_lp); break;
     case Op::EqLate:           applyEqLate(qc.room_eq_late_hp, qc.room_eq_late_lp); break;
     case Op::LateHf:           applyLateHf(qc.room_late_hf_corner_hz, qc.room_late_hf_ratio01); break;
+    case Op::Distance:         applyDistance(qc.room_dist_near_m, qc.room_dist_far_m, qc.room_dist_linearity01); break;
+    case Op::EarlyGain:        applyEarlyGain(qc.room_early_gain_close_db, qc.room_early_gain_far_db); break;
+    case Op::LateGain:         applyLateGain(qc.room_late_gain_close_db, qc.room_late_gain_far_db); break;
     }
 }
 
@@ -1089,6 +1130,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     // Per-object DSP chain (in-place on dry_scratch_) + accumulate reverb send
     std::fill(reverb_send_buf_.begin(),
               reverb_send_buf_.begin() + block.num_frames, 0.0f);
+    // ⑥f — clear the dedicated room late bus (per-object lateMul-scaled send).
+    std::fill(room_late_send_buf_.begin(),
+              room_late_send_buf_.begin() + block.num_frames, 0.0f);
 
     // ⑥e (late opp source-bias) — accumulate the late-reverb source-energy
     // centroid for this block: each object weights its unit position by the
@@ -1119,12 +1163,19 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
 
         auto& scratch = dry_scratch_[static_cast<size_t>(i)];
         float obj_send_abs = 0.f;
+        // ⑥f — this object's late-bus distance multiplier (reference lateDistMul,
+        // AudioEngine.cpp:830). Scales only the dedicated room late bus; the
+        // shared reverb_send_buf_ (non-room FDN/IR) stays un-scaled.
+        const float lateMul = iae::roomDistanceGainDbLinear(
+            c.dist, room_dist_near_m_, room_dist_far_m_,
+            room_late_gain_close_db_, room_late_gain_far_db_, room_dist_linearity01_);
         for (int n = 0; n < block.num_frames; ++n) {
             float reverb_tap = 0.f;
             scratch[static_cast<size_t>(n)] =
                 chains_[static_cast<size_t>(i)].processSample(
                     scratch[static_cast<size_t>(n)], reverb_tap);
             reverb_send_buf_[static_cast<size_t>(n)] += reverb_tap;
+            room_late_send_buf_[static_cast<size_t>(n)] += reverb_tap * lateMul;
             obj_send_abs += std::fabs(reverb_tap);
         }
 
@@ -1250,10 +1301,11 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             // absorption EQ (HP→LP) before the FDN. Byte-faithful to
             // RoomEngine.cpp:650-658 (lateBusHp.processSample → lateBusLp). The
             // early and cluster paths read their own un-late-EQ'd taps, so this
-            // shapes ONLY the late FDN tail.
+            // shapes ONLY the late FDN tail. ⑥f — the source is the dedicated
+            // room late bus (per-object lateMul-scaled), not the shared send.
             for (int n = 0; n < block.num_frames; ++n) {
                 const float xl = late_eq_hp_.processSample(
-                    reverb_send_buf_[static_cast<size_t>(n)]);
+                    room_late_send_buf_[static_cast<size_t>(n)]);
                 late_in_buf_[static_cast<size_t>(n)] = late_eq_lp_.processSample(xl);
             }
             room_fdn_.process(late_in_buf_.data(), block.num_frames,

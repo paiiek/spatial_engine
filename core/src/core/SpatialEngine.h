@@ -24,6 +24,7 @@
 #include "render/ported/RoomEarly.h"
 #include "render/ported/RoomBiquad.h"
 #include "render/ported/RoomCluster.h"
+#include "render/ported/RoomDistanceGain.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/CpuMeter.h"
@@ -445,6 +446,21 @@ private:
     iae::RoomBiquad                                           late_eq_hp_{};
     iae::RoomBiquad                                           late_eq_lp_{};
     std::vector<float>                                        late_in_buf_;  // [maxBlock] EQ'd late send
+    // ⑥f distance-gain curve params (reference roomDistance* / roomEarlyGain* /
+    // roomLateGain*, SpatialSessionState.h). Map a source distance to early-tap
+    // and late-send multipliers via iae::roomDistanceGainDbLinear. Touched only
+    // on the audio thread (drain + render) after prepare → plain members.
+    float                                                     room_dist_near_m_        = 0.5f;
+    float                                                     room_dist_far_m_         = 24.f;
+    float                                                     room_dist_linearity01_   = 0.35f;
+    float                                                     room_early_gain_close_db_= -10.f;
+    float                                                     room_early_gain_far_db_  = -18.f;
+    float                                                     room_late_gain_close_db_ = -12.f;
+    float                                                     room_late_gain_far_db_   = 0.f;
+    // Dedicated room late bus: per-object reverb send scaled by that object's
+    // lateMul, summed. Separate from reverb_send_buf_ (which feeds the non-room
+    // FDN/IR un-scaled), mirroring the reference's separate lateBusInput.
+    std::vector<float>                                        room_late_send_buf_;  // [maxBlock]
     bool                                                      room_ready_ = false;
     // ⑥e — fill fdn_line_gains_ for the current block: each Hadamard line is
     // steered from its static cube corner toward `opp` (the axis opposite the
