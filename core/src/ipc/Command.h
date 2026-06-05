@@ -260,7 +260,9 @@ struct PayloadReverbSelect {
 //   /room/cluster/diffusion ,f    ClusterDiffusion  (cluster_diffusion01)
 //   /room/cluster/volume  ,f      ClusterVolume     (cluster_volume_m3)
 //   /room/eq/early        ,ff     EqEarly           (eq_early_hp, eq_early_lp) — LOCKSTEP
+//   /room/eq/late         ,ff     EqLate            (eq_late_hp, eq_late_lp) — late bus
 //   /room/late/hf         ,ff     LateHf            (late_hf_corner_hz, late_hf_ratio01)
+// SetAll bundle order is f×15: the 13 below + eq_late_hp + eq_late_lp (appended).
 struct PayloadRoomCtl {
     enum class Op : uint8_t {
         Enable           = 0,
@@ -274,6 +276,7 @@ struct PayloadRoomCtl {
         ClusterVolume    = 8,
         EqEarly          = 9,  // recoeffs cluster-bus EQ + all per-object early EQ in lockstep
         LateHf           = 10,
+        EqLate           = 11, // late-bus absorption EQ corners (separate from early/cluster)
     };
     Op    op = Op::Enable;
     bool  enable = false;
@@ -291,6 +294,8 @@ struct PayloadRoomCtl {
     float eq_early_lp        = 10000.f;  // early-cluster absorption LP corner
     float late_hf_corner_hz  = 6200.f;   // RoomFdn hfDecayCornerHz
     float late_hf_ratio01    = 0.62f;    // RoomFdn hfDecayRatio01
+    float eq_late_hp         = 45.f;     // late-bus absorption HP corner (RoomLateHpfHz)
+    float eq_late_lp         = 16000.f;  // late-bus absorption LP corner (RoomLateLpfHz)
 };
 
 // Per-object DSP parameter setter.

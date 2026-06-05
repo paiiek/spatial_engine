@@ -18,8 +18,9 @@ struct OscArgs {
     std::string type_tags;  // e.g. "iifff"  (without leading ',')
     // Decoded values (union-style, positional):
     // We store up to MAX_ARGS slots of each type for simplicity. 16 headroom
-    // covers the widest command, /room/set ,f×13 (⑥e-4 atomic room bundle); the
-    // parser clamps every type's count to MAX_ARGS, so this is a pure capacity bump.
+    // covers the widest command, /room/set ,f×15 (⑥e-4 atomic room bundle: 13
+    // params + late-bus EQ HP/LP); the parser clamps every type's count to
+    // MAX_ARGS, so this is a pure capacity bump.
     static constexpr int MAX_ARGS = 16;
     int32_t  ints   [MAX_ARGS]{};
     float    floats [MAX_ARGS]{};

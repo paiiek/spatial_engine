@@ -170,6 +170,24 @@ int main() {
         CHECK(coeffEq(engine.earlyEqHpForTest(0), engine.clusterEqHpForTest())
            && coeffEq(engine.earlyEqHpForTest(engine.objCacheSize() - 1), engine.clusterEqHpForTest()),
               "(set) early EQ stays locked to cluster after /room/set");
+
+        // ⑥e-4-A late-bus EQ — /room/eq/late recoeffs ONLY the late bus (separate
+        // corners from early/cluster), and the drain allocates nothing.
+        iae::RoomBiquad defLateHp = engine.lateEqHpForTest();   // HP45 default
+        { spe::ipc::PayloadRoomCtl p; p.op = spe::ipc::PayloadRoomCtl::Op::EqLate;
+          p.eq_late_hp = 80.f; p.eq_late_lp = 12000.f; send(engine, p); }
+        spe::util::rt_alloc_violations_reset();
+        block(engine, bufs, ptrs, N);
+        CHECK(spe::util::rt_alloc_violations() == 0, "(RT) /room/eq/late drain allocates nothing");
+        iae::RoomBiquad wantLateHp; wantLateHp.setHighPass(48000.0, 80.f);
+        CHECK(coeffEq(engine.lateEqHpForTest(), wantLateHp), "(eq/late) late HP recoeffed to 80");
+        CHECK(!coeffEq(engine.lateEqHpForTest(), defLateHp), "(eq/late) late HP changed from default");
+        // Late EQ is INDEPENDENT of the early/cluster bus: changing it must not
+        // touch the early/cluster corners (no accidental lockstep).
+        CHECK(coeffEq(engine.clusterEqHpForTest(), engine.earlyEqHpForTest(0)),
+              "(eq/late) early/cluster lockstep intact after a late-only change");
+        CHECK(!coeffEq(engine.lateEqHpForTest(), engine.clusterEqHpForTest()),
+              "(eq/late) late bus has its OWN corners (not fused with early/cluster)");
     }
 
     // ───────────────────────── (3) BEHAVIOUR ──────────────────────────────────

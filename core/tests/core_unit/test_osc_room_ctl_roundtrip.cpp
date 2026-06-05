@@ -95,6 +95,14 @@ int main() {
         CHECK(p.op == PayloadRoomCtl::Op::LateHf, "late/hf: op");
         CHECK(feq(p.late_hf_corner_hz, 7000.f) && feq(p.late_hf_ratio01, 0.5f), "late/hf: vals");
     }
+    // ---- /room/eq/late ,ff 60 14000 ----
+    {
+        auto pkt = osc("/room/eq/late", "ff", {60.f, 14000.f}, {});
+        Command c = dec.decode(std::span<const uint8_t>(pkt));
+        auto& p = std::get<PayloadRoomCtl>(c.payload);
+        CHECK(p.op == PayloadRoomCtl::Op::EqLate, "eq/late: op");
+        CHECK(feq(p.eq_late_hp, 60.f) && feq(p.eq_late_lp, 14000.f), "eq/late: hp/lp");
+    }
     // ---- /room/cluster/* and /room/early/* ----
     {
         auto v = [&](const char* a, PayloadRoomCtl::Op op, float val, float PayloadRoomCtl::* m) {
@@ -110,26 +118,29 @@ int main() {
         v("/room/cluster/diffusion", PayloadRoomCtl::Op::ClusterDiffusion, 0.3f,  &PayloadRoomCtl::cluster_diffusion01);
         v("/room/cluster/volume",    PayloadRoomCtl::Op::ClusterVolume,    900.f, &PayloadRoomCtl::cluster_volume_m3);
     }
-    // ---- /room/set ,f×13 (full atomic bundle) ----
+    // ---- /room/set ,f×15 (full atomic bundle) ----
     {
         std::vector<float> a = {1.9f, 7.f, 6.f, 4.f, 50.f, 0.5f,
-                                0.55f, 0.4f, 720.f, 150.f, 9000.f, 6000.f, 0.7f};
-        auto pkt = osc("/room/set", std::string(13, 'f'), a, {});
+                                0.55f, 0.4f, 720.f, 150.f, 9000.f, 6000.f, 0.7f,
+                                55.f, 13000.f};
+        auto pkt = osc("/room/set", std::string(15, 'f'), a, {});
         Command c = dec.decode(std::span<const uint8_t>(pkt));
         CHECK(c.tag == CommandTag::RoomCtl, "set: tag");
         auto& p = std::get<PayloadRoomCtl>(c.payload);
         CHECK(p.op == PayloadRoomCtl::Op::SetAll, "set: op SetAll");
         CHECK(feq(p.t60, 1.9f) && feq(p.sx, 7.f) && feq(p.sz, 4.f), "set: t60/size");
         CHECK(feq(p.early_width_deg, 50.f) && feq(p.cluster_volume_m3, 720.f), "set: width/vol");
-        CHECK(feq(p.eq_early_hp, 150.f) && feq(p.eq_early_lp, 9000.f), "set: eq");
+        CHECK(feq(p.eq_early_hp, 150.f) && feq(p.eq_early_lp, 9000.f), "set: eq early");
         CHECK(feq(p.late_hf_corner_hz, 6000.f) && feq(p.late_hf_ratio01, 0.7f), "set: late/hf");
+        CHECK(feq(p.eq_late_hp, 55.f) && feq(p.eq_late_lp, 13000.f), "set: eq late");
     }
-    // ---- reject: partial /room/set (only 5 floats) ----
+    // ---- reject: partial /room/set (only 13 floats — now needs 15) ----
     {
         const uint32_t before = dec.rejectCount();
-        auto pkt = osc("/room/set", "fffff", {1.f, 2.f, 3.f, 4.f, 5.f}, {});
+        std::vector<float> a13(13, 1.f);
+        auto pkt = osc("/room/set", std::string(13, 'f'), a13, {});
         Command c = dec.decode(std::span<const uint8_t>(pkt));
-        CHECK(c.tag == CommandTag::Unknown, "partial set: rejected");
+        CHECK(c.tag == CommandTag::Unknown, "partial set (13<15): rejected");
         CHECK(dec.rejectCount() == before + 1, "partial set: reject counted");
     }
     // ---- reject: unknown /room/* leaf ----
@@ -160,14 +171,18 @@ int main() {
           auto o = rt(p); CHECK(feq(o.eq_early_hp,180)&&feq(o.eq_early_lp,9500), "rt eq"); }
         { PayloadRoomCtl p; p.op = PayloadRoomCtl::Op::LateHf; p.late_hf_corner_hz = 7200; p.late_hf_ratio01 = 0.55f;
           auto o = rt(p); CHECK(feq(o.late_hf_corner_hz,7200)&&feq(o.late_hf_ratio01,0.55f), "rt late/hf"); }
+        { PayloadRoomCtl p; p.op = PayloadRoomCtl::Op::EqLate; p.eq_late_hp = 50; p.eq_late_lp = 15000;
+          auto o = rt(p); CHECK(feq(o.eq_late_hp,50)&&feq(o.eq_late_lp,15000), "rt eq/late"); }
         { PayloadRoomCtl p; p.op = PayloadRoomCtl::Op::SetAll;
           p.t60=1.5f; p.sx=6; p.sy=5; p.sz=3; p.early_width_deg=40; p.early_balance01=0.5f;
           p.cluster_send01=0.45f; p.cluster_diffusion01=0.5f; p.cluster_volume_m3=650;
           p.eq_early_hp=130; p.eq_early_lp=9800; p.late_hf_corner_hz=6300; p.late_hf_ratio01=0.6f;
+          p.eq_late_hp=48; p.eq_late_lp=15500;
           auto o = rt(p);
           CHECK(o.op == PayloadRoomCtl::Op::SetAll, "rt set op");
           CHECK(feq(o.t60,1.5f)&&feq(o.early_width_deg,40)&&feq(o.cluster_volume_m3,650), "rt set a");
-          CHECK(feq(o.eq_early_hp,130)&&feq(o.late_hf_ratio01,0.6f), "rt set b"); }
+          CHECK(feq(o.eq_early_hp,130)&&feq(o.late_hf_ratio01,0.6f), "rt set b");
+          CHECK(feq(o.eq_late_hp,48)&&feq(o.eq_late_lp,15500), "rt set eq/late"); }
     }
 
     if (failures == 0) { std::printf("test_osc_room_ctl_roundtrip: ALL PASS\n"); return 0; }

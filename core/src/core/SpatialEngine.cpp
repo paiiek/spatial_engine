@@ -134,6 +134,8 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.room_eq_early_lp          = p->eq_early_lp;
                     qc.room_late_hf_corner_hz    = p->late_hf_corner_hz;
                     qc.room_late_hf_ratio01      = p->late_hf_ratio01;
+                    qc.room_eq_late_hp           = p->eq_late_hp;
+                    qc.room_eq_late_lp           = p->eq_late_lp;
                 }
                 break;
             case ipc::CommandTag::OutputGain:
@@ -504,6 +506,11 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     room_fdn_.setParams(room_fdn_params_);
     room_lines_.assign(static_cast<size_t>(iae::RoomFdn::kOrder) *
                        static_cast<size_t>(max_block_size), 0.f);
+    // ⑥e-4-A — late-bus absorption EQ (HP45→LP16000, reference lateBusHp/Lp).
+    // Filters the mono late send before the FDN. Buffer is prepare-allocated.
+    late_in_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
+    late_eq_hp_.setHighPass(sample_rate, iae::kRoomLateHpfHz);
+    late_eq_lp_.setLowPass(sample_rate, iae::kRoomLateLpfHz);
     // ⑥d early-reflection ring buffers: one kErRingLen ring per (object, image).
     er_rings_.assign(static_cast<size_t>(MAX_OBJECTS) *
                      static_cast<size_t>(iae::kNumFirstOrderImages) *
@@ -714,6 +721,9 @@ void SpatialEngine::resetRoomState() noexcept {
     room_cluster_.reset();
     cluster_eq_hp_.reset();
     cluster_eq_lp_.reset();
+    // ⑥e-4-A — late-bus EQ state.
+    late_eq_hp_.reset();
+    late_eq_lp_.reset();
 }
 
 // ⑥e-4 — apply one drained RoomCtl command to the live room state (audio thread,
@@ -778,6 +788,12 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
             er_eq_lp_[static_cast<size_t>(i)].setLowPass(sample_rate_, l);
         }
     };
+    // Late-bus EQ — a SEPARATE single filter pair (not locked to early/cluster);
+    // the late FDN tail has its own corners (reference lateBusHp/Lp 45/16000).
+    auto applyEqLate = [&](float hp, float lp) {
+        late_eq_hp_.setHighPass(sample_rate_, clampHz(hp));
+        late_eq_lp_.setLowPass(sample_rate_, clampHz(lp));
+    };
 
     switch (static_cast<Op>(qc.room_op)) {
     case Op::Enable: {
@@ -798,6 +814,7 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
         applyClusterVolume(qc.room_cluster_volume_m3);
         applyEqEarly(qc.room_eq_early_hp, qc.room_eq_early_lp);
         applyLateHf(qc.room_late_hf_corner_hz, qc.room_late_hf_ratio01);
+        applyEqLate(qc.room_eq_late_hp, qc.room_eq_late_lp);
         break;
     case Op::T60:              applyT60(qc.room_t60); break;
     case Op::Size:             applySize(qc.room_sx, qc.room_sy, qc.room_sz); break;
@@ -807,6 +824,7 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
     case Op::ClusterDiffusion: applyClusterDiffusion(qc.room_cluster_diffusion01); break;
     case Op::ClusterVolume:    applyClusterVolume(qc.room_cluster_volume_m3); break;
     case Op::EqEarly:          applyEqEarly(qc.room_eq_early_hp, qc.room_eq_early_lp); break;
+    case Op::EqLate:           applyEqLate(qc.room_eq_late_hp, qc.room_eq_late_lp); break;
     case Op::LateHf:           applyLateHf(qc.room_late_hf_corner_hz, qc.room_late_hf_ratio01); break;
     }
 }
@@ -1228,7 +1246,17 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             // of the 8 line taps across the bus via its (opp-biased) gain vectors.
             // kLatePerLineGain matches the reference (RoomEngine.cpp:691).
             constexpr float kLatePerLineGain = 0.068f;
-            room_fdn_.process(reverb_send_buf_.data(), block.num_frames,
+            // ⑥e-4-A Phase-5 — run the mono late send through the late-bus
+            // absorption EQ (HP→LP) before the FDN. Byte-faithful to
+            // RoomEngine.cpp:650-658 (lateBusHp.processSample → lateBusLp). The
+            // early and cluster paths read their own un-late-EQ'd taps, so this
+            // shapes ONLY the late FDN tail.
+            for (int n = 0; n < block.num_frames; ++n) {
+                const float xl = late_eq_hp_.processSample(
+                    reverb_send_buf_[static_cast<size_t>(n)]);
+                late_in_buf_[static_cast<size_t>(n)] = late_eq_lp_.processSample(xl);
+            }
+            room_fdn_.process(late_in_buf_.data(), block.num_frames,
                               room_lines_.data());
             for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
                 const float* line =

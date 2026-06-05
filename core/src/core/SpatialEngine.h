@@ -371,6 +371,10 @@ public:
     const iae::RoomBiquad& earlyEqLpForTest(size_t i) const noexcept {
         return er_eq_lp_[i];
     }
+    // ⑥e-4-A — late-bus EQ introspection (/room/eq/late). Separate bus from the
+    // early/cluster EQ; its own corners. Not RT-safe; test only.
+    const iae::RoomBiquad& lateEqHpForTest() const noexcept { return late_eq_hp_; }
+    const iae::RoomBiquad& lateEqLpForTest() const noexcept { return late_eq_lp_; }
 
     // F4b: consistent control-thread snapshot of authoritative object state into
     // scene ObjectSnapshots. Synchronized via the three-buffer published_index_
@@ -433,6 +437,14 @@ private:
     std::array<std::array<float, spe::MAX_SPEAKERS>,
                iae::RoomFdn::kOrder>                          fdn_line_gains_{};
     std::vector<float>                                        room_lines_;   // [kOrder * maxBlock]
+    // ⑥e-4-A (Phase-5 Late bus EQ) — the mono late send is run through a single
+    // absorption HP→LP (reference lateBusHp/Lp, RoomEngine.cpp:650-658) BEFORE
+    // the FDN. Default corners HP45 / LP16000 (kRoomLateHpfHz/Lpf); OSC-tunable
+    // via /room/eq/late. This is a SEPARATE bus from the early/cluster EQ (those
+    // stay coefficient-locked to each other); the late bus has its own corners.
+    iae::RoomBiquad                                           late_eq_hp_{};
+    iae::RoomBiquad                                           late_eq_lp_{};
+    std::vector<float>                                        late_in_buf_;  // [maxBlock] EQ'd late send
     bool                                                      room_ready_ = false;
     // ⑥e — fill fdn_line_gains_ for the current block: each Hadamard line is
     // steered from its static cube corner toward `opp` (the axis opposite the

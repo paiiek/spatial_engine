@@ -566,9 +566,9 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.op = Op::Enable;
             p.enable = (getInt(0) != 0);
         } else if (addr == "/room/set") {
-            // Atomic bundle: require all 13 floats; a partial /room/set would
+            // Atomic bundle: require all 15 floats; a partial /room/set would
             // silently zero unspecified params, so reject it instead.
-            if (args.n_float >= 13) {
+            if (args.n_float >= 15) {
                 p.op = Op::SetAll;
                 p.t60                 = getFloat(0);
                 p.sx                  = getFloat(1);
@@ -583,6 +583,8 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
                 p.eq_early_lp         = getFloat(10);
                 p.late_hf_corner_hz   = getFloat(11);
                 p.late_hf_ratio01     = getFloat(12);
+                p.eq_late_hp          = getFloat(13);
+                p.eq_late_lp          = getFloat(14);
             } else {
                 ok = false;
             }
@@ -602,6 +604,8 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.op = Op::ClusterVolume; p.cluster_volume_m3 = getFloat(0);
         } else if (addr == "/room/eq/early") {
             p.op = Op::EqEarly; p.eq_early_hp = getFloat(0); p.eq_early_lp = getFloat(1);
+        } else if (addr == "/room/eq/late") {
+            p.op = Op::EqLate; p.eq_late_hp = getFloat(0); p.eq_late_lp = getFloat(1);
         } else if (addr == "/room/late/hf") {
             p.op = Op::LateHf; p.late_hf_corner_hz = getFloat(0); p.late_hf_ratio01 = getFloat(1);
         } else {
@@ -1114,6 +1118,7 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
             add_f(p.cluster_volume_m3);
             add_f(p.eq_early_hp); add_f(p.eq_early_lp);
             add_f(p.late_hf_corner_hz); add_f(p.late_hf_ratio01);
+            add_f(p.eq_late_hp); add_f(p.eq_late_lp);
             break;
         case Op::T60:
             addr = "/room/t60"; add_f(p.t60); break;
@@ -1131,6 +1136,8 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
             addr = "/room/cluster/volume"; add_f(p.cluster_volume_m3); break;
         case Op::EqEarly:
             addr = "/room/eq/early"; add_f(p.eq_early_hp); add_f(p.eq_early_lp); break;
+        case Op::EqLate:
+            addr = "/room/eq/late"; add_f(p.eq_late_hp); add_f(p.eq_late_lp); break;
         case Op::LateHf:
             addr = "/room/late/hf"; add_f(p.late_hf_corner_hz); add_f(p.late_hf_ratio01); break;
         }

@@ -53,7 +53,8 @@ def send_osc(sock, addr, types, args, ip, port):
     sock.sendto(msg, (ip, port))
 
 
-def capture(bin_path, layout, channels, seconds, wav, reverb_send, t60, use_set=False):
+def capture(bin_path, layout, channels, seconds, wav, reverb_send, t60,
+            use_set=False, eq_late_hp=None):
     port = free_port()
     if os.path.exists(wav): os.remove(wav)
     cmd = [bin_path, "--backend", "null", "--input-backend", "null",
@@ -68,13 +69,17 @@ def capture(bin_path, layout, channels, seconds, wav, reverb_send, t60, use_set=
         # Engage the room via the NEW /room/enable path (not /reverb/select).
         send_osc(sock, "/room/enable", "i", [1], "127.0.0.1", port)
         if use_set:
-            # Atomic bundle: t60 sx sy sz earlyW earlyBal clSend clDiff clVol
-            #                eqHP eqLP hfCorner hfRatio
-            send_osc(sock, "/room/set", "fffffffffffff",
+            # Atomic bundle (f×15): t60 sx sy sz earlyW earlyBal clSend clDiff
+            #   clVol eqEarlyHP eqEarlyLP hfCorner hfRatio eqLateHP eqLateLP
+            send_osc(sock, "/room/set", "f" * 15,
                      [t60, 6.0, 5.0, 3.0, 45.0, 0.45, 0.4, 0.48, 630.0,
-                      120.0, 10000.0, 6200.0, 0.62], "127.0.0.1", port)
+                      120.0, 10000.0, 6200.0, 0.62, 45.0, 16000.0], "127.0.0.1", port)
         else:
             send_osc(sock, "/room/t60", "f", [t60], "127.0.0.1", port)
+        if eq_late_hp is not None:
+            # Raise the late-bus HP well above the 110 Hz source tone so the late
+            # FDN tail is attenuated — proves /room/eq/late is in the FDN feed.
+            send_osc(sock, "/room/eq/late", "ff", [eq_late_hp, 16000.0], "127.0.0.1", port)
         # Object below the horizon so the dry sound stays in the lower ring.
         send_osc(sock, "/obj/move", "ifff", [0, 0.0, -0.349, 2.0], "127.0.0.1", port)
         send_osc(sock, "/obj/dsp", "iiiif", [0, 0, 0, 6, reverb_send], "127.0.0.1", port)
@@ -122,19 +127,25 @@ def main():
                          "/tmp/room_ctl_short.wav", reverb_send=0.8, t60=0.3)
     eLong, xL = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                         "/tmp/room_ctl_long.wav", reverb_send=0.8, t60=5.0)
-    # /room/set atomic bundle must not crash / xrun.
+    # /room/set atomic bundle (f×15) must not crash / xrun.
     eSet, xSet = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                          "/tmp/room_ctl_set.wav", reverb_send=0.8, t60=4.0, use_set=True)
-    if any(e is None for e in (eDry, eShort, eLong, eSet)):
+    # Late-bus EQ: same long tail but HP the late bus at 800 Hz → the 110 Hz late
+    # FDN tail is attenuated vs the default-HP long run.
+    eLateEq, xLE = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
+                           "/tmp/room_ctl_lateeq.wav", reverb_send=0.8, t60=5.0,
+                           eq_late_hp=800.0)
+    if any(e is None for e in (eDry, eShort, eLong, eSet, eLateEq)):
         print("SMOKE FAIL"); return 1
 
     upDry   = sum(eDry[half:])
     upShort = sum(eShort[half:])
     upLong  = sum(eLong[half:])
     upSet   = sum(eSet[half:])
+    upLateEq = sum(eLateEq[half:])
     print(f"[smoke] upper-ring  dry={upDry:.4g}  t60=0.3={upShort:.4g}  "
-          f"t60=5.0={upLong:.4g}  set(t60=4)={upSet:.4g}")
-    print(f"[smoke] xruns: dry={xD} short={xS} long={xL} set={xSet}")
+          f"t60=5.0={upLong:.4g}  set(t60=4)={upSet:.4g}  lateHP800={upLateEq:.4g}")
+    print(f"[smoke] xruns: dry={xD} short={xS} long={xL} set={xSet} lateEq={xLE}")
 
     ok = True
     if sum(eShort) <= 0:
@@ -147,13 +158,22 @@ def main():
               f"(long {upLong:.3g} vs short {upShort:.3g})"); ok = False
     if upSet <= 5.0 * max(upDry, 1.0):
         print(f"FAIL: /room/set bundle did not engage the room (upper {upSet:.3g})"); ok = False
-    if max(xD, xS, xL, xSet) != 0:
+    # The late-bus EQ filters ONLY the late FDN feed (cluster + early read their
+    # own un-late-EQ'd taps, faithful to the reference), so HP-ing the late bus
+    # above the 110 Hz source attenuates the FDN's share of the upper ring — a
+    # partial but deterministic drop. ≥5% confirms /room/eq/late is in the path.
+    if upLateEq >= 0.95 * upLong:
+        print(f"FAIL: /room/eq/late HP=800 did not attenuate the late FDN tail "
+              f"(lateHP800 {upLateEq:.4g} vs long {upLong:.4g}, "
+              f"{100*(1-upLateEq/upLong):.1f}% drop)"); ok = False
+    if max(xD, xS, xL, xSet, xLE) != 0:
         print("FAIL: xruns occurred under /room/* control"); ok = False
 
     if ok:
         print(f"SMOKE PASS: /room/enable engages the spatial room "
               f"(upper/dry={upShort/max(upDry,1.0):.1f}x), /room/t60 5.0 extends the "
-              f"tail {upLong/max(upShort,1e-9):.2f}x vs 0.3, /room/set bundle clean, "
+              f"tail {upLong/max(upShort,1e-9):.2f}x vs 0.3, /room/eq/late HP=800 cuts "
+              f"the FDN tail {100*(1-upLateEq/max(upLong,1e-9)):.1f}%, /room/set(f×15) clean, "
               f"xruns=0")
         return 0
     print("SMOKE FAIL"); return 1
