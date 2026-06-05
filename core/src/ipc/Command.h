@@ -265,8 +265,9 @@ struct PayloadReverbSelect {
 //   /room/distance        ,fff    Distance          (dist_near_m, dist_far_m, dist_linearity01)
 //   /room/early/gain      ,ff     EarlyGain         (early_gain_close_db, early_gain_far_db)
 //   /room/late/gain       ,ff     LateGain          (late_gain_close_db, late_gain_far_db)
-// SetAll bundle order is f×22: the 13 base + eq_late_hp/lp (15) + dist_near/far/
-// linearity + early_gain_close/far + late_gain_close/far (22), all appended.
+//   /room/predelay        ,f      Predelay          (early_predelay_ms)
+// SetAll bundle order is f×23: the 13 base + eq_late_hp/lp (15) + dist_near/far/
+// linearity + early_gain_close/far + late_gain_close/far (22) + early_predelay_ms (23).
 struct PayloadRoomCtl {
     enum class Op : uint8_t {
         Enable           = 0,
@@ -284,6 +285,7 @@ struct PayloadRoomCtl {
         Distance         = 12, // distance-gain window: near / far / linearity
         EarlyGain        = 13, // early-tap close/far dB along the distance curve
         LateGain         = 14, // late-send close/far dB along the distance curve
+        Predelay         = 15, // early-reflection predelay (ms)
     };
     Op    op = Op::Enable;
     bool  enable = false;
@@ -310,6 +312,7 @@ struct PayloadRoomCtl {
     float early_gain_far_db  = -18.f;    // early tap gain at far (dB)
     float late_gain_close_db = -12.f;    // late send gain at near (dB)
     float late_gain_far_db   = 0.f;      // late send gain at far (dB)
+    float early_predelay_ms  = 20.f;     // early-reflection predelay (ms)
 };
 
 // Per-object DSP parameter setter.

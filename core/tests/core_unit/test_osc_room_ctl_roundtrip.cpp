@@ -128,6 +128,14 @@ int main() {
         CHECK(p.op == PayloadRoomCtl::Op::LateGain, "late/gain: op");
         CHECK(feq(p.late_gain_close_db, -14.f) && feq(p.late_gain_far_db, -2.f), "late/gain: dB");
     }
+    // ---- /room/predelay ,f 35 ----
+    {
+        auto pkt = osc("/room/predelay", "f", {35.f}, {});
+        Command c = dec.decode(std::span<const uint8_t>(pkt));
+        auto& p = std::get<PayloadRoomCtl>(c.payload);
+        CHECK(p.op == PayloadRoomCtl::Op::Predelay, "predelay: op");
+        CHECK(feq(p.early_predelay_ms, 35.f), "predelay: ms");
+    }
     // ---- /room/cluster/* and /room/early/* ----
     {
         auto v = [&](const char* a, PayloadRoomCtl::Op op, float val, float PayloadRoomCtl::* m) {
@@ -148,8 +156,8 @@ int main() {
         std::vector<float> a = {1.9f, 7.f, 6.f, 4.f, 50.f, 0.5f,
                                 0.55f, 0.4f, 720.f, 150.f, 9000.f, 6000.f, 0.7f,
                                 55.f, 13000.f,
-                                0.8f, 30.f, 0.5f, -8.f, -20.f, -14.f, -2.f};
-        auto pkt = osc("/room/set", std::string(22, 'f'), a, {});
+                                0.8f, 30.f, 0.5f, -8.f, -20.f, -14.f, -2.f, 35.f};
+        auto pkt = osc("/room/set", std::string(23, 'f'), a, {});
         Command c = dec.decode(std::span<const uint8_t>(pkt));
         CHECK(c.tag == CommandTag::RoomCtl, "set: tag");
         auto& p = std::get<PayloadRoomCtl>(c.payload);
@@ -163,14 +171,15 @@ int main() {
               "set: distance");
         CHECK(feq(p.early_gain_close_db, -8.f) && feq(p.early_gain_far_db, -20.f), "set: early gain");
         CHECK(feq(p.late_gain_close_db, -14.f) && feq(p.late_gain_far_db, -2.f), "set: late gain");
+        CHECK(feq(p.early_predelay_ms, 35.f), "set: predelay");
     }
-    // ---- reject: partial /room/set (only 15 floats — now needs 22) ----
+    // ---- reject: partial /room/set (only 22 floats — now needs 23) ----
     {
         const uint32_t before = dec.rejectCount();
-        std::vector<float> a15(15, 1.f);
-        auto pkt = osc("/room/set", std::string(15, 'f'), a15, {});
+        std::vector<float> a22(22, 1.f);
+        auto pkt = osc("/room/set", std::string(22, 'f'), a22, {});
         Command c = dec.decode(std::span<const uint8_t>(pkt));
-        CHECK(c.tag == CommandTag::Unknown, "partial set (15<22): rejected");
+        CHECK(c.tag == CommandTag::Unknown, "partial set (22<23): rejected");
         CHECK(dec.rejectCount() == before + 1, "partial set: reject counted");
     }
     // ---- reject: unknown /room/* leaf ----
@@ -209,6 +218,8 @@ int main() {
           auto o = rt(p); CHECK(feq(o.early_gain_close_db,-9)&&feq(o.early_gain_far_db,-16), "rt early/gain"); }
         { PayloadRoomCtl p; p.op = PayloadRoomCtl::Op::LateGain; p.late_gain_close_db=-13; p.late_gain_far_db=-1;
           auto o = rt(p); CHECK(feq(o.late_gain_close_db,-13)&&feq(o.late_gain_far_db,-1), "rt late/gain"); }
+        { PayloadRoomCtl p; p.op = PayloadRoomCtl::Op::Predelay; p.early_predelay_ms=28;
+          auto o = rt(p); CHECK(feq(o.early_predelay_ms,28), "rt predelay"); }
         { PayloadRoomCtl p; p.op = PayloadRoomCtl::Op::SetAll;
           p.t60=1.5f; p.sx=6; p.sy=5; p.sz=3; p.early_width_deg=40; p.early_balance01=0.5f;
           p.cluster_send01=0.45f; p.cluster_diffusion01=0.5f; p.cluster_volume_m3=650;
@@ -216,13 +227,15 @@ int main() {
           p.eq_late_hp=48; p.eq_late_lp=15500;
           p.dist_near_m=0.6f; p.dist_far_m=26; p.dist_linearity01=0.3f;
           p.early_gain_close_db=-11; p.early_gain_far_db=-19; p.late_gain_close_db=-13; p.late_gain_far_db=-1;
+          p.early_predelay_ms=22;
           auto o = rt(p);
           CHECK(o.op == PayloadRoomCtl::Op::SetAll, "rt set op");
           CHECK(feq(o.t60,1.5f)&&feq(o.early_width_deg,40)&&feq(o.cluster_volume_m3,650), "rt set a");
           CHECK(feq(o.eq_early_hp,130)&&feq(o.late_hf_ratio01,0.6f), "rt set b");
           CHECK(feq(o.eq_late_hp,48)&&feq(o.eq_late_lp,15500), "rt set eq/late");
           CHECK(feq(o.dist_near_m,0.6f)&&feq(o.dist_far_m,26)&&feq(o.dist_linearity01,0.3f), "rt set distance");
-          CHECK(feq(o.early_gain_close_db,-11)&&feq(o.late_gain_far_db,-1), "rt set gains"); }
+          CHECK(feq(o.early_gain_close_db,-11)&&feq(o.late_gain_far_db,-1), "rt set gains");
+          CHECK(feq(o.early_predelay_ms,22), "rt set predelay"); }
     }
 
     if (failures == 0) { std::printf("test_osc_room_ctl_roundtrip: ALL PASS\n"); return 0; }

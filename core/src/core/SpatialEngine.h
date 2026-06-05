@@ -457,6 +457,11 @@ private:
     float                                                     room_early_gain_far_db_  = -18.f;
     float                                                     room_late_gain_close_db_ = -12.f;
     float                                                     room_late_gain_far_db_   = 0.f;
+    // ⑥g — early-reflection predelay (ms), OSC-tunable via /room/predelay. Read
+    // in renderRoomEarly; the pds it derives is clamped to er_predelay_max_-1
+    // (< stride), so the single-branch ring wrap stays valid at any predelay.
+    // Default single-sourced from the ported reference constant.
+    float                                                     room_early_predelay_ms_  = iae::kRoomEarlyPredelayMs;
     // Dedicated room late bus: per-object reverb send scaled by that object's
     // lateMul, summed. Separate from reverb_send_buf_ (which feeds the non-room
     // FDN/IR un-scaled), mirroring the reference's separate lateBusInput.

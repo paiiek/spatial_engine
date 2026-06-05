@@ -10,7 +10,7 @@ single-leading-tag room control path reaches the DSP:
   * /room/t60 ,f <s>           a long T60 accumulates strictly more upper-ring
                                tail energy than a short one (the late FDN loop
                                gain is driven by the OSC value).
-  * /room/set ,f x22           the atomic bundle applies without xruns / crash.
+  * /room/set ,f x23           the atomic bundle applies without xruns / crash.
 
 Wire format (NO ,ii seq/id header — single leading tag):
   /room/enable ,i 1
@@ -69,14 +69,14 @@ def capture(bin_path, layout, channels, seconds, wav, reverb_send, t60,
         # Engage the room via the NEW /room/enable path (not /reverb/select).
         send_osc(sock, "/room/enable", "i", [1], "127.0.0.1", port)
         if use_set:
-            # Atomic bundle (f×22): t60 sx sy sz earlyW earlyBal clSend clDiff
+            # Atomic bundle (f×23): t60 sx sy sz earlyW earlyBal clSend clDiff
             #   clVol eqEarlyHP eqEarlyLP hfCorner hfRatio eqLateHP eqLateLP
             #   distNear distFar distLin earlyGainClose earlyGainFar
-            #   lateGainClose lateGainFar
-            send_osc(sock, "/room/set", "f" * 22,
+            #   lateGainClose lateGainFar predelayMs
+            send_osc(sock, "/room/set", "f" * 23,
                      [t60, 6.0, 5.0, 3.0, 45.0, 0.45, 0.4, 0.48, 630.0,
                       120.0, 10000.0, 6200.0, 0.62, 45.0, 16000.0,
-                      0.5, 24.0, 0.35, -10.0, -18.0, -12.0, 0.0], "127.0.0.1", port)
+                      0.5, 24.0, 0.35, -10.0, -18.0, -12.0, 0.0, 20.0], "127.0.0.1", port)
         else:
             send_osc(sock, "/room/t60", "f", [t60], "127.0.0.1", port)
         if eq_late_hp is not None:
@@ -134,7 +134,7 @@ def main():
                          "/tmp/room_ctl_short.wav", reverb_send=0.8, t60=0.3)
     eLong, xL = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                         "/tmp/room_ctl_long.wav", reverb_send=0.8, t60=5.0)
-    # /room/set atomic bundle (f×22) must not crash / xrun.
+    # /room/set atomic bundle (f×23) must not crash / xrun.
     eSet, xSet = capture(a.bin, "/tmp/dome_room_ctl.yaml", n, a.seconds,
                          "/tmp/room_ctl_set.wav", reverb_send=0.8, t60=4.0, use_set=True)
     # Late-bus EQ: same long tail but HP the late bus at 800 Hz → the 110 Hz late
@@ -193,7 +193,7 @@ def main():
               f"(upper/dry={upShort/max(upDry,1.0):.1f}x), /room/t60 5.0 extends the "
               f"tail {upLong/max(upShort,1e-9):.2f}x vs 0.3, /room/late/gain "
               f"+6/-40 dB ratio {upLgLoud/max(upLgQuiet,1e-9):.1f}x, /room/eq/late + "
-              f"/room/set(f×22) clean, xruns=0")
+              f"/room/set(f×23) clean, xruns=0")
         return 0
     print("SMOKE FAIL"); return 1
 

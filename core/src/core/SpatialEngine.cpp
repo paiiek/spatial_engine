@@ -143,6 +143,7 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.room_early_gain_far_db    = p->early_gain_far_db;
                     qc.room_late_gain_close_db   = p->late_gain_close_db;
                     qc.room_late_gain_far_db     = p->late_gain_far_db;
+                    qc.room_early_predelay_ms    = p->early_predelay_ms;
                 }
                 break;
             case ipc::CommandTag::OutputGain:
@@ -650,13 +651,14 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
         // send-scaled mono, once per object; all 6 image rings read this xdel.
         // Faithful to RoomEngine.cpp:374-406. The single-branch ring wraps below
         // (pr += stride / prw reset) are valid only while pds < stride; pds is
-        // clamped to er_predelay_max_-1 (< stride) here — a future ⑥e-4 OSC
-        // predelay-ms must keep that clamp (not clamp to stride) to stay valid.
+        // clamped to er_predelay_max_-1 (< stride = er_predelay_max_+MAX_BLOCK+8)
+        // here, so the invariant holds for ANY predelay. ⑥g exercises this via the
+        // live /room/predelay path — the clamp must stay at max-1 (not stride).
         float xdel[MAX_BLOCK];
         {
             const int   stride = er_predelay_stride_;
             const int   pds = std::min(std::max(0, er_predelay_max_ - 1),
-                static_cast<int>(std::lround(iae::kRoomEarlyPredelayMs * 0.001 * sample_rate_)));
+                static_cast<int>(std::lround(room_early_predelay_ms_ * 0.001 * sample_rate_)));
             float* pline = er_predelay_lines_.data() +
                            static_cast<size_t>(i) * static_cast<size_t>(stride);
             int& prw = er_predelay_wpos_[static_cast<size_t>(i)];
@@ -829,6 +831,12 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
         room_late_gain_close_db_ = std::clamp(closeDb, -48.f, 12.f);
         room_late_gain_far_db_   = std::clamp(farDb, -48.f, 12.f);
     };
+    // ⑥g — early predelay (ms). Clamp to the reference 0..100 ms window; the pds
+    // it derives is further floored to er_predelay_max_-1 (< stride) in
+    // renderRoomEarly, so the single-branch ring wrap stays valid at any value.
+    auto applyPredelay = [&](float ms) {
+        room_early_predelay_ms_ = std::clamp(ms, 0.f, 100.f);
+    };
 
     switch (static_cast<Op>(qc.room_op)) {
     case Op::Enable: {
@@ -853,6 +861,7 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
         applyDistance(qc.room_dist_near_m, qc.room_dist_far_m, qc.room_dist_linearity01);
         applyEarlyGain(qc.room_early_gain_close_db, qc.room_early_gain_far_db);
         applyLateGain(qc.room_late_gain_close_db, qc.room_late_gain_far_db);
+        applyPredelay(qc.room_early_predelay_ms);
         break;
     case Op::T60:              applyT60(qc.room_t60); break;
     case Op::Size:             applySize(qc.room_sx, qc.room_sy, qc.room_sz); break;
@@ -867,6 +876,7 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
     case Op::Distance:         applyDistance(qc.room_dist_near_m, qc.room_dist_far_m, qc.room_dist_linearity01); break;
     case Op::EarlyGain:        applyEarlyGain(qc.room_early_gain_close_db, qc.room_early_gain_far_db); break;
     case Op::LateGain:         applyLateGain(qc.room_late_gain_close_db, qc.room_late_gain_far_db); break;
+    case Op::Predelay:         applyPredelay(qc.room_early_predelay_ms); break;
     }
 }
 

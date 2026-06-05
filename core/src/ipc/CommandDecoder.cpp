@@ -566,9 +566,9 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.op = Op::Enable;
             p.enable = (getInt(0) != 0);
         } else if (addr == "/room/set") {
-            // Atomic bundle: require all 22 floats; a partial /room/set would
+            // Atomic bundle: require all 23 floats; a partial /room/set would
             // silently zero unspecified params, so reject it instead.
-            if (args.n_float >= 22) {
+            if (args.n_float >= 23) {
                 p.op = Op::SetAll;
                 p.t60                 = getFloat(0);
                 p.sx                  = getFloat(1);
@@ -592,6 +592,7 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
                 p.early_gain_far_db   = getFloat(19);
                 p.late_gain_close_db  = getFloat(20);
                 p.late_gain_far_db    = getFloat(21);
+                p.early_predelay_ms   = getFloat(22);
             } else {
                 ok = false;
             }
@@ -622,6 +623,8 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.op = Op::EarlyGain; p.early_gain_close_db = getFloat(0); p.early_gain_far_db = getFloat(1);
         } else if (addr == "/room/late/gain") {
             p.op = Op::LateGain; p.late_gain_close_db = getFloat(0); p.late_gain_far_db = getFloat(1);
+        } else if (addr == "/room/predelay") {
+            p.op = Op::Predelay; p.early_predelay_ms = getFloat(0);
         } else {
             ok = false;
         }
@@ -1136,6 +1139,7 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
             add_f(p.dist_near_m); add_f(p.dist_far_m); add_f(p.dist_linearity01);
             add_f(p.early_gain_close_db); add_f(p.early_gain_far_db);
             add_f(p.late_gain_close_db); add_f(p.late_gain_far_db);
+            add_f(p.early_predelay_ms);
             break;
         case Op::T60:
             addr = "/room/t60"; add_f(p.t60); break;
@@ -1164,6 +1168,8 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
             addr = "/room/early/gain"; add_f(p.early_gain_close_db); add_f(p.early_gain_far_db); break;
         case Op::LateGain:
             addr = "/room/late/gain"; add_f(p.late_gain_close_db); add_f(p.late_gain_far_db); break;
+        case Op::Predelay:
+            addr = "/room/predelay"; add_f(p.early_predelay_ms); break;
         }
         break;
     }
