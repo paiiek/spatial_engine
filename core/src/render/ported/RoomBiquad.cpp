@@ -4,6 +4,7 @@
 
 #include "render/ported/RoomBiquad.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace iae {
@@ -11,9 +12,20 @@ namespace iae {
 namespace {
 // JUCE MathConstants<float>::pi (juce_MathsFunctions.h).
 constexpr float kPiF = 3.14159265358979323846f;
+
+// Defense-in-depth: keep the corner strictly inside (0, Nyquist) so the tan()
+// below can never hit π/2 → ±∞ → NaN coefficients (which would poison the whole
+// room bus). At/above Nyquist tan blows up; at 0 the LP form divides by zero.
+// Current callers already clamp tighter (SpatialEngine clampHz at 0.45·Fs), so
+// in-range corners (≤ ~0.49·Fs) are unchanged and byte-faithfulness is preserved;
+// this only neutralises an out-of-range corner from any future caller.
+inline float clampCorner(float frequency, double sampleRate) noexcept {
+    return std::clamp(frequency, 1.f, 0.49f * static_cast<float>(sampleRate));
+}
 } // namespace
 
 void RoomBiquad::setLowPass(double sampleRate, float frequency, float q) noexcept {
+    frequency = clampCorner(frequency, sampleRate);
     // juce_IIRFilter.cpp:75-91 (makeLowPass, Q form). All float arithmetic.
     const float n        = 1.f / std::tan(kPiF * frequency / static_cast<float>(sampleRate));
     const float nSquared = n * n;
@@ -30,6 +42,7 @@ void RoomBiquad::setLowPass(double sampleRate, float frequency, float q) noexcep
 }
 
 void RoomBiquad::setHighPass(double sampleRate, float frequency, float q) noexcept {
+    frequency = clampCorner(frequency, sampleRate);
     // juce_IIRFilter.cpp:101-117 (makeHighPass, Q form). All float arithmetic.
     const float n        = std::tan(kPiF * frequency / static_cast<float>(sampleRate));
     const float nSquared = n * n;

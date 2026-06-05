@@ -111,6 +111,19 @@ add_executable(test_convergence_room_biquad test_convergence_room_biquad.cpp)
 target_link_libraries(test_convergence_room_biquad PRIVATE spe_core)
 add_test(NAME convergence_room_biquad COMMAND test_convergence_room_biquad)
 
+# Dreamscape Convergence ⑥e-4 — /room/* OSC wire format: decode/encode round-trip
+# for every op (enable / set ,f×13 / per-param) + reject paths.
+add_executable(test_osc_room_ctl_roundtrip test_osc_room_ctl_roundtrip.cpp)
+target_link_libraries(test_osc_room_ctl_roundtrip PRIVATE spe_core)
+add_test(NAME osc_room_ctl_roundtrip COMMAND test_osc_room_ctl_roundtrip)
+
+# Dreamscape Convergence ⑥e-4 — live-engine room control: EQ lockstep (cluster
+# bus + all per-object early EQ), RT no-alloc on drain, and t60/cluster/enable
+# behaviour through the OSC -> FIFO -> drain path.
+add_executable(test_p_room_ctl_apply test_p_room_ctl_apply.cpp)
+target_link_libraries(test_p_room_ctl_apply PRIVATE spe_core)
+add_test(NAME p_room_ctl_apply COMMAND test_p_room_ctl_apply)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE

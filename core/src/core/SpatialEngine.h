@@ -358,6 +358,20 @@ public:
     }
     size_t objCacheSize() const noexcept { return obj_cache_.size(); }
 
+    // ⑥e-4 test-only — room absorption-EQ coefficient introspection. Used to
+    // prove /room/eq/early keeps the cluster-bus EQ and EVERY per-object early EQ
+    // coefficient-locked (the reference lockstep contract). RoomBiquad exposes
+    // b0()..a2(); these just hand out the live filters. Not RT-safe; control
+    // thread / test only.
+    const iae::RoomBiquad& clusterEqHpForTest() const noexcept { return cluster_eq_hp_; }
+    const iae::RoomBiquad& clusterEqLpForTest() const noexcept { return cluster_eq_lp_; }
+    const iae::RoomBiquad& earlyEqHpForTest(size_t i) const noexcept {
+        return er_eq_hp_[i];
+    }
+    const iae::RoomBiquad& earlyEqLpForTest(size_t i) const noexcept {
+        return er_eq_lp_[i];
+    }
+
     // F4b: consistent control-thread snapshot of authoritative object state into
     // scene ObjectSnapshots. Synchronized via the three-buffer published_index_
     // handshake; safe to call from the control loop concurrently with the RT
@@ -411,6 +425,11 @@ private:
     // computeLateFdnGains() steering the corners toward the source-energy-
     // opposite axis, with a WFS-fraction-driven diffuse amount.
     iae::RoomFdn                                              room_fdn_;
+    // ⑥e-4 — authoritative late-FDN params (t60 / HF damping). The engine owns
+    // this struct so /room/t60 and /room/late/hf can update one field and
+    // re-push the whole struct via room_fdn_.setParams(). Touched only on the
+    // audio thread (drain) after prepare; RoomFdn has no getter.
+    iae::RoomFdnParams                                        room_fdn_params_{};
     std::array<std::array<float, spe::MAX_SPEAKERS>,
                iae::RoomFdn::kOrder>                          fdn_line_gains_{};
     std::vector<float>                                        room_lines_;   // [kOrder * maxBlock]
@@ -446,6 +465,22 @@ private:
     // Render the early reflections for all active objects into mix_buf_.
     void renderRoomEarly(int n_spk, int num_frames) noexcept;
 
+    // ⑥e-4 — clear all room reverb tails/state for a clean onset when switching
+    // INTO room mode (late FDN, early rings + predelay + per-object EQ, cluster
+    // line + bus EQ). Factored out of the ReverbSelect drain so both
+    // /reverb/select "room" and /room/enable 1 share one implementation. RT-safe
+    // (fills + biquad reset; no allocation). Audio-thread only.
+    void resetRoomState() noexcept;
+
+    // ⑥e-4 — apply one drained RoomCtl command to the live room state. Runs on
+    // the AUDIO thread inside the FIFO drain (same thread as the room render),
+    // so RoomFdn/RoomCluster setParams() and the absorption-EQ recoeffs are
+    // race-free and allocation-free. SetAll applies every field in one call =
+    // atomic. EqEarly recoeffs the cluster-bus EQ and all per-object early EQ in
+    // lockstep (reference contract). All values are clamped here, next to the
+    // DSP that consumes them. Enable aliases /reverb/select "room" (1) / fdn (0).
+    void applyRoomCtl(const util::QueuedCmd& qc) noexcept;
+
     // ⑥e-2 Cluster (mid-field) diffusion — a shared mono bus fed by every active
     // object's predelayed+EQ'd send (xdel*cSend), run through an absorption EQ
     // (HP120→LP10000, the same earlyCluster corners) and the 6-tap feedforward
@@ -454,6 +489,10 @@ private:
     // roomClusterSend01 / diffusion / virtual-volume are fixed at the reference
     // defaults until ⑥e-4 OSC tuning.
     iae::RoomCluster                                       room_cluster_;
+    // ⑥e-4 — authoritative cluster params (diffusion / virtual volume). Same
+    // ownership rationale as room_fdn_params_: /room/cluster/{diffusion,volume}
+    // update one field and re-push via room_cluster_.setParams().
+    iae::RoomClusterParams                                 room_cluster_params_{};
     std::vector<float>                                     cluster_bus_;    // [maxBlock] mono send bus
     std::vector<float>                                     cluster_out_;    // [maxBlock] diffused mono
     iae::RoomBiquad                                        cluster_eq_hp_{};
@@ -462,6 +501,11 @@ private:
     // Read once per block on the audio thread; atomic so the ⑥e-4 OSC handler (or
     // a test) can set it from the control thread without a data race.
     std::atomic<float>                                    room_cluster_send01_{0.4f};
+    // ⑥e-4 — early-reflection width-spread cone (degrees). Read once per block in
+    // renderRoomEarly; atomic so /room/early/width (or a test) can set it from a
+    // non-audio thread without a data race. Reference default 45° (was a local
+    // constexpr before OSC plumbing).
+    std::atomic<float>                                    room_early_width_deg_{45.f};
     output::BinauralMonitor       binaural_;
     bool                          binaural_ok_ = false;
 

@@ -114,6 +114,28 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.reverb_which = p->which;
                 }
                 break;
+            case ipc::CommandTag::RoomCtl:
+                // ⑥e-4 — marshal the room params into the POD FIFO slot; the
+                // audio-thread drain (applyRoomCtl) clamps + applies them. POD
+                // throughout, so this rides the normal cmd_fifo_ push below.
+                if (auto* p = std::get_if<ipc::PayloadRoomCtl>(&cmd.payload)) {
+                    qc.room_op                   = static_cast<uint8_t>(p->op);
+                    qc.room_enable               = p->enable;
+                    qc.room_t60                  = p->t60;
+                    qc.room_sx                   = p->sx;
+                    qc.room_sy                   = p->sy;
+                    qc.room_sz                   = p->sz;
+                    qc.room_early_width_deg      = p->early_width_deg;
+                    qc.room_early_balance01      = p->early_balance01;
+                    qc.room_cluster_send01       = p->cluster_send01;
+                    qc.room_cluster_diffusion01  = p->cluster_diffusion01;
+                    qc.room_cluster_volume_m3    = p->cluster_volume_m3;
+                    qc.room_eq_early_hp          = p->eq_early_hp;
+                    qc.room_eq_early_lp          = p->eq_early_lp;
+                    qc.room_late_hf_corner_hz    = p->late_hf_corner_hz;
+                    qc.room_late_hf_ratio01      = p->late_hf_ratio01;
+                }
+                break;
             case ipc::CommandTag::OutputGain:
                 if (auto* p = std::get_if<ipc::PayloadOutputGain>(&cmd.payload)) {
                     qc.output_ch       = p->channel;
@@ -476,6 +498,10 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     // taps fanned out to cube-corner directions (gains computed below once the
     // layout is known). RoomFdn defaults match the reference mid-range.
     room_fdn_.prepare(sample_rate, max_block_size);
+    // ⑥e-4 — make the engine-owned param struct authoritative from the start so
+    // /room/t60 and /room/late/hf update one field and re-push the whole struct.
+    room_fdn_params_ = iae::RoomFdnParams{};
+    room_fdn_.setParams(room_fdn_params_);
     room_lines_.assign(static_cast<size_t>(iae::RoomFdn::kOrder) *
                        static_cast<size_t>(max_block_size), 0.f);
     // ⑥d early-reflection ring buffers: one kErRingLen ring per (object, image).
@@ -500,7 +526,8 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     // (HP120→LP10000, the reference cEcHp/cEcLp = earlyCluster corners). Defaults
     // diffusion=0.48 / virtual-volume=630 m³ (RoomEngine.cpp:204-206/610-611).
     room_cluster_.prepare(sample_rate);
-    room_cluster_.setParams(iae::RoomClusterParams{});  // reference defaults
+    room_cluster_params_ = iae::RoomClusterParams{};    // reference defaults
+    room_cluster_.setParams(room_cluster_params_);      // ⑥e-4 authoritative
     cluster_bus_.assign(static_cast<size_t>(max_block_size), 0.f);
     cluster_out_.assign(static_cast<size_t>(max_block_size), 0.f);
     cluster_eq_hp_.setHighPass(sample_rate, iae::kRoomEarlyClusterHpfHz);
@@ -566,11 +593,14 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
     static constexpr int   kSpread       = iae::kEarlySpreadSamples;     // 3
     static constexpr float kErTri3[3]    = { 1.f, 2.f, 1.f };
     static constexpr float kErTri3Inv    = 1.f / 4.f;
-    static constexpr float kEarlyWidthDeg = 45.f;   // reference default; OSC plumbing in ⑥e
+    // ⑥e-4 — early width-spread cone, OSC-tunable via /room/early/width. Read
+    // once per block (atomic) and clamped to a sane cone [0, 180]°.
+    const float kEarlyWidthDeg =
+        std::clamp(room_early_width_deg_.load(std::memory_order_relaxed), 0.f, 180.f);
 
     // ⑥e-2 — the cluster bus accumulates every object's xdel this block; clear it
     // before the per-object loop. cSend = jlimit(0,1,roomClusterSend01)*0.48
-    // (RoomEngine.cpp:415); fixed default until ⑥e-4 OSC.
+    // (RoomEngine.cpp:415); roomClusterSend01 is OSC-tunable via /room/cluster/send.
     std::fill(cluster_bus_.begin(), cluster_bus_.begin() + num_frames, 0.f);
     const float cSend =
         std::clamp(room_cluster_send01_.load(std::memory_order_relaxed), 0.f, 1.f) * 0.48f;
@@ -663,6 +693,121 @@ void SpatialEngine::renderRoomEarly(int n_spk, int num_frames) noexcept {
                 }
             }
         }
+    }
+}
+
+// ⑥e-4 — clear all room reverb tails/state for a clean onset when switching INTO
+// room mode. Shared by /reverb/select "room" and /room/enable 1. RT-safe (fills +
+// biquad reset; no allocation). Audio-thread only.
+void SpatialEngine::resetRoomState() noexcept {
+    room_fdn_.reset();
+    std::fill(er_rings_.begin(), er_rings_.end(), 0.f);
+    for (auto& obj_w : er_write_pos_) obj_w.fill(0);
+    // ⑥e-3b — early predelay lines + per-object early EQ state.
+    std::fill(er_predelay_lines_.begin(), er_predelay_lines_.end(), 0.f);
+    er_predelay_wpos_.fill(0);
+    for (int i = 0; i < MAX_OBJECTS; ++i) {
+        er_eq_hp_[static_cast<size_t>(i)].reset();
+        er_eq_lp_[static_cast<size_t>(i)].reset();
+    }
+    // ⑥e-2 — cluster delay line + bus EQ state.
+    room_cluster_.reset();
+    cluster_eq_hp_.reset();
+    cluster_eq_lp_.reset();
+}
+
+// ⑥e-4 — apply one drained RoomCtl command to the live room state (audio thread,
+// inside the FIFO drain). All values are clamped here, next to the DSP that
+// consumes them. RoomFdn/RoomCluster setParams() only store the struct (no
+// realloc — delay-line lengths are fixed at prepare), so they are RT-safe on the
+// audio thread. SetAll applies every field in one call → atomic. EqEarly recoeffs
+// the cluster-bus EQ and ALL per-object early EQ in lockstep (reference contract).
+void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
+    using Op = ipc::PayloadRoomCtl::Op;
+
+    // Absorption-EQ corner clamp: keep strictly inside (0, Nyquist).
+    const float fnyq = static_cast<float>(0.45 * sample_rate_);
+    auto clampHz = [&](float f) { return std::clamp(f, 10.f, std::max(20.f, fnyq)); };
+
+    auto applyT60 = [&](float t60) {
+        room_fdn_params_.t60Seconds = std::clamp(t60, 0.2f, 6.f);
+        room_fdn_.setParams(room_fdn_params_);
+    };
+    auto applyLateHf = [&](float corner, float ratio) {
+        room_fdn_params_.hfDecayCornerHz = std::clamp(corner, 800.f, 16000.f);
+        room_fdn_params_.hfDecayRatio01  = std::clamp(ratio, 0.05f, 1.f);
+        room_fdn_.setParams(room_fdn_params_);
+    };
+    auto applySize = [&](float sx, float sy, float sz) {
+        // Floor at 0.5 m to match computeFirstOrderReflections' own re-floor
+        // (RoomEarly.cpp) so the stored struct is authoritative — introspection
+        // sees exactly the half-extents the early-reflection geometry uses.
+        room_early_params_.halfExtents = iae::Vec3{
+            std::max(0.5f, sx), std::max(0.5f, sy), std::max(0.5f, sz) };
+    };
+    auto applyEarlyBalance = [&](float b) {
+        room_early_params_.earlyLateBalance01 = std::clamp(b, 0.f, 1.f);
+    };
+    auto applyEarlyWidth = [&](float w) {
+        room_early_width_deg_.store(std::clamp(w, 0.f, 180.f),
+                                    std::memory_order_relaxed);
+    };
+    auto applyClusterSend = [&](float s) {
+        room_cluster_send01_.store(std::clamp(s, 0.f, 1.f),
+                                   std::memory_order_relaxed);
+    };
+    auto applyClusterDiffusion = [&](float d) {
+        room_cluster_params_.diffusion01 = std::clamp(d, 0.f, 1.f);
+        room_cluster_.setParams(room_cluster_params_);
+    };
+    auto applyClusterVolume = [&](float v) {
+        room_cluster_params_.virtualVolumeM3 = std::max(50.f, v);
+        room_cluster_.setParams(room_cluster_params_);
+    };
+    // EQ lockstep: the cluster-bus absorption EQ and EVERY per-object early EQ
+    // share the same HP/LP corners — recoeff all together so they never drift
+    // (reference syncRoomEqCoeffsIfNeeded). Coeff-only (no state reset) = live
+    // tuning without a tail discontinuity. RT-safe: float math only, no alloc.
+    auto applyEqEarly = [&](float hp, float lp) {
+        const float h = clampHz(hp);
+        const float l = clampHz(lp);
+        cluster_eq_hp_.setHighPass(sample_rate_, h);
+        cluster_eq_lp_.setLowPass(sample_rate_, l);
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            er_eq_hp_[static_cast<size_t>(i)].setHighPass(sample_rate_, h);
+            er_eq_lp_[static_cast<size_t>(i)].setLowPass(sample_rate_, l);
+        }
+    };
+
+    switch (static_cast<Op>(qc.room_op)) {
+    case Op::Enable: {
+        // Alias /reverb/select: enable→room (2), disable→fdn (0). Reset the room
+        // tails on entry (prev != 2), mirroring the ReverbSelect drain.
+        const int which = qc.room_enable ? 2 : 0;
+        const int prev  = active_reverb_.exchange(which, std::memory_order_relaxed);
+        if (which == 2 && prev != 2) resetRoomState();
+        break;
+    }
+    case Op::SetAll:
+        applyT60(qc.room_t60);
+        applySize(qc.room_sx, qc.room_sy, qc.room_sz);
+        applyEarlyWidth(qc.room_early_width_deg);
+        applyEarlyBalance(qc.room_early_balance01);
+        applyClusterSend(qc.room_cluster_send01);
+        applyClusterDiffusion(qc.room_cluster_diffusion01);
+        applyClusterVolume(qc.room_cluster_volume_m3);
+        applyEqEarly(qc.room_eq_early_hp, qc.room_eq_early_lp);
+        applyLateHf(qc.room_late_hf_corner_hz, qc.room_late_hf_ratio01);
+        break;
+    case Op::T60:              applyT60(qc.room_t60); break;
+    case Op::Size:             applySize(qc.room_sx, qc.room_sy, qc.room_sz); break;
+    case Op::EarlyWidth:       applyEarlyWidth(qc.room_early_width_deg); break;
+    case Op::EarlyBalance:     applyEarlyBalance(qc.room_early_balance01); break;
+    case Op::ClusterSend:      applyClusterSend(qc.room_cluster_send01); break;
+    case Op::ClusterDiffusion: applyClusterDiffusion(qc.room_cluster_diffusion01); break;
+    case Op::ClusterVolume:    applyClusterVolume(qc.room_cluster_volume_m3); break;
+    case Op::EqEarly:          applyEqEarly(qc.room_eq_early_hp, qc.room_eq_early_lp); break;
+    case Op::LateHf:           applyLateHf(qc.room_late_hf_corner_hz, qc.room_late_hf_ratio01); break;
     }
 }
 
@@ -791,26 +936,14 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 // ⑥b/⑥d review (MEDIUM): the room late FDN and the per-object
                 // early-reflection rings are frozen while another mode is active,
                 // so on switching INTO room mode they would resume from a stale
-                // tail. Clear both for a clean onset — all fills, no allocation,
-                // RT-safe under the no-alloc scope.
-                if (which == 2 && prev != 2) {
-                    room_fdn_.reset();
-                    std::fill(er_rings_.begin(), er_rings_.end(), 0.f);
-                    for (auto& obj_w : er_write_pos_) obj_w.fill(0);
-                    // ⑥e-3b — clear early predelay lines + per-object EQ state.
-                    std::fill(er_predelay_lines_.begin(), er_predelay_lines_.end(), 0.f);
-                    er_predelay_wpos_.fill(0);
-                    for (int i = 0; i < MAX_OBJECTS; ++i) {
-                        er_eq_hp_[static_cast<size_t>(i)].reset();
-                        er_eq_lp_[static_cast<size_t>(i)].reset();
-                    }
-                    // ⑥e-2 — clear the cluster delay line + bus EQ state.
-                    room_cluster_.reset();
-                    cluster_eq_hp_.reset();
-                    cluster_eq_lp_.reset();
-                }
+                // tail. Clear them for a clean onset — RT-safe (fills + biquad
+                // reset, no allocation). Shared with /room/enable via the helper.
+                if (which == 2 && prev != 2) resetRoomState();
                 break;
             }
+            case ipc::CommandTag::RoomCtl:
+                applyRoomCtl(qc);
+                break;
             case ipc::CommandTag::SysAmbiOrder:
                 ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
                 break;

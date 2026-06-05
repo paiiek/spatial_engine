@@ -86,6 +86,11 @@ enum class CommandTag : uint8_t {
     OutputGain    = 0x53, // /output/{ch}/gain  ,f dB
     OutputLimit   = 0x54, // /output/{ch}/limit ,f dB threshold
 
+    // Dreamscape room engine OSC control (⑥e-4). One tag, op-selected payload.
+    // Single-leading-tag wire format (,i / ,f / ,ff / ,fff / ,f×13) — NO ,ii
+    // seq/id header, so the decoder's payload_int_offset trap never fires.
+    RoomCtl       = 0x55, // /room/* — enable | set (atomic bundle) | per-param
+
     // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
     ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
 
@@ -238,6 +243,56 @@ struct PayloadReverbSelect {
     uint8_t which = 0; // 0 = fdn, 1 = ir, 2 = room (spatial late FDN)
 };
 
+// Dreamscape room engine control (⑥e-4). A single tag carrying an op selector
+// and the live room parameters. For per-param ops only the relevant field(s)
+// are read; for SetAll the whole struct is applied atomically (one FIFO entry).
+// All fields default to the engine's reference defaults so an under-specified
+// command (e.g. an Enable) leaves a sensible struct.
+//
+// Address → op mapping (single-leading-tag wire format, no ,ii header):
+//   /room/enable          ,i      Enable            (enable)
+//   /room/set             ,f×13   SetAll            (all 13 floats below, in order)
+//   /room/t60             ,f      T60               (t60)
+//   /room/size            ,fff    Size              (sx, sy, sz)
+//   /room/early/width     ,f      EarlyWidth        (early_width_deg)
+//   /room/early/balance   ,f      EarlyBalance      (early_balance01)
+//   /room/cluster/send    ,f      ClusterSend       (cluster_send01)
+//   /room/cluster/diffusion ,f    ClusterDiffusion  (cluster_diffusion01)
+//   /room/cluster/volume  ,f      ClusterVolume     (cluster_volume_m3)
+//   /room/eq/early        ,ff     EqEarly           (eq_early_hp, eq_early_lp) — LOCKSTEP
+//   /room/late/hf         ,ff     LateHf            (late_hf_corner_hz, late_hf_ratio01)
+struct PayloadRoomCtl {
+    enum class Op : uint8_t {
+        Enable           = 0,
+        SetAll           = 1,
+        T60              = 2,
+        Size             = 3,
+        EarlyWidth       = 4,
+        EarlyBalance     = 5,
+        ClusterSend      = 6,
+        ClusterDiffusion = 7,
+        ClusterVolume    = 8,
+        EqEarly          = 9,  // recoeffs cluster-bus EQ + all per-object early EQ in lockstep
+        LateHf           = 10,
+    };
+    Op    op = Op::Enable;
+    bool  enable = false;
+    // SetAll canonical order (also the per-param carriers):
+    float t60                = 1.2f;     // RoomFdn t60Seconds
+    float sx                 = 6.f;      // halfExtents.x
+    float sy                 = 5.f;      // halfExtents.y
+    float sz                 = 3.f;      // halfExtents.z
+    float early_width_deg    = 45.f;     // early reflection width-spread cone
+    float early_balance01    = 0.45f;    // RoomEarlyParams earlyLateBalance01
+    float cluster_send01     = 0.4f;     // per-object cluster send (×0.48 internally)
+    float cluster_diffusion01= 0.48f;    // RoomClusterParams diffusion01
+    float cluster_volume_m3  = 630.f;    // RoomClusterParams virtualVolumeM3
+    float eq_early_hp        = 120.f;    // early-cluster absorption HP corner
+    float eq_early_lp        = 10000.f;  // early-cluster absorption LP corner
+    float late_hf_corner_hz  = 6200.f;   // RoomFdn hfDecayCornerHz
+    float late_hf_ratio01    = 0.62f;    // RoomFdn hfDecayRatio01
+};
+
 // Per-object DSP parameter setter.
 //   param 0..3 → EQ band gain in dB (low / lowmid / highmid / high)
 //   param 4    → user delay in ms (0..1000)
@@ -343,6 +398,7 @@ using CommandPayload = std::variant<
     PayloadTransportStop,
     PayloadObjDsp,
     PayloadReverbSelect,
+    PayloadRoomCtl,
     PayloadOutputGain,
     PayloadOutputLimit,
     PayloadSysLoadLayout,

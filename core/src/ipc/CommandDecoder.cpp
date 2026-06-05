@@ -551,6 +551,68 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         } else {
             makeUnknown();
         }
+    } else if (addr.size() > 6 && addr.compare(0, 6, "/room/") == 0) {
+        // ⑥e-4 Dreamscape room control. Single-leading-tag wire format (no ,ii
+        // header), so getFloat(idx)/getInt(idx) read positionally from arg 0.
+        // The decoder only marshals values; range clamping happens in the
+        // engine's audio-thread drain (next to the DSP that consumes them).
+        using Op = PayloadRoomCtl::Op;
+        PayloadRoomCtl p;
+        bool ok = true;
+        if (addr == "/room/enable") {
+            // Contract: ,i-only. A malformed ,ii packet would trip the seq/id
+            // trap above (offset 2) and read a missing int → enable=false; that
+            // fails safe (room off), but clients must send a single ,i arg.
+            p.op = Op::Enable;
+            p.enable = (getInt(0) != 0);
+        } else if (addr == "/room/set") {
+            // Atomic bundle: require all 13 floats; a partial /room/set would
+            // silently zero unspecified params, so reject it instead.
+            if (args.n_float >= 13) {
+                p.op = Op::SetAll;
+                p.t60                 = getFloat(0);
+                p.sx                  = getFloat(1);
+                p.sy                  = getFloat(2);
+                p.sz                  = getFloat(3);
+                p.early_width_deg     = getFloat(4);
+                p.early_balance01     = getFloat(5);
+                p.cluster_send01      = getFloat(6);
+                p.cluster_diffusion01 = getFloat(7);
+                p.cluster_volume_m3   = getFloat(8);
+                p.eq_early_hp         = getFloat(9);
+                p.eq_early_lp         = getFloat(10);
+                p.late_hf_corner_hz   = getFloat(11);
+                p.late_hf_ratio01     = getFloat(12);
+            } else {
+                ok = false;
+            }
+        } else if (addr == "/room/t60") {
+            p.op = Op::T60; p.t60 = getFloat(0);
+        } else if (addr == "/room/size") {
+            p.op = Op::Size; p.sx = getFloat(0); p.sy = getFloat(1); p.sz = getFloat(2);
+        } else if (addr == "/room/early/width") {
+            p.op = Op::EarlyWidth; p.early_width_deg = getFloat(0);
+        } else if (addr == "/room/early/balance") {
+            p.op = Op::EarlyBalance; p.early_balance01 = getFloat(0);
+        } else if (addr == "/room/cluster/send") {
+            p.op = Op::ClusterSend; p.cluster_send01 = getFloat(0);
+        } else if (addr == "/room/cluster/diffusion") {
+            p.op = Op::ClusterDiffusion; p.cluster_diffusion01 = getFloat(0);
+        } else if (addr == "/room/cluster/volume") {
+            p.op = Op::ClusterVolume; p.cluster_volume_m3 = getFloat(0);
+        } else if (addr == "/room/eq/early") {
+            p.op = Op::EqEarly; p.eq_early_hp = getFloat(0); p.eq_early_lp = getFloat(1);
+        } else if (addr == "/room/late/hf") {
+            p.op = Op::LateHf; p.late_hf_corner_hz = getFloat(0); p.late_hf_ratio01 = getFloat(1);
+        } else {
+            ok = false;
+        }
+        if (ok) {
+            cmd.tag = CommandTag::RoomCtl;
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
     } else if (addr == "/obj/dsp") {
         const int param_int = getInt(1);
         // F4b-T0: accept the full valid param range 0..7 (incl. 7 = Width).
@@ -1031,6 +1093,47 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         auto& p = std::get<PayloadOutputLimit>(cmd.payload);
         addr = "/output/" + std::to_string(p.channel) + "/limit";
         add_f(p.threshold_db);
+        break;
+    }
+    case CommandTag::RoomCtl: {
+        // ⑥e-4 — /room/* uses a single-leading-tag wire format (NO ,ii seq/id
+        // header). Discard the preamble seq/id bytes and restart the tag string
+        // (mirrors the ADM-V1 reset above).
+        auto& p = std::get<PayloadRoomCtl>(cmd.payload);
+        using Op = PayloadRoomCtl::Op;
+        args_buf.clear();
+        tags = ",";
+        switch (p.op) {
+        case Op::Enable:
+            addr = "/room/enable"; add_i(p.enable ? 1 : 0); break;
+        case Op::SetAll:
+            addr = "/room/set";
+            add_f(p.t60); add_f(p.sx); add_f(p.sy); add_f(p.sz);
+            add_f(p.early_width_deg); add_f(p.early_balance01);
+            add_f(p.cluster_send01); add_f(p.cluster_diffusion01);
+            add_f(p.cluster_volume_m3);
+            add_f(p.eq_early_hp); add_f(p.eq_early_lp);
+            add_f(p.late_hf_corner_hz); add_f(p.late_hf_ratio01);
+            break;
+        case Op::T60:
+            addr = "/room/t60"; add_f(p.t60); break;
+        case Op::Size:
+            addr = "/room/size"; add_f(p.sx); add_f(p.sy); add_f(p.sz); break;
+        case Op::EarlyWidth:
+            addr = "/room/early/width"; add_f(p.early_width_deg); break;
+        case Op::EarlyBalance:
+            addr = "/room/early/balance"; add_f(p.early_balance01); break;
+        case Op::ClusterSend:
+            addr = "/room/cluster/send"; add_f(p.cluster_send01); break;
+        case Op::ClusterDiffusion:
+            addr = "/room/cluster/diffusion"; add_f(p.cluster_diffusion01); break;
+        case Op::ClusterVolume:
+            addr = "/room/cluster/volume"; add_f(p.cluster_volume_m3); break;
+        case Op::EqEarly:
+            addr = "/room/eq/early"; add_f(p.eq_early_hp); add_f(p.eq_early_lp); break;
+        case Op::LateHf:
+            addr = "/room/late/hf"; add_f(p.late_hf_corner_hz); add_f(p.late_hf_ratio01); break;
+        }
         break;
     }
     default:

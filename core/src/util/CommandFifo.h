@@ -43,6 +43,21 @@ struct QueuedCmd {
     float    xyz_z     = 0.f;   // ObjXYZ Cartesian z
     float    width_rad = 0.f;   // ObjWidth source width in radians
     char     obj_name[32] = {}; // ObjName label (truncated, null-terminated)
+    // ⑥e-4 Dreamscape room control (RoomCtl). room_op selects which field(s)
+    // the audio-thread drain applies; SetAll applies all of them atomically in
+    // one drain iteration. Mirrors ipc::PayloadRoomCtl::Op. POD — no string in
+    // the hot path. Defaults are the engine's reference room defaults.
+    uint8_t  room_op = 0;       // PayloadRoomCtl::Op
+    bool     room_enable = false;
+    float    room_t60 = 1.2f;
+    float    room_sx = 6.f, room_sy = 5.f, room_sz = 3.f;
+    float    room_early_width_deg = 45.f;
+    float    room_early_balance01 = 0.45f;
+    float    room_cluster_send01 = 0.4f;
+    float    room_cluster_diffusion01 = 0.48f;
+    float    room_cluster_volume_m3 = 630.f;
+    float    room_eq_early_hp = 120.f, room_eq_early_lp = 10000.f;
+    float    room_late_hf_corner_hz = 6200.f, room_late_hf_ratio01 = 0.62f;
 };
 
 // SPSC ring buffer. T defaults to QueuedCmd so the existing audio-path
