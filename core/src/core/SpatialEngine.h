@@ -384,6 +384,15 @@ public:
     // Distinct from objCacheActiveAt (test-only / "Not RT-safe") — this is its
     // own synchronized path.
     void snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const;
+
+    // ⑥h — capture the live room engine state into a RoomSnapshot for scene save
+    // (/scene/save) and named recall (/room/preset). Reads the room param members
+    // + atomics + the enable gate (active_reverb_==2). Control thread only (NOT
+    // RT-safe); the values are control-mutated via applyRoomCtl on the audio
+    // thread, but a torn read here at worst captures a one-block-stale scalar,
+    // which is harmless for a save. Sets out.present = true.
+    void snapshotRoom(ipc::RoomSnapshot& out) const;
+
     std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
@@ -462,6 +471,13 @@ private:
     // (< stride), so the single-branch ring wrap stays valid at any predelay.
     // Default single-sourced from the ported reference constant.
     float                                                     room_early_predelay_ms_  = iae::kRoomEarlyPredelayMs;
+    // ⑥h — absorption-EQ corner frequencies kept as scalars alongside the
+    // biquads, so the live corners are introspectable (snapshotRoom / scene save)
+    // without reverse-engineering coefficients. Updated in applyEqEarly/applyEqLate.
+    float                                                     room_eq_early_hp_ = iae::kRoomEarlyClusterHpfHz;
+    float                                                     room_eq_early_lp_ = iae::kRoomEarlyClusterLpfHz;
+    float                                                     room_eq_late_hp_  = iae::kRoomLateHpfHz;
+    float                                                     room_eq_late_lp_  = iae::kRoomLateLpfHz;
     // Dedicated room late bus: per-object reverb send scaled by that object's
     // lateMul, summed. Separate from reverb_send_buf_ (which feeds the non-room
     // FDN/IR un-scaled), mirroring the reference's separate lateBusInput.

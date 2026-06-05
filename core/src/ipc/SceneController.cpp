@@ -352,6 +352,7 @@ bool SceneController::handleCommand(const Command& cmd) {
             // F4b: capture live authoritative per-object state (if a provider
             // was wired by the daemon). Prior behavior persisted no objects.
             if (objStateProvider_) objStateProvider_(snap.objects);
+            if (roomStateProvider_) roomStateProvider_(snap.room); // ⑥h
             if (!snap.saveToDisk(scenesDir_)) return true;
             // Track new scenes in the index (created_unix on first save).
             if (!findEntry(snap.name) && isSafeSceneName(snap.name)) {

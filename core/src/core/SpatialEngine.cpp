@@ -358,6 +358,34 @@ void SpatialEngine::setLayout(spe::geometry::SpeakerLayout layout) {
 // F4b — consistent control-thread snapshot of obj_cache_ via the three-buffer
 // published_index_ handshake (retry-until-stable seqlock reader). NOT RT-safe;
 // called from the control loop only. See SpatialEngine.h for the mechanism.
+void SpatialEngine::snapshotRoom(ipc::RoomSnapshot& out) const {
+    out.present             = true;
+    out.enabled             = (active_reverb_.load(std::memory_order_relaxed) == 2);
+    out.t60                 = room_fdn_params_.t60Seconds;
+    out.sx                  = room_early_params_.halfExtents.x;
+    out.sy                  = room_early_params_.halfExtents.y;
+    out.sz                  = room_early_params_.halfExtents.z;
+    out.early_width_deg     = room_early_width_deg_.load(std::memory_order_relaxed);
+    out.early_balance01     = room_early_params_.earlyLateBalance01;
+    out.cluster_send01      = room_cluster_send01_.load(std::memory_order_relaxed);
+    out.cluster_diffusion01 = room_cluster_params_.diffusion01;
+    out.cluster_volume_m3   = room_cluster_params_.virtualVolumeM3;
+    out.eq_early_hp         = room_eq_early_hp_;
+    out.eq_early_lp         = room_eq_early_lp_;
+    out.late_hf_corner_hz   = room_fdn_params_.hfDecayCornerHz;
+    out.late_hf_ratio01     = room_fdn_params_.hfDecayRatio01;
+    out.eq_late_hp          = room_eq_late_hp_;
+    out.eq_late_lp          = room_eq_late_lp_;
+    out.dist_near_m         = room_dist_near_m_;
+    out.dist_far_m          = room_dist_far_m_;
+    out.dist_linearity01    = room_dist_linearity01_;
+    out.early_gain_close_db = room_early_gain_close_db_;
+    out.early_gain_far_db   = room_early_gain_far_db_;
+    out.late_gain_close_db  = room_late_gain_close_db_;
+    out.late_gain_far_db    = room_late_gain_far_db_;
+    out.early_predelay_ms   = room_early_predelay_ms_;
+}
+
 void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const {
     // AC8 — algo enum ↔ ObjectSnapshot.algorithm (int) round-trip is a plain
     // static_cast in both directions; assert each variant survives compile-time.
@@ -799,6 +827,8 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
     auto applyEqEarly = [&](float hp, float lp) {
         const float h = clampHz(hp);
         const float l = clampHz(lp);
+        room_eq_early_hp_ = h;   // ⑥h — record live corners for snapshotRoom
+        room_eq_early_lp_ = l;
         cluster_eq_hp_.setHighPass(sample_rate_, h);
         cluster_eq_lp_.setLowPass(sample_rate_, l);
         for (int i = 0; i < MAX_OBJECTS; ++i) {
@@ -809,8 +839,10 @@ void SpatialEngine::applyRoomCtl(const util::QueuedCmd& qc) noexcept {
     // Late-bus EQ — a SEPARATE single filter pair (not locked to early/cluster);
     // the late FDN tail has its own corners (reference lateBusHp/Lp 45/16000).
     auto applyEqLate = [&](float hp, float lp) {
-        late_eq_hp_.setHighPass(sample_rate_, clampHz(hp));
-        late_eq_lp_.setLowPass(sample_rate_, clampHz(lp));
+        room_eq_late_hp_ = clampHz(hp);   // ⑥h — record live corners
+        room_eq_late_lp_ = clampHz(lp);
+        late_eq_hp_.setHighPass(sample_rate_, room_eq_late_hp_);
+        late_eq_lp_.setLowPass(sample_rate_, room_eq_late_lp_);
     };
     // ⑥f distance-gain params. iae::roomDistanceGainDbLinear re-clamps internally;
     // we also clamp the stored members to the reference pull ranges so

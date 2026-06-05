@@ -551,6 +551,17 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         } else {
             makeUnknown();
         }
+    } else if (addr == "/room/preset") {
+        // ⑥h — named room recall (,s). String payload → control-thread op, routed
+        // to the inbound mailbox (not the POD audio FIFO). Empty name rejected.
+        if (args.n_str > 0 && !args.strings[0].empty()) {
+            cmd.tag = CommandTag::RoomPreset;
+            PayloadRoomPreset pp;
+            pp.name = args.strings[0];
+            cmd.payload = pp;
+        } else {
+            makeUnknown();
+        }
     } else if (addr.size() > 6 && addr.compare(0, 6, "/room/") == 0) {
         // ⑥e-4 Dreamscape room control. Single-leading-tag wire format (no ,ii
         // header), so getFloat(idx)/getInt(idx) read positionally from arg 0.
@@ -1171,6 +1182,17 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         case Op::Predelay:
             addr = "/room/predelay"; add_f(p.early_predelay_ms); break;
         }
+        break;
+    }
+    case CommandTag::RoomPreset: {
+        // ⑥h — /room/preset ,s "name" (no ,ii seq/id header, like the ADM/room path).
+        auto& p = std::get<PayloadRoomPreset>(cmd.payload);
+        args_buf.clear();
+        tags = ",s";
+        for (char c : p.name) args_buf.push_back(static_cast<uint8_t>(c));
+        args_buf.push_back(0);
+        while (args_buf.size() % 4 != 0) args_buf.push_back(0);
+        addr = "/room/preset";
         break;
     }
     default:

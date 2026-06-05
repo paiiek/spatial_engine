@@ -501,6 +501,12 @@ int main(int argc, char** argv) {
         [&engine](std::vector<spe::ipc::ObjectSnapshot>& out) {
             engine.snapshotObjects(out);
         });
+    // ⑥h — wire the live room-state provider so /scene/save captures the room
+    // engine block, and /room/preset can recall it.
+    scene_ctrl.setRoomStateProvider(
+        [&engine](spe::ipc::RoomSnapshot& out) {
+            engine.snapshotRoom(out);
+        });
     spe::scene::CueEngine cue_engine(
         &scene_ctrl, static_cast<float>(sr),
         [&engine](const spe::ipc::Command& c) {
@@ -689,6 +695,49 @@ int main(int argc, char** argv) {
                     case spe::ipc::CommandTag::CueNext: cue_engine.next(now_unix_ms); break;
                     case spe::ipc::CommandTag::CuePrev: cue_engine.prev(now_unix_ms); break;
                     case spe::ipc::CommandTag::CueStop: cue_engine.stop(now_unix_ms); break;
+                    case spe::ipc::CommandTag::RoomPreset: {
+                        // ⑥h — recall a named scene's room block: load it, then
+                        // re-apply its params via the normal RoomCtl path (one
+                        // atomic SetAll + the enable gate). Objects are untouched
+                        // (this is a ROOM preset, not a full scene load). Unknown
+                        // name / no room block → safe no-op.
+                        const auto& p = std::get<spe::ipc::PayloadRoomPreset>(inc.payload);
+                        auto snap = spe::ipc::SceneSnapshot::loadFromDisk(scenes_dir, p.name);
+                        if (snap && snap->room.present) {
+                            const auto& r = snap->room;
+                            spe::ipc::PayloadRoomCtl rp;
+                            rp.op = spe::ipc::PayloadRoomCtl::Op::SetAll;
+                            rp.t60 = r.t60; rp.sx = r.sx; rp.sy = r.sy; rp.sz = r.sz;
+                            rp.early_width_deg = r.early_width_deg;
+                            rp.early_balance01 = r.early_balance01;
+                            rp.cluster_send01 = r.cluster_send01;
+                            rp.cluster_diffusion01 = r.cluster_diffusion01;
+                            rp.cluster_volume_m3 = r.cluster_volume_m3;
+                            rp.eq_early_hp = r.eq_early_hp; rp.eq_early_lp = r.eq_early_lp;
+                            rp.late_hf_corner_hz = r.late_hf_corner_hz;
+                            rp.late_hf_ratio01 = r.late_hf_ratio01;
+                            rp.eq_late_hp = r.eq_late_hp; rp.eq_late_lp = r.eq_late_lp;
+                            rp.dist_near_m = r.dist_near_m; rp.dist_far_m = r.dist_far_m;
+                            rp.dist_linearity01 = r.dist_linearity01;
+                            rp.early_gain_close_db = r.early_gain_close_db;
+                            rp.early_gain_far_db = r.early_gain_far_db;
+                            rp.late_gain_close_db = r.late_gain_close_db;
+                            rp.late_gain_far_db = r.late_gain_far_db;
+                            rp.early_predelay_ms = r.early_predelay_ms;
+                            spe::ipc::Command setc;
+                            setc.tag = spe::ipc::CommandTag::RoomCtl;
+                            setc.payload = rp;
+                            engine.dispatchCommand(setc);
+                            spe::ipc::PayloadRoomCtl ep;
+                            ep.op = spe::ipc::PayloadRoomCtl::Op::Enable;
+                            ep.enable = r.enabled;
+                            spe::ipc::Command enc;
+                            enc.tag = spe::ipc::CommandTag::RoomCtl;
+                            enc.payload = ep;
+                            engine.dispatchCommand(enc);
+                        }
+                        break;
+                    }
                     default:
                         // Scene* library ops: apply on the control thread.
                         scene_ctrl.handleCommand(inc);

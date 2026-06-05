@@ -131,6 +131,13 @@ add_executable(test_p_room_ctl_apply test_p_room_ctl_apply.cpp)
 target_link_libraries(test_p_room_ctl_apply PRIVATE spe_core)
 add_test(NAME p_room_ctl_apply COMMAND test_p_room_ctl_apply)
 
+# Dreamscape Convergence ⑥h — room state in scenes + /room/preset recall:
+# SceneSnapshot room-block JSON round-trip, backward compat (pre-room scenes),
+# /room/preset ,s decode/encode, and live snapshotRoom capture of /room/set.
+add_executable(test_p_room_preset test_p_room_preset.cpp)
+target_link_libraries(test_p_room_preset PRIVATE spe_core)
+add_test(NAME p_room_preset COMMAND test_p_room_preset)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE

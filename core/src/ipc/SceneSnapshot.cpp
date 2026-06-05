@@ -69,7 +69,38 @@ std::string SceneSnapshot::toJson() const {
            << "\"reverb_send\":" << ftos(o.reverb_send)
            << '}';
     }
-    os << "]}";
+    os << ']';
+    // Room block — emitted only when captured (present), so scenes saved without
+    // a room provider stay byte-identical to the pre-room format.
+    if (room.present) {
+        os << ",\"room\":{"
+           << "\"enabled\":"            << (room.enabled ? "true" : "false")   << ','
+           << "\"t60\":"                << ftos(room.t60)                << ','
+           << "\"sx\":"                 << ftos(room.sx)                 << ','
+           << "\"sy\":"                 << ftos(room.sy)                 << ','
+           << "\"sz\":"                 << ftos(room.sz)                 << ','
+           << "\"early_width_deg\":"    << ftos(room.early_width_deg)    << ','
+           << "\"early_balance01\":"    << ftos(room.early_balance01)    << ','
+           << "\"cluster_send01\":"     << ftos(room.cluster_send01)     << ','
+           << "\"cluster_diffusion01\":"<< ftos(room.cluster_diffusion01)<< ','
+           << "\"cluster_volume_m3\":"  << ftos(room.cluster_volume_m3)  << ','
+           << "\"eq_early_hp\":"        << ftos(room.eq_early_hp)        << ','
+           << "\"eq_early_lp\":"        << ftos(room.eq_early_lp)        << ','
+           << "\"late_hf_corner_hz\":"  << ftos(room.late_hf_corner_hz)  << ','
+           << "\"late_hf_ratio01\":"    << ftos(room.late_hf_ratio01)    << ','
+           << "\"eq_late_hp\":"         << ftos(room.eq_late_hp)         << ','
+           << "\"eq_late_lp\":"         << ftos(room.eq_late_lp)         << ','
+           << "\"dist_near_m\":"        << ftos(room.dist_near_m)        << ','
+           << "\"dist_far_m\":"         << ftos(room.dist_far_m)         << ','
+           << "\"dist_linearity01\":"   << ftos(room.dist_linearity01)   << ','
+           << "\"early_gain_close_db\":"<< ftos(room.early_gain_close_db)<< ','
+           << "\"early_gain_far_db\":"  << ftos(room.early_gain_far_db)  << ','
+           << "\"late_gain_close_db\":" << ftos(room.late_gain_close_db) << ','
+           << "\"late_gain_far_db\":"   << ftos(room.late_gain_far_db)   << ','
+           << "\"early_predelay_ms\":"  << ftos(room.early_predelay_ms)
+           << '}';
+    }
+    os << '}';
     return os.str();
 }
 
@@ -93,11 +124,15 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
     auto arr_start = json.find(kObjectsKey);
     if (arr_start == std::string::npos) return ss;
     arr_start += sizeof(kObjectsKey) - 1;
+    // Bound the object scan to the array's closing ']' so a trailing "room":{...}
+    // block (object values contain no ']') is never mis-parsed as an object.
+    const auto arr_end = json.find(']', arr_start);
 
     std::size_t pos = arr_start;
     while (pos < json.size()) {
         auto open = json.find('{', pos);
         if (open == std::string::npos) break;
+        if (arr_end != std::string::npos && open > arr_end) break;
         auto close = json.find('}', open);
         if (close == std::string::npos) break;
 
@@ -118,6 +153,46 @@ SceneSnapshot SceneSnapshot::fromJson(const std::string& json) {
         o.reverb_send = getF("reverb_send", o.reverb_send);
         ss.objects.push_back(o);
         pos = close + 1;
+    }
+
+    // Room block (optional — absent in pre-room scenes → room.present stays false).
+    // INVARIANT: the room block must stay FLAT (no nested objects). The close is
+    // the first '}' after "room":{ — correct only while every value is a scalar.
+    // If a nested object is ever added, switch to brace-matching here.
+    static constexpr char kRoomKey[] = "\"room\":{";
+    auto room_start = json.find(kRoomKey);
+    if (room_start != std::string::npos) {
+        auto room_close = json.find('}', room_start);
+        const std::string r = (room_close != std::string::npos)
+            ? json.substr(room_start, room_close - room_start + 1)
+            : json.substr(room_start);
+        auto getF = [&](const char* k, float defv) { return parseFloatOr(jsonGet(r, k), defv); };
+        RoomSnapshot& rm = ss.room;
+        rm.present             = true;
+        rm.enabled             = (jsonGet(r, "enabled") == "true");
+        rm.t60                 = getF("t60",                 rm.t60);
+        rm.sx                  = getF("sx",                  rm.sx);
+        rm.sy                  = getF("sy",                  rm.sy);
+        rm.sz                  = getF("sz",                  rm.sz);
+        rm.early_width_deg     = getF("early_width_deg",     rm.early_width_deg);
+        rm.early_balance01     = getF("early_balance01",     rm.early_balance01);
+        rm.cluster_send01      = getF("cluster_send01",      rm.cluster_send01);
+        rm.cluster_diffusion01 = getF("cluster_diffusion01", rm.cluster_diffusion01);
+        rm.cluster_volume_m3   = getF("cluster_volume_m3",   rm.cluster_volume_m3);
+        rm.eq_early_hp         = getF("eq_early_hp",         rm.eq_early_hp);
+        rm.eq_early_lp         = getF("eq_early_lp",         rm.eq_early_lp);
+        rm.late_hf_corner_hz   = getF("late_hf_corner_hz",   rm.late_hf_corner_hz);
+        rm.late_hf_ratio01     = getF("late_hf_ratio01",     rm.late_hf_ratio01);
+        rm.eq_late_hp          = getF("eq_late_hp",          rm.eq_late_hp);
+        rm.eq_late_lp          = getF("eq_late_lp",          rm.eq_late_lp);
+        rm.dist_near_m         = getF("dist_near_m",         rm.dist_near_m);
+        rm.dist_far_m          = getF("dist_far_m",          rm.dist_far_m);
+        rm.dist_linearity01    = getF("dist_linearity01",    rm.dist_linearity01);
+        rm.early_gain_close_db = getF("early_gain_close_db", rm.early_gain_close_db);
+        rm.early_gain_far_db   = getF("early_gain_far_db",   rm.early_gain_far_db);
+        rm.late_gain_close_db  = getF("late_gain_close_db",  rm.late_gain_close_db);
+        rm.late_gain_far_db    = getF("late_gain_far_db",    rm.late_gain_far_db);
+        rm.early_predelay_ms   = getF("early_predelay_ms",   rm.early_predelay_ms);
     }
     return ss;
 }

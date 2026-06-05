@@ -25,6 +25,7 @@ static inline bool isCueOrSceneTag(CommandTag tag) noexcept {
         case CommandTag::CueNext:
         case CommandTag::CuePrev:
         case CommandTag::CueStop:
+        case CommandTag::RoomPreset:  // ⑥h — named room recall, applied on control loop
             return true;
         default:
             return false;

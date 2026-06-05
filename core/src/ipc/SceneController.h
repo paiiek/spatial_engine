@@ -78,6 +78,12 @@ public:
     using ObjectStateProvider = std::function<void(std::vector<ObjectSnapshot>&)>;
     void setObjectStateProvider(ObjectStateProvider p) { objStateProvider_ = std::move(p); }
 
+    // ⑥h — symmetric seam for the room engine block: the daemon injects a
+    // callback capturing the live room state into a scene on SceneSave. Optional
+    // (unset → scenes carry no room block, fully backward compatible).
+    using RoomStateProvider = std::function<void(RoomSnapshot&)>;
+    void setRoomStateProvider(RoomStateProvider p) { roomStateProvider_ = std::move(p); }
+
 private:
     // Find an index entry by name (nullptr if absent).
     SceneIndexEntry*       findEntry(const std::string& name);
@@ -93,6 +99,7 @@ private:
     std::vector<std::string> lastSceneList_;
     std::optional<SceneSnapshot> lastLoaded_;
     ObjectStateProvider objStateProvider_; // F4b — set by the daemon (optional)
+    RoomStateProvider   roomStateProvider_; // ⑥h — set by the daemon (optional)
 };
 
 } // namespace spe::ipc

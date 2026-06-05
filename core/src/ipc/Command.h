@@ -90,6 +90,10 @@ enum class CommandTag : uint8_t {
     // Single-leading-tag wire format (,i / ,f / ,ff / ,fff / ,f×22) — NO ,ii
     // seq/id header, so the decoder's payload_int_offset trap never fires.
     RoomCtl       = 0x55, // /room/* — enable | set (atomic bundle) | per-param
+    // /room/preset ,s "name" — recall a named scene's room block (control-thread
+    // / scene-library op; carries a std::string, so it routes to the inbound
+    // mailbox like Scene*, NOT the POD audio FIFO).
+    RoomPreset    = 0x56,
 
     // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
     ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
@@ -315,6 +319,13 @@ struct PayloadRoomCtl {
     float early_predelay_ms  = 20.f;     // early-reflection predelay (ms)
 };
 
+// /room/preset ,s "name" — recall the room block of a named scene. Control-thread
+// op (string payload); the daemon loads the scene and re-applies its room params
+// via the normal RoomCtl path. Empty / unknown name is a safe no-op.
+struct PayloadRoomPreset {
+    std::string name;
+};
+
 // Per-object DSP parameter setter.
 //   param 0..3 → EQ band gain in dB (low / lowmid / highmid / high)
 //   param 4    → user delay in ms (0..1000)
@@ -421,6 +432,7 @@ using CommandPayload = std::variant<
     PayloadObjDsp,
     PayloadReverbSelect,
     PayloadRoomCtl,
+    PayloadRoomPreset,
     PayloadOutputGain,
     PayloadOutputLimit,
     PayloadSysLoadLayout,
