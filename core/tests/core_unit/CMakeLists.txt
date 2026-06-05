@@ -111,6 +111,13 @@ add_executable(test_convergence_room_biquad test_convergence_room_biquad.cpp)
 target_link_libraries(test_convergence_room_biquad PRIVATE spe_core)
 add_test(NAME convergence_room_biquad COMMAND test_convergence_room_biquad)
 
+# Dreamscape Convergence ⑥f — room distance-gain curve core (iae::RoomDistanceGain):
+# byte-faithful port of AudioEngine.cpp:29-62 (normalizedRoomDistance01 +
+# roomDistanceGainDbLinear), cross-checked against an independent re-implementation.
+add_executable(test_convergence_room_distance_gain test_convergence_room_distance_gain.cpp)
+target_link_libraries(test_convergence_room_distance_gain PRIVATE spe_core)
+add_test(NAME convergence_room_distance_gain COMMAND test_convergence_room_distance_gain)
+
 # Dreamscape Convergence ⑥e-4 — /room/* OSC wire format: decode/encode round-trip
 # for every op (enable / set ,f×13 / per-param) + reject paths.
 add_executable(test_osc_room_ctl_roundtrip test_osc_room_ctl_roundtrip.cpp)
