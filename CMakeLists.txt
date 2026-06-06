@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(spatial_engine
-    VERSION 0.2.0
+    # Aligned with the v0.9.0 release tag (was a stale 0.2.0 from the Phase C era).
+    # Phase 5 of the v1.0 full-coverage plan bumps this to 1.0.0 at the v1.0 tag.
+    VERSION 0.9.0
     DESCRIPTION "Real-time object-based immersive audio rendering engine"
     LANGUAGES CXX)
 

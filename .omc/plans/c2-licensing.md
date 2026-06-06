@@ -48,6 +48,23 @@
 - 모든 외부 의존은 GPLv3 호환 또는 호환성 검증 완료.
 - spatial_engine 자체 코드는 GPLv3 fallback 자동 동의.
 
+## Strand 4 — Ported reference DSP (Dreamscape Convergence, 2026-06-07 amendment)
+
+**Decision:** Direct source port of `immersive-audio-engine` (commit `f2cb796`,
+v0.2.1) is **authorized** under convergence decision **D3** (porting right held).
+Clean-room reimplementation **not required**.
+
+- **Scope:** all files under `core/src/render/ported/` (namespace `iae`,
+  JUCE-free). Each file carries an in-source origin header (upstream path +
+  commit) and `Direct port authorized (convergence D3)`.
+- **Isolation:** ported code lives only in `ported/`; mmhoa-original code calls
+  into `iae::` entry points. Re-sync from upstream rather than diverging.
+- **Distinct from Strands 1–3:** those cover JUCE/VST3/Steinberg licensing; this
+  strand covers the reference DSP port. The two are independent axes.
+- **Authoritative record:** `docs/legal/PROVENANCE.md` (file↔source↔sheet map,
+  rights basis, isolation/re-sync policy). Commercial due-diligence answers the
+  "what/where/right/isolation" questions from that document.
+
 ---
 
 ## Plan-amendment hooks
