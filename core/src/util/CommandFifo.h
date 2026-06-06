@@ -63,6 +63,16 @@ struct QueuedCmd {
     float    room_early_gain_close_db = -10.f, room_early_gain_far_db = -18.f;
     float    room_late_gain_close_db = -12.f, room_late_gain_far_db = 0.f;
     float    room_early_predelay_ms = 20.f;
+    // ⑦ Speaker decorrelation control (DecorrCtl). decorr_op mirrors
+    // ipc::PayloadDecorrCtl::Op; the audio-thread drain applies the relevant
+    // field(s) (SetAll applies all). POD — no string in the hot path.
+    uint8_t  decorr_op = 0;       // PayloadDecorrCtl::Op
+    bool     decorr_enabled = false;
+    float    decorr_mix01 = 0.35f;
+    float    decorr_spread_ms = 4.0f;
+    float    decorr_ap = 0.62f;
+    int32_t  decorr_stages = 4;
+    uint32_t decorr_seed = 0;
 };
 
 // SPSC ring buffer. T defaults to QueuedCmd so the existing audio-path

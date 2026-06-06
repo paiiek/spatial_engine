@@ -645,6 +645,48 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         } else {
             makeUnknown();
         }
+    } else if (addr.size() > 8 && addr.compare(0, 8, "/decorr/") == 0) {
+        // ⑦ Speaker decorrelation control. Single-leading-tag wire format (no ,ii
+        // header). Mixed-type ops read getFloat()/getInt() positionally (the
+        // decoder stores ints and floats in SEPARATE arrays, so the bundle's
+        // tag order does not perturb indexing). Clamping is in the engine drain.
+        using DOp = PayloadDecorrCtl::Op;
+        PayloadDecorrCtl d;
+        bool ok = true;
+        if (addr == "/decorr/enable") {
+            d.op = DOp::Enable; d.enabled = (getInt(0) != 0);
+        } else if (addr == "/decorr/set") {
+            // Bundle ,fffiii: mix spread ap | enabled stages seed.
+            if (args.n_float >= 3 && args.n_int >= 3) {
+                d.op = DOp::SetAll;
+                d.mix01           = getFloat(0);
+                d.delay_spread_ms = getFloat(1);
+                d.ap_coeff01      = getFloat(2);
+                d.enabled         = (getInt(0) != 0);
+                d.stages          = getInt(1);
+                d.seed            = static_cast<uint32_t>(getInt(2));
+            } else {
+                ok = false;
+            }
+        } else if (addr == "/decorr/mix") {
+            d.op = DOp::Mix; d.mix01 = getFloat(0);
+        } else if (addr == "/decorr/spread") {
+            d.op = DOp::Spread; d.delay_spread_ms = getFloat(0);
+        } else if (addr == "/decorr/ap") {
+            d.op = DOp::Ap; d.ap_coeff01 = getFloat(0);
+        } else if (addr == "/decorr/stages") {
+            d.op = DOp::Stages; d.stages = getInt(0);
+        } else if (addr == "/decorr/seed") {
+            d.op = DOp::Seed; d.seed = static_cast<uint32_t>(getInt(0));
+        } else {
+            ok = false;
+        }
+        if (ok) {
+            cmd.tag = CommandTag::DecorrCtl;
+            cmd.payload = d;
+        } else {
+            makeUnknown();
+        }
     } else if (addr == "/obj/dsp") {
         const int param_int = getInt(1);
         // F4b-T0: accept the full valid param range 0..7 (incl. 7 = Width).
@@ -1193,6 +1235,29 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         args_buf.push_back(0);
         while (args_buf.size() % 4 != 0) args_buf.push_back(0);
         addr = "/room/preset";
+        break;
+    }
+    case CommandTag::DecorrCtl: {
+        // ⑦ /decorr/* — single-leading-tag, no ,ii seq/id header.
+        auto& p = std::get<PayloadDecorrCtl>(cmd.payload);
+        using DOp = PayloadDecorrCtl::Op;
+        args_buf.clear();
+        tags = ",";
+        switch (p.op) {
+        case DOp::Enable: addr = "/decorr/enable"; add_i(p.enabled ? 1 : 0); break;
+        case DOp::SetAll:
+            // ,fffiii: mix spread ap | enabled stages seed.
+            addr = "/decorr/set";
+            add_f(p.mix01); add_f(p.delay_spread_ms); add_f(p.ap_coeff01);
+            add_i(p.enabled ? 1 : 0); add_i(p.stages);
+            add_i(static_cast<int32_t>(p.seed));
+            break;
+        case DOp::Mix:    addr = "/decorr/mix";    add_f(p.mix01); break;
+        case DOp::Spread: addr = "/decorr/spread"; add_f(p.delay_spread_ms); break;
+        case DOp::Ap:     addr = "/decorr/ap";     add_f(p.ap_coeff01); break;
+        case DOp::Stages: addr = "/decorr/stages"; add_i(p.stages); break;
+        case DOp::Seed:   addr = "/decorr/seed";   add_i(static_cast<int32_t>(p.seed)); break;
+        }
         break;
     }
     default:

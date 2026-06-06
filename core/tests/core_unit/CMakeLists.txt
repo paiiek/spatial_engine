@@ -145,6 +145,12 @@ add_executable(test_p_room_preset test_p_room_preset.cpp)
 target_link_libraries(test_p_room_preset PRIVATE spe_core)
 add_test(NAME p_room_preset COMMAND test_p_room_preset)
 
+# Dreamscape Convergence ⑦ — /decorr/* OSC wire (decode/encode all ops + reject)
+# + live-engine apply (introspect, RT no-alloc, audible bus change).
+add_executable(test_p_decorr_ctl test_p_decorr_ctl.cpp)
+target_link_libraries(test_p_decorr_ctl PRIVATE spe_core)
+add_test(NAME p_decorr_ctl COMMAND test_p_decorr_ctl)
+
 add_executable(test_p2_layout_loader test_p2_layout_loader.cpp)
 target_link_libraries(test_p2_layout_loader PRIVATE spe_core)
 target_compile_definitions(test_p2_layout_loader PRIVATE

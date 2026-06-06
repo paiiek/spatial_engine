@@ -95,6 +95,10 @@ enum class CommandTag : uint8_t {
     // mailbox like Scene*, NOT the POD audio FIFO).
     RoomPreset    = 0x56,
 
+    // Speaker decorrelation OSC control (⑦). One tag, op-selected payload.
+    // Single-leading-tag wire format (,i / ,f / ,fffiii) — NO ,ii seq/id header.
+    DecorrCtl     = 0x57, // /decorr/* — enable | set (bundle) | per-param
+
     // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
     ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
 
@@ -326,6 +330,41 @@ struct PayloadRoomPreset {
     std::string name;
 };
 
+// Speaker decorrelation control (⑦). One tag + op selector; per-param ops read
+// the relevant field(s), SetAll applies all six in one FIFO command. Defaults =
+// the reference SpatialSessionState decorrelation defaults.
+//
+// Address → op mapping (single-leading-tag wire format, no ,ii header):
+//   /decorr/enable  ,i       Enable     (enabled)
+//   /decorr/set     ,fffiii  SetAll     (mix, spread_ms, ap, enabled, stages, seed)
+//                            NOTE: SetAll is AUTHORITATIVE over `enabled` — it
+//                            carries the flag as ints[0] and always writes it, so
+//                            a client tuning params via /set must re-send the
+//                            intended enabled value or use the per-param ops.
+//   /decorr/mix     ,f       Mix        (mix01)
+//   /decorr/spread  ,f       Spread     (delay_spread_ms)
+//   /decorr/ap      ,f       Ap         (ap_coeff01)
+//   /decorr/stages  ,i       Stages     (stages)
+//   /decorr/seed    ,i       Seed       (seed)
+struct PayloadDecorrCtl {
+    enum class Op : uint8_t {
+        Enable = 0,
+        SetAll = 1,
+        Mix    = 2,
+        Spread = 3,
+        Ap     = 4,
+        Stages = 5,
+        Seed   = 6,
+    };
+    Op       op = Op::Enable;
+    bool     enabled         = false;
+    float    mix01           = 0.35f;  // reference default (37% wet)
+    float    delay_spread_ms = 4.0f;   // reference default
+    float    ap_coeff01      = 0.62f;  // reference default
+    int32_t  stages          = 4;      // reference default (1..8)
+    uint32_t seed            = 0;      // deterministic per-speaker hash seed
+};
+
 // Per-object DSP parameter setter.
 //   param 0..3 → EQ band gain in dB (low / lowmid / highmid / high)
 //   param 4    → user delay in ms (0..1000)
@@ -433,6 +472,7 @@ using CommandPayload = std::variant<
     PayloadReverbSelect,
     PayloadRoomCtl,
     PayloadRoomPreset,
+    PayloadDecorrCtl,
     PayloadOutputGain,
     PayloadOutputLimit,
     PayloadSysLoadLayout,

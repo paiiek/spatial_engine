@@ -146,6 +146,19 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.room_early_predelay_ms    = p->early_predelay_ms;
                 }
                 break;
+            case ipc::CommandTag::DecorrCtl:
+                // ⑦ — marshal decorrelation params into the POD FIFO slot; the
+                // audio-thread drain (applyDecorrCtl) clamps + stores them.
+                if (auto* p = std::get_if<ipc::PayloadDecorrCtl>(&cmd.payload)) {
+                    qc.decorr_op        = static_cast<uint8_t>(p->op);
+                    qc.decorr_enabled   = p->enabled;
+                    qc.decorr_mix01     = p->mix01;
+                    qc.decorr_spread_ms = p->delay_spread_ms;
+                    qc.decorr_ap        = p->ap_coeff01;
+                    qc.decorr_stages    = p->stages;
+                    qc.decorr_seed      = p->seed;
+                }
+                break;
             case ipc::CommandTag::OutputGain:
                 if (auto* p = std::get_if<ipc::PayloadOutputGain>(&cmd.payload)) {
                     qc.output_ch       = p->channel;
@@ -549,6 +562,8 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     late_eq_lp_.setLowPass(sample_rate, iae::kRoomLateLpfHz);
     // ⑥f — dedicated room late bus (per-object lateMul-scaled send).
     room_late_send_buf_.assign(static_cast<size_t>(max_block_size), 0.f);
+    // ⑦ — per-speaker decorrelation bank (heap delay rings sized here).
+    decorr_bank_.prepare(sample_rate, max_block_size);
     // ⑥d early-reflection ring buffers: one kErRingLen ring per (object, image).
     er_rings_.assign(static_cast<size_t>(MAX_OBJECTS) *
                      static_cast<size_t>(iae::kNumFirstOrderImages) *
@@ -935,6 +950,30 @@ iae::Vec3 SpatialEngine::lateFdnLineDirection(int k, const iae::Vec3& opp) noexc
                          + opp * kLateCornerTowardOpposite);
 }
 
+// ⑦ — apply one drained DecorrCtl command (audio thread, FIFO drain). Stores the
+// clamped params into plain members read by the output loop later in the same
+// audioBlock; the bank itself reconfigures per channel lazily (cfgHash) on the
+// next process. RT-safe (no alloc; the bank's rings are prepare-allocated).
+void SpatialEngine::applyDecorrCtl(const util::QueuedCmd& qc) noexcept {
+    using Op = ipc::PayloadDecorrCtl::Op;
+    switch (static_cast<Op>(qc.decorr_op)) {
+    case Op::Enable: decorr_enabled_   = qc.decorr_enabled; break;
+    case Op::Mix:    decorr_mix01_     = std::clamp(qc.decorr_mix01, 0.f, 1.f); break;
+    case Op::Spread: decorr_spread_ms_ = std::clamp(qc.decorr_spread_ms, 0.f, 24.f); break;
+    case Op::Ap:     decorr_ap_        = std::clamp(qc.decorr_ap, 0.02f, 0.92f); break;
+    case Op::Stages: decorr_stages_    = std::clamp(qc.decorr_stages, 1, iae::SpeakerDecorrelationBank::kMaxStages); break;
+    case Op::Seed:   decorr_seed_      = qc.decorr_seed; break;
+    case Op::SetAll:
+        decorr_enabled_   = qc.decorr_enabled;
+        decorr_mix01_     = std::clamp(qc.decorr_mix01, 0.f, 1.f);
+        decorr_spread_ms_ = std::clamp(qc.decorr_spread_ms, 0.f, 24.f);
+        decorr_ap_        = std::clamp(qc.decorr_ap, 0.02f, 0.92f);
+        decorr_stages_    = std::clamp(qc.decorr_stages, 1, iae::SpeakerDecorrelationBank::kMaxStages);
+        decorr_seed_      = qc.decorr_seed;
+        break;
+    }
+}
+
 void SpatialEngine::computeLateFdnGains(const iae::Vec3& opp, float lateDiffuse01,
                                         int n_spk) noexcept {
     for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
@@ -1044,6 +1083,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             }
             case ipc::CommandTag::RoomCtl:
                 applyRoomCtl(qc);
+                break;
+            case ipc::CommandTag::DecorrCtl:
+                applyDecorrCtl(qc);
                 break;
             case ipc::CommandTag::SysAmbiOrder:
                 ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
@@ -1423,6 +1465,21 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                     }
                     block.output_channels[spk][n] = s;
                 }
+            }
+        }
+
+        // ⑦ — per-speaker decorrelation on the output bus, after the per-speaker
+        // gain/delay deinterleave (faithful to the reference, which decorrelates
+        // after speaker gains). In place on each planar channel; the bank no-ops
+        // when disabled / mix≈0. RT-safe (rings prepare-allocated, lazy reconfig).
+        if (decorr_enabled_ && decorr_mix01_ > 1.0e-5f) {
+            for (int spk = 0; spk < out_ch; ++spk) {
+                if (!block.output_channels || !block.output_channels[spk]) continue;
+                decorr_bank_.processChannel(spk, block.output_channels[spk],
+                                            block.num_frames, decorr_enabled_,
+                                            decorr_mix01_, decorr_stages_,
+                                            decorr_spread_ms_, decorr_ap_,
+                                            decorr_seed_);
             }
         }
 

@@ -25,6 +25,7 @@
 #include "render/ported/RoomBiquad.h"
 #include "render/ported/RoomCluster.h"
 #include "render/ported/RoomDistanceGain.h"
+#include "render/ported/SpeakerDecorrelation.h"
 #include "sync/LtcChase.h"
 #include "util/CommandFifo.h"
 #include "util/CpuMeter.h"
@@ -376,6 +377,13 @@ public:
     // early/cluster EQ; its own corners. Not RT-safe; test only.
     const iae::RoomBiquad& lateEqHpForTest() const noexcept { return late_eq_hp_; }
     const iae::RoomBiquad& lateEqLpForTest() const noexcept { return late_eq_lp_; }
+    // ⑦ test-only — decorrelation param introspection (not RT-safe).
+    bool          decorrEnabledForTest() const noexcept { return decorr_enabled_; }
+    float         decorrMixForTest()     const noexcept { return decorr_mix01_; }
+    float         decorrSpreadForTest()  const noexcept { return decorr_spread_ms_; }
+    float         decorrApForTest()      const noexcept { return decorr_ap_; }
+    int           decorrStagesForTest()  const noexcept { return decorr_stages_; }
+    std::uint32_t decorrSeedForTest()    const noexcept { return decorr_seed_; }
 
     // F4b: consistent control-thread snapshot of authoritative object state into
     // scene ObjectSnapshots. Synchronized via the three-buffer published_index_
@@ -478,6 +486,22 @@ private:
     float                                                     room_eq_early_lp_ = iae::kRoomEarlyClusterLpfHz;
     float                                                     room_eq_late_hp_  = iae::kRoomLateHpfHz;
     float                                                     room_eq_late_lp_  = iae::kRoomLateLpfHz;
+
+    // ⑦ Speaker decorrelation — per-speaker Schroeder allpass cascade applied on
+    // the output bus after the per-speaker gain/delay deinterleave (faithful to
+    // the reference, which decorrelates after speaker gains). Params are plain
+    // members written only on the audio thread (FIFO drain → applyDecorrCtl) and
+    // read in the same audioBlock's output loop — race-free, no atomics needed.
+    iae::SpeakerDecorrelationBank                             decorr_bank_;
+    bool                                                      decorr_enabled_   = false;
+    float                                                     decorr_mix01_     = 0.35f;
+    float                                                     decorr_spread_ms_ = 4.0f;
+    float                                                     decorr_ap_        = 0.62f;
+    int                                                       decorr_stages_    = 4;
+    std::uint32_t                                             decorr_seed_      = 0;
+    // ⑦ — apply one drained DecorrCtl command (audio thread). Clamps + stores the
+    // params; the bank reconfigures lazily per channel on the next output loop.
+    void applyDecorrCtl(const util::QueuedCmd& qc) noexcept;
     // Dedicated room late bus: per-object reverb send scaled by that object's
     // lateMul, summed. Separate from reverb_send_buf_ (which feeds the non-room
     // FDN/IR un-scaled), mirroring the reference's separate lateBusInput.
