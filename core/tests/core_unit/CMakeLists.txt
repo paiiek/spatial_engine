@@ -118,6 +118,13 @@ add_executable(test_convergence_room_distance_gain test_convergence_room_distanc
 target_link_libraries(test_convergence_room_distance_gain PRIVATE spe_core)
 add_test(NAME convergence_room_distance_gain COMMAND test_convergence_room_distance_gain)
 
+# Dreamscape Convergence ⑦ — per-speaker decorrelation core
+# (iae::SpeakerDecorrelationBank): byte-faithful port of SpeakerDecorrelation.cpp
+# — impulse dryAmt, energy-preserving allpass cascade, per-speaker determinism.
+add_executable(test_convergence_decorrelation test_convergence_decorrelation.cpp)
+target_link_libraries(test_convergence_decorrelation PRIVATE spe_core)
+add_test(NAME convergence_decorrelation COMMAND test_convergence_decorrelation)
+
 # Dreamscape Convergence ⑥e-4 — /room/* OSC wire format: decode/encode round-trip
 # for every op (enable / set ,f×13 / per-param) + reject paths.
 add_executable(test_osc_room_ctl_roundtrip test_osc_room_ctl_roundtrip.cpp)

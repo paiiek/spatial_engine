@@ -128,6 +128,7 @@ set(SPE_CORE_SOURCES
     src/render/ported/RoomEarly.cpp
     src/render/ported/RoomCluster.cpp
     src/render/ported/RoomBiquad.cpp
+    src/render/ported/SpeakerDecorrelation.cpp
     src/render/VAPRenderer.cpp
     # P4: IPC layer
     src/ipc/ProtocolVersion.cpp
