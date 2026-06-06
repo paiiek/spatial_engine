@@ -1,39 +1,11 @@
 // core/src/reverb/FdnReverb.cpp
 
 #include "FdnReverb.h"
+#include "util/DenormalGuard.h"
 #include <cmath>
 #include <cstring>
 
-// FTZ/DAZ denormal suppression (SPATIAL_ENGINE_NO_JUCE path).
-// x86-64 uses the SSE MXCSR control bits; AArch64 (Apple Silicon) uses the
-// FPCR FZ bit. Guarded so the JUCE-free core compiles on both archs.
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
-  #include <xmmintrin.h>
-  #include <pmmintrin.h>
-  #define SPE_DENORMAL_FLUSH_X86 1
-#elif defined(__aarch64__)
-  #include <cstdint>
-  #define SPE_DENORMAL_FLUSH_AARCH64 1
-#endif
-
 namespace spe::reverb {
-
-namespace {
-// Enable flush-to-zero / denormals-are-zero for the calling thread.
-// No-op on architectures without a known control register.
-inline void enableDenormalFlush() noexcept {
-#if defined(SPE_DENORMAL_FLUSH_X86)
-    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-#elif defined(SPE_DENORMAL_FLUSH_AARCH64)
-    // FPCR bit 24 (FZ) flushes denormal results to zero.
-    uint64_t fpcr;
-    __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
-    fpcr |= (uint64_t{1} << 24);
-    __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
-#endif
-}
-}  // namespace
 
 // ---------------------------------------------------------------------------
 // 16x16 Hadamard matrix (H16). Generated via H2 = [[1,1],[1,-1]], then
@@ -65,7 +37,10 @@ void FdnReverb::prepareToPlay(double sampleRate, int /*blockSize*/) {
     sampleRate_ = sampleRate;
 
     // Enable FTZ and DAZ to suppress denormals in this thread.
-    enableDenormalFlush();
+    // NOTE: this is the control thread; the audio thread sets its own FTZ/DAZ
+    // at the audio-callback entry (SpatialEngine::audioBlock). Kept here so the
+    // reverb is also denormal-safe if exercised from the calling thread.
+    spe::util::enableDenormalFlush();
 
     const double ratio = sampleRate / 48000.0;
     for (int i = 0; i < kLines; ++i) {

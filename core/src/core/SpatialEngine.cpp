@@ -5,6 +5,7 @@
 #include "geometry/LayoutLoader.h"
 #include "render/AlgorithmAnalyticReference.h"
 #include "reverb/ReverbEngine.h"
+#include "util/DenormalGuard.h"
 #include "util/RtAssertNoAlloc.h"
 
 #include <algorithm>
@@ -991,6 +992,12 @@ void SpatialEngine::computeLateFdnGains(const iae::Vec3& opp, float lateDiffuse0
 
 void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     SPE_RT_NO_ALLOC_SCOPE();
+
+    // FTZ/DAZ is per-thread; the control thread setting it in prepareToPlay does
+    // NOT cover this audio thread. Set it here at the callback entry so reverb /
+    // allpass / FDN tails never stall on denormals (10-100x slowdown / peak
+    // spike). Cheap, idempotent, sticky for the thread. (v1.0 Phase 1.1)
+    spe::util::enableDenormalFlush();
 
     if (block.num_frames > spe::MAX_BLOCK) {
         internal_xruns_.record_overrun();
