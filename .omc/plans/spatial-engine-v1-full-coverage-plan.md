@@ -105,7 +105,8 @@
 
 ## 6. 진행 로그 (resume 포인터)
 - ✅ **Phase 0 완료 (2026-06-07, 1600d76, 푸시됨)** — 0.1 `docs/legal/PROVENANCE.md`(ported/ 출처 f2cb796=v0.2.1, D3 권리, 파일↔소스↔시트 맵, JUCE-free 격리/re-sync) + c2-licensing Strand 4. 0.2 CMakeLists VERSION 0.2.0→0.9.0(선언적 전용, 소비처 0 확인). 0.3 `convergence-merge-strategy.md`(머지=Phase5, main 0-behind/56-ahead=clean FF, main frozen→중간 rebase 불필요). ctest 138/138 green WERROR+RT_ASSERTS, 회귀0.
-- **다음 = Phase 1.1 denormal 수정** (최우선 ROI). 확정 사실: `enableDenormalFlush()`가 `core/src/reverb/FdnReverb.cpp:24` 익명 namespace에 갇혀 `prepareToPlay`(control 스레드)에서만 호출 → 오디오 스레드 MXCSR FTZ/DAZ 미설정. 수정=공유 헤더로 추출 후 오디오 콜백 진입부(SpatialEngine 렌더 엔트리 / 백엔드 AudioCallback)에서 호출.
+- ✅ **Phase 1.1 denormal 수정 완료 (2026-06-07, a026d01, 푸시됨)** — 공유 헤더 `core/src/util/DenormalGuard.h`(inline `spe::util::enableDenormalFlush()`, x86 MXCSR FTZ/DAZ + aarch64 FPCR FZ, JUCE-free, arch 매크로 헤더끝 #undef) → `SpatialEngine::audioBlock()` 최상단(DSP·오버사이즈 early-return 전)에서 호출=오디오 스레드 FTZ/DAZ 보장. FdnReverb.cpp 익명 namespace 복제 제거→공유 헤더 재사용(control-thread prepare 호출 유지). 단위 `test_convergence_denormal_guard`(volatile 1e-40 flush + x86 MXCSR 비트 + #if-guard된 no-alloc). 양 빌드 139/139 green WERROR+RT_ASSERTS, smoke_room_reverb xruns=0, code-reviewer APPROVE(MEDIUM+LOW1 반영). **peak 안정 perf 효과는 Phase 1.4 실측.**
+- **다음 = Phase 1.2 active-object/algo 컴팩션**: 캐시-필 루프에서 알고리즘별 활성 인덱스 컴팩트 리스트 구성 → 활성0 렌더러 processBlock·scratch 합산 스킵, 0..MAX_OBJECTS 대신 컴팩트 순회. 오디오 비트동등 테스트로 검증. (이어 1.3 DBAP/VAP no-alloc → 1.4 타이밍 프로브+스피커 스윕+soak → 1.5 선택 SIMD.)
 
 ## 5. 권장 실행 순서
 Phase 0(토대) → **Phase 1(성능, 최우선 ROI)** → Phase 3(ADM, L/R+브로드캐스트) → Phase 2(바이노럴) → Phase 4(per-obj+캘리브) → Phase 5(릴리스). 
