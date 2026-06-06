@@ -103,6 +103,10 @@
 - **바이노럴 이식량**: 7-stage가 ⑦보다 큼(2주) — core-first 분할(코어→결선) 권장.
 - **머지 충돌**: +55커밋 장기 브랜치 → Phase 5 전 main 동기화 점검.
 
+## 6. 진행 로그 (resume 포인터)
+- ✅ **Phase 0 완료 (2026-06-07, 1600d76, 푸시됨)** — 0.1 `docs/legal/PROVENANCE.md`(ported/ 출처 f2cb796=v0.2.1, D3 권리, 파일↔소스↔시트 맵, JUCE-free 격리/re-sync) + c2-licensing Strand 4. 0.2 CMakeLists VERSION 0.2.0→0.9.0(선언적 전용, 소비처 0 확인). 0.3 `convergence-merge-strategy.md`(머지=Phase5, main 0-behind/56-ahead=clean FF, main frozen→중간 rebase 불필요). ctest 138/138 green WERROR+RT_ASSERTS, 회귀0.
+- **다음 = Phase 1.1 denormal 수정** (최우선 ROI). 확정 사실: `enableDenormalFlush()`가 `core/src/reverb/FdnReverb.cpp:24` 익명 namespace에 갇혀 `prepareToPlay`(control 스레드)에서만 호출 → 오디오 스레드 MXCSR FTZ/DAZ 미설정. 수정=공유 헤더로 추출 후 오디오 콜백 진입부(SpatialEngine 렌더 엔트리 / 백엔드 AudioCallback)에서 호출.
+
 ## 5. 권장 실행 순서
 Phase 0(토대) → **Phase 1(성능, 최우선 ROI)** → Phase 3(ADM, L/R+브로드캐스트) → Phase 2(바이노럴) → Phase 4(per-obj+캘리브) → Phase 5(릴리스). 
 근거: 성능 경화는 모든 후속 기능이 그 위에서 측정·동작하는 토대이자 최저위험 최고ROI; ADM는 정확성 버그(−az)+vid2spatial 통합 의존성으로 기능 중 최우선.
