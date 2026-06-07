@@ -10,7 +10,8 @@
 - 분석 출처: 2026-06-02 병렬 3-에이전트 감사 + 직접 코드 검증. 상세는 메모리 `project_v09_feature_extension.md` "다음 작업 후보" 참조.
 
 ## 현재 진행 포인터
-- **ACTIVE**: 레인 2 (ADR 0019 PR6) — ralplan 착수 예정
+- **ACTIVE**: 레인 2 (ADR 0019 **PR7**) — pending, ralplan 착수 예정 (PR6 완료로 PR7이 다음)
+- 완료한 레인: **레인 2 (ADR 0019 PR6) ✅ 2026-06-07** — branch `feat/adr0019-pr6-soak`, commits `30f5ce8`(plan REV4)+`799a485`(impl)+`0a6da21`(REV6)+`7ab732d`(REV7)+`b14ed4a`(JUCE-ON ,iis 링크 fix, 별도). 검증@HEAD: NO_JUCE 빌드 클린(에러0/경고0), ctest **115/115**, pytest **261p/6s**, shm soak smoke 30p, full 60s soak green, AC1~AC9 전부 충족. **미머지·미태그(사용자 판단 대기)**. PR6 plan: `.omc/plans/spatial-engine-v0.9-laneG-adr0019-pr6-soak.md`.
 - 완료한 레인: **레인 1 (F4) ✅ 2026-06-02** — commits `2392730`(plan REV5) + `c6c8415`(impl), push 완료. 5-iter ralplan consensus → executor → 독립 code-review APPROVE-WITH-NITS(MAJOR=주석 over-claim만, 수정함). 게이트: ctest 115/115 @64+@128, RT-asserts, TSan soak_scene_save_race 0 races/0 tears 양캡, pytest 260p/4s. 구현: F4a 직렬화+emit, F4b 3-buffer reader-claim publish handshake(seqlock optimistic은 그 자체가 formal race라 교체), param-7 decoder reject. **후속(optional)**: AC9 soak에 reader-slow 변종 추가, tearing tolerance absolute화(둘 다 non-blocking, 리뷰어 MINOR).
 
 ## 순서별 백로그
@@ -34,10 +35,10 @@
 - **계약 변경**: scene JSON 포맷 → ralplan 합의 필수. backward-compat가 핵심 리스크.
 - **플랜 파일**: `.omc/plans/spatial-engine-v0.9-laneF4-scene-snapshot-fields.md` (ralplan 생성 예정)
 
-### 레인 2 — ADR 0019 PR6 (+PR7)  [STATUS: pending]
-- **PR6**: 60s 크로스프로세스 C++↔Python shm soak (xrun_count==0, /sys/warning 없음, ARM64 weak-memory 증명). PR5가 메모리오더링/동적산술 증명을 여기로 명시 유예.
-- **PR7**: 크로스플랫폼 CI (Windows `CreateFileMappingW` / macOS POSIX).
-- **주의**: PR6 플랜 파일 없음 → ralplan부터. 출처: CHANGELOG, README:657, pr5 plan:22.
+### 레인 2 — ADR 0019 PR6 (+PR7)  [STATUS: PR6 ✅ 완료(2026-06-07) / PR7 pending]
+- **PR6 ✅**: 60s 크로스프로세스 C++↔Python shm soak 완료. drop-free(read_idx→write_idx)+xrun0+seq no-gap+ramp write-integrity+leak gate, x86-64 한정 실증. branch `feat/adr0019-pr6-soak`(미머지). **주의**: PR6은 x86-64 TSO에서 메모리오더링/consumer torn-read를 증명하지 **않음** — 그것은 PR7로 명시 유예.
+- **PR7**: (a) Linux ARM64 CI에서 soak 실행해 weak-memory acquire/release pairing 실제 검증(`os.sched_yield()` ≠ release fence 여부 결론), (b) consumer-side read-integrity exposure(debug checksum emit), (c) 크로스플랫폼 CI (Windows `CreateFileMappingW` / macOS POSIX), (d) Option-B `adm_player_full` 변종(60s ADM BWF fixture + soundfile). 출처: PR6 plan §follow-ups.
+- **주의**: PR7 플랜 파일 없음 → ralplan부터.
 
 ### 레인 3 — VST3 감독 스프린트 (P3.1 + P3.5 + P7.1)  [STATUS: pending, 감독 필요]
 - P3.1 VST3 state-contract test → NO_JUCE CI; P3.5 `vst3_bind_collision` race + RUN_SERIAL; P7.1 SpatialEngine god-object refactor(BinauralTelemetry facade).
@@ -50,4 +51,5 @@
 - OSC sleep-barrier→event sync. VST3-gated 아닌데 `[ ]` 남음 → 누락/완료 여부 먼저 확인 후 재계획.
 
 ## 변경 이력
+- 2026-06-07: 레인 2 PR6 완료(soak green @HEAD 검증) → 포인터 PR7로 이동.
 - 2026-06-02: 백로그 생성. 레인 1(F4) ralplan 착수.

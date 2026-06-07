@@ -125,6 +125,11 @@ bool OSCBackend::sendReply(const char*, const char*,
     outbound_drops_.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
+bool OSCBackend::sendReply(const char*, const char*,
+                            int32_t, int32_t, const char*, const char*) noexcept {
+    outbound_drops_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
 void OSCBackend::outboundDrainLoop() {}
 
 } // namespace spe::ipc

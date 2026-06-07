@@ -7,9 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Post-v0.9.0 follow-ups, not yet released.
+Post-v0.9.1 follow-ups, not yet released.
 
 - (none yet)
+
+## [0.9.1] — 2026-06-08
+
+ADR 0019 PR6 (shm IPC soak) close-out plus a JUCE-ON build fix found
+during the soak lane. No engine behaviour change in the JUCE-free
+(NO_JUCE) path; the fix unblocks the JUCE-ON / VST3-adjacent build.
+Plan: `.omc/plans/spatial-engine-v0.9-laneG-adr0019-pr6-soak.md`.
+
+### Fixed
+- **JUCE-ON link failure** — `OSCBackend` (`SPE_HAVE_JUCE` branch) was
+  missing the `sendReply(const char*, const char*, int32_t, int32_t,
+  const char*, const char*)` (`,iis`) overload that the JUCE-free path
+  already provided, so any `SPE_HAVE_JUCE=1` build failed to link
+  (`SpatialEngine.cpp` `/sys/warning ,iis` emit references it). Added the
+  symbol-compatible deferred-wire stub. Verified at the object level:
+  the JUCE-ON `OSCBackend.o` now defines the symbol (`T`), resolving the
+  undefined reference (`U`) emitted by `SpatialEngine.o`. (`b14ed4a`)
+
+### Added
+- **ADR 0019 PR6 — 60 s cross-process C++↔Python shm soak.** Hermetic
+  two-process real-shm drop-free proof (`read_idx→write_idx` primary +
+  `xrun==0` both counters + `seq` no-gap + ramp write-integrity + RSS/fd
+  leak gate), opt-in 60 s (`SHM_SOAK_FULL=1`) with a fast default smoke.
+  Zero engine source edits. Proves drop-free streaming + clean producer
+  lifecycle + no leak on x86-64; memory-ordering pairing (ARM64) and
+  consumer read-integrity are explicitly deferred to PR7.
+  (`30f5ce8`→`799a485`→`0a6da21`→`7ab732d`)
 
 ## [0.9.0] — 2026-06-02
 
