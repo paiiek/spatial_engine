@@ -303,6 +303,15 @@ SpatialEngine::SpatialEngine(int listen_port)
                     head_roll_deg_.store(p->roll_deg,   std::memory_order_relaxed);
                 }
                 return;
+            case ipc::CommandTag::SysBinauralPrefeed:
+                // Phase 2.1 — binaural HRTF prefeed LP corner. Single float into
+                // a relaxed atomic on the control thread; the audio path reads it
+                // once per block and recomputes the one-pole coeff. Float-only,
+                // no per-object state → early-return (no FIFO slot), like /ypr.
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralPrefeed>(&cmd.payload)) {
+                    bin_prefeed_cutoff_hz_.store(p->cutoff_hz, std::memory_order_relaxed);
+                }
+                return;
             case ipc::CommandTag::SysHandshake:
                 // v0.5.1 Q1 (WM-2) — when the client supplies an explicit
                 // reply_port, retarget our captured peer endpoint so future
@@ -663,6 +672,9 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
         bin_eq_L_[bi].reset();
         bin_eq_R_[bi].reset();
     }
+    // Phase 2.1 — reset the binaural prefeed one-pole state (the cutoff atomic
+    // keeps its current value across a re-prepare; default = 4200 Hz).
+    bin_prefeed_lp_.fill(0.f);
 
     // Wire dry_ptrs_ to scratch buffers
     for (int i = 0; i < MAX_OBJECTS; ++i) {
@@ -1713,6 +1725,38 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 const float head_pitch_rad = head_pitch_deg_.load(std::memory_order_relaxed) * kDeg2Rad;
                 const float head_roll_rad  = head_roll_deg_.load(std::memory_order_relaxed)  * kDeg2Rad;
 
+                // Phase 2.1 — binaural HRTF prefeed low-pass. Filter each active
+                // object's dry signal ONCE per block into bin_prefeed_; the B1
+                // and B2 branches both read bin_prefeed_ as the HRTF input. Doing
+                // it here (before render_branch, which runs twice during an HRTF
+                // crossfade) keeps the one-pole state advancing exactly once per
+                // block. Coeff a = 1 - exp(-2π·fc/sr) (BinauralMonitorChain.cpp:
+                // 107-109); the cutoff is read once per block (relaxed atomic)
+                // and clamped to (0, Nyquist) — a corner ≥ Nyquist ⇒ a ≈ 1 ⇒
+                // passthrough. The active-object predicate matches both branches.
+                {
+                    const float fnyq = static_cast<float>(0.499 * sample_rate_);
+                    const float fc = std::clamp(
+                        bin_prefeed_cutoff_hz_.load(std::memory_order_relaxed),
+                        1.f, fnyq);
+                    const float a = 1.f - std::exp(
+                        -2.f * static_cast<float>(M_PI) * fc
+                        / static_cast<float>(sample_rate_));
+                    for (int i = 0; i < MAX_OBJECTS; ++i) {
+                        const auto& c = obj_cache_[static_cast<std::size_t>(i)];
+                        if (!c.active || c.gain_lin < 1e-6f) continue;
+                        const float* dry =
+                            dry_scratch_[static_cast<std::size_t>(i)].data();
+                        float* pf = bin_prefeed_[static_cast<std::size_t>(i)].data();
+                        float z = bin_prefeed_lp_[static_cast<std::size_t>(i)];
+                        for (int n = 0; n < block.num_frames; ++n) {
+                            z += a * (dry[n] - z);
+                            pf[n] = z;
+                        }
+                        bin_prefeed_lp_[static_cast<std::size_t>(i)] = z;
+                    }
+                }
+
                 // Lambda: render one branch (Direct or AmbiVS) into dstL/dstR.
                 // No-alloc, audio-thread safe. Branch selection is by enum.
                 auto render_branch = [&](output::BinauralMode mode,
@@ -1732,8 +1776,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                             const auto coeffs =
                                 spe::ambi::AmbisonicEncoder::encode_3rd_order(c.az, c.el);
                             const float g = c.gain_lin * transport_gain;
+                            // Phase 2.1 — HRTF input is the prefeed-LP'd dry.
                             const float* dry =
-                                dry_scratch_[static_cast<std::size_t>(i)].data();
+                                bin_prefeed_[static_cast<std::size_t>(i)].data();
                             for (int k = 0; k < 16; ++k) {
                                 const float ck = coeffs[static_cast<std::size_t>(k)] * g;
                                 if (ck == 0.f) continue;
@@ -1812,9 +1857,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                             binaural_.setDirection(i, az_h, el_h);
 
                             // Convolve into the per-object scratch tmp_L/R.
+                            // Phase 2.1 — HRTF input is the prefeed-LP'd dry.
                             binaural_.processBlockForObject(
                                 i,
-                                dry_scratch_[static_cast<std::size_t>(i)].data(),
+                                bin_prefeed_[static_cast<std::size_t>(i)].data(),
                                 block.num_frames,
                                 bin_tmp_L_.data(),
                                 bin_tmp_R_.data());

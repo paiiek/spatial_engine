@@ -53,6 +53,7 @@ enum class CommandTag : uint8_t {
     SysBinauralSofaSelect  = 0x1B, // /sys/binaural_sofa_select ,s "<name>" — B-M3 catalog name → live SOFA swap
     SysHeadYpr             = 0x1C, // /ypr (alias /sys/ypr) ,fff yaw_deg pitch_deg roll_deg — binaural head tracking (Phase 2.6b)
     SysBinauralEq          = 0x1D, // /sys/binaural_eq/{enable,band} — binaural monitor 5-band peak EQ (Phase 2.5)
+    SysBinauralPrefeed     = 0x1E, // /sys/binaural_prefeed ,f cutoff_hz — binaural HRTF prefeed LP corner (Phase 2.1)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -458,6 +459,14 @@ struct PayloadSysBinauralEq {
     float q       = 1.f;    // band Q (Band op)
 };
 
+// Phase 2.1 — binaural HRTF prefeed one-pole LP corner (Hz). float-only, so it
+// rides the control thread into an engine atomic (no FIFO needed; the audio
+// path reads it once per block — same contract as /ypr). A corner above Nyquist
+// is an effective bypass.
+struct PayloadSysBinauralPrefeed {
+    float cutoff_hz = 4200.f;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -511,6 +520,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralSofaSelect,
     PayloadSysHeadYpr,
     PayloadSysBinauralEq,
+    PayloadSysBinauralPrefeed,
     PayloadUnknown
 >;
 

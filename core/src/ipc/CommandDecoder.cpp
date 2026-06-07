@@ -494,6 +494,14 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         p.gain_db = getFloat(1);
         p.q       = (args.n_float > 2) ? getFloat(2) : 1.f;
         cmd.payload = p;
+    } else if (addr == "/sys/binaural_prefeed") {
+        // Phase 2.1 — binaural HRTF prefeed LP corner (Hz). ,f cutoff_hz. The
+        // engine reads it once per block; clamping happens engine-side. A
+        // missing arg defaults to the reference 4200 Hz corner.
+        cmd.tag = CommandTag::SysBinauralPrefeed;
+        PayloadSysBinauralPrefeed p;
+        p.cutoff_hz = (args.n_float > 0) ? getFloat(0) : 4200.f;
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;

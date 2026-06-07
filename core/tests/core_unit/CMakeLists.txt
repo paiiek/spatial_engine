@@ -1014,3 +1014,10 @@ target_link_libraries(test_convergence_binaural_eq PRIVATE spe_core)
 target_compile_definitions(test_convergence_binaural_eq PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME convergence_binaural_eq COMMAND test_convergence_binaural_eq)
+
+# Phase 2.1 — binaural HRTF prefeed low-pass.
+add_executable(test_convergence_binaural_prefeed test_convergence_binaural_prefeed.cpp)
+target_link_libraries(test_convergence_binaural_prefeed PRIVATE spe_core)
+target_compile_definitions(test_convergence_binaural_prefeed PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME convergence_binaural_prefeed COMMAND test_convergence_binaural_prefeed)

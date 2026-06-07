@@ -44,6 +44,13 @@ constexpr float kBinauralEqDefaultFreqHz[kBinauralEqBands] = {
 constexpr float kBinauralEqDefaultQ[kBinauralEqBands] = {
     1.f, 1.f, 1.f, 1.f, 1.f };
 
+// Phase 2.1 — binaural HRTF prefeed one-pole low-pass corner (Hz). The
+// reference applies a first-order LP at this corner to the HRTF input feed
+// (BinauralMonitorChain.cpp:106-125, AudioRenderQuality.h). mmhoa exposes the
+// corner as tunable (/sys/binaural_prefeed); a corner well above Nyquist makes
+// the one-pole an effective passthrough (bypass).
+constexpr float kBinauralPrefeedLowPassHz = 4200.f;
+
 // A single second-order IIR section, byte-faithful to juce::dsp::IIR::Filter<float>
 // with Coefficients<float>::make{Low,High}Pass. Coefficients are stored already
 // normalised by a0 (a0 == 1 for these forms): {b0, b1, b2, a1, a2}.

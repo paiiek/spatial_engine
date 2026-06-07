@@ -72,6 +72,15 @@ public:
     void setBinauralEqEnabled(bool on) {
         binaural_eq_active_.store(on, std::memory_order_relaxed);
     }
+    // Phase 2.1 — binaural HRTF prefeed LP corner (Hz). Atomic store (control
+    // thread); the audio path reads it once per block. Mirrors the
+    // /sys/binaural_prefeed path. A corner above Nyquist is an effective bypass.
+    void setBinauralPrefeedCutoff(float cutoff_hz) {
+        bin_prefeed_cutoff_hz_.store(cutoff_hz, std::memory_order_relaxed);
+    }
+    float binauralPrefeedCutoffForTest() const noexcept {
+        return bin_prefeed_cutoff_hz_.load(std::memory_order_relaxed);
+    }
 
     // v0.5 P4: binaural mode injection. Same control-thread contract as the
     // other setters above. Forwards to BinauralMonitor::setRequestedMode().
@@ -684,6 +693,17 @@ private:
     // dry_scratch_[obj][sample]
     std::array<std::array<float, MAX_BLOCK>, MAX_OBJECTS> dry_scratch_{};
     std::array<const float*, MAX_OBJECTS>                 dry_ptrs_{};
+    // Phase 2.1 — binaural HRTF prefeed one-pole low-pass (BinauralMonitorChain.
+    // cpp:106-125). Each active object's dry signal is filtered ONCE per block
+    // into bin_prefeed_ before the B1/B2 render branches (both read it as the
+    // HRTF input), so the LP state advances exactly once per block even when an
+    // HRTF crossfade calls render_branch twice. Applied to the mono input
+    // pre-HRTF (identically to both ears → no interaural-timing change). The
+    // corner is tunable via /sys/binaural_prefeed (default 4200 Hz); a corner
+    // above Nyquist is an effective passthrough. Audio-thread-only state.
+    std::array<std::array<float, MAX_BLOCK>, MAX_OBJECTS> bin_prefeed_{};
+    std::array<float, MAX_OBJECTS>                        bin_prefeed_lp_{};
+    std::atomic<float>                                    bin_prefeed_cutoff_hz_{iae::kBinauralPrefeedLowPassHz};
     // v0.9 Lane C (hoist): per-block per-algorithm object-state scratch. Moved
     // off the audio-callback stack to engine members so the audio thread never
     // carries ~10 KB of stack arrays at MAX_OBJECTS=128. Fixed-size, alloc-once,
