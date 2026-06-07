@@ -460,6 +460,18 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadSysBinauralResetDemote p;
         p.enable = (getInt(0) != 0);
         cmd.payload = p;
+    } else if (addr == "/ypr" || addr == "/sys/ypr") {
+        // Phase 2.6b — binaural head tracking. ,fff yaw_deg pitch_deg roll_deg.
+        // Short address `/ypr` is the head-tracker direct path; `/sys/ypr` is
+        // the namespace-consistent alias (same peer validation, same payload).
+        // Missing arguments default to 0 (e.g. ,f yaw-only is valid). Degrees
+        // here; the engine converts to radians at rotate time.
+        cmd.tag = CommandTag::SysHeadYpr;
+        PayloadSysHeadYpr p;
+        p.yaw_deg   = getFloat(0);
+        p.pitch_deg = getFloat(1);
+        p.roll_deg  = getFloat(2);
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;

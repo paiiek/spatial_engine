@@ -279,6 +279,18 @@ SpatialEngine::SpatialEngine(int listen_port)
                     }
                 }
                 return;
+            case ipc::CommandTag::SysHeadYpr:
+                // Phase 2.6b — binaural head tracking. Store the pose (degrees)
+                // straight into the engine's relaxed atomics on the control
+                // thread; the audio path reads them once per block. No FIFO slot
+                // (float-only, no per-object state), so early-return like the
+                // other control-thread /sys verbs above.
+                if (auto* p = std::get_if<ipc::PayloadSysHeadYpr>(&cmd.payload)) {
+                    head_yaw_deg_.store(p->yaw_deg,     std::memory_order_relaxed);
+                    head_pitch_deg_.store(p->pitch_deg, std::memory_order_relaxed);
+                    head_roll_deg_.store(p->roll_deg,   std::memory_order_relaxed);
+                }
+                return;
             case ipc::CommandTag::SysHandshake:
                 // v0.5.1 Q1 (WM-2) — when the client supplies an explicit
                 // reply_port, retarget our captured peer endpoint so future
@@ -1627,6 +1639,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 // we render only step.steady's branch as before.
                 const auto step = binaural_.observeAndArmXfade();
 
+                // Phase 2.6b — binaural head tracking. Read the head pose once
+                // per block (relaxed atomics, degrees → radians) and apply it
+                // to each object's direction before the B1 HRTF lookup below.
+                // Single read here (not per-object, not per-branch) keeps the
+                // pose coherent across the whole block and the crossfade pair.
+                static constexpr float kDeg2Rad = 3.14159265358979323846f / 180.f;
+                const float head_yaw_rad   = head_yaw_deg_.load(std::memory_order_relaxed)   * kDeg2Rad;
+                const float head_pitch_rad = head_pitch_deg_.load(std::memory_order_relaxed) * kDeg2Rad;
+                const float head_roll_rad  = head_roll_deg_.load(std::memory_order_relaxed)  * kDeg2Rad;
+
                 // Lambda: render one branch (Direct or AmbiVS) into dstL/dstR.
                 // No-alloc, audio-thread safe. Branch selection is by enum.
                 auto render_branch = [&](output::BinauralMode mode,
@@ -1713,9 +1735,17 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                             const auto& c = obj_cache_[static_cast<std::size_t>(i)];
                             if (!c.active || c.gain_lin < 1e-6f) continue;
 
+                            // Phase 2.6b — rotate the object direction into the
+                            // head frame BEFORE the HRTF lookup. Pure stack math
+                            // (no alloc); identity when the pose is zero. L/R
+                            // sign locked in rotate_engine_dir_by_head (2.6a):
+                            // head yaw +30° shifts a front source to the RIGHT.
+                            const auto [az_h, el_h] = coords::rotate_engine_dir_by_head(
+                                c.az, c.el, head_yaw_rad, head_pitch_rad, head_roll_rad);
+
                             // Update direction (RT-safe: KD-tree lookup +
                             // loadInto + GainRamp setup; no alloc).
-                            binaural_.setDirection(i, c.az, c.el);
+                            binaural_.setDirection(i, az_h, el_h);
 
                             // Convolve into the per-object scratch tmp_L/R.
                             binaural_.processBlockForObject(

@@ -51,6 +51,7 @@ enum class CommandTag : uint8_t {
     SysBinauralMode    = 0x19, // /sys/binaural_mode ,i {0|1} — 0 = B1 Direct, 1 = B2 AmbiVS (v0.5 P4)
     SysBinauralResetDemote = 0x1A, // /sys/binaural_reset_demote ,i {0|1} — v0.7 D-S1 user hatch
     SysBinauralSofaSelect  = 0x1B, // /sys/binaural_sofa_select ,s "<name>" — B-M3 catalog name → live SOFA swap
+    SysHeadYpr             = 0x1C, // /ypr (alias /sys/ypr) ,fff yaw_deg pitch_deg roll_deg — binaural head tracking (Phase 2.6b)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -430,6 +431,16 @@ struct PayloadSysBinauralSofaSelect {
     std::string name;
 };
 
+// Phase 2.6b — /ypr ,fff (yaw, pitch, roll) in DEGREES. Binaural head tracking:
+// the engine rotates each object's direction into the head frame before the B1
+// HRTF lookup (rotate_engine_dir_by_head). POD/float-only so it can ride the
+// control thread into the engine's atomic head members (no FIFO needed).
+struct PayloadSysHeadYpr {
+    float yaw_deg   = 0.f;
+    float pitch_deg = 0.f;
+    float roll_deg  = 0.f;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -481,6 +492,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralMode,
     PayloadSysBinauralResetDemote,
     PayloadSysBinauralSofaSelect,
+    PayloadSysHeadYpr,
     PayloadUnknown
 >;
 

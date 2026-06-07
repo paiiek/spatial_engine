@@ -992,3 +992,14 @@ add_test(NAME convergence_dbap_no_alloc COMMAND test_convergence_dbap_no_alloc)
 add_executable(test_convergence_adm_az_golden test_convergence_adm_az_golden.cpp)
 target_link_libraries(test_convergence_adm_az_golden PRIVATE spe_core)
 add_test(NAME convergence_adm_az_golden COMMAND test_convergence_adm_az_golden)
+
+# Phase 2.6b — /ypr head-tracking OSC decode + end-to-end binaural golden.
+add_executable(test_osc_ypr_roundtrip test_osc_ypr_roundtrip.cpp)
+target_link_libraries(test_osc_ypr_roundtrip PRIVATE spe_core)
+add_test(NAME osc_ypr_roundtrip COMMAND test_osc_ypr_roundtrip)
+
+add_executable(test_convergence_head_ypr_golden test_convergence_head_ypr_golden.cpp)
+target_link_libraries(test_convergence_head_ypr_golden PRIVATE spe_core)
+target_compile_definitions(test_convergence_head_ypr_golden PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME convergence_head_ypr_golden COMMAND test_convergence_head_ypr_golden)

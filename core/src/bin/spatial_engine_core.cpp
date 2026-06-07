@@ -348,15 +348,32 @@ std::string resolve_default_layout(const char* basename) {
 // Thin wrapper: captures engine output to WAV while forwarding to engine.
 class WavCapture final : public spe::audio_io::AudioCallback {
 public:
+    // binaural=false: capture the speaker output bus (block.output_channels).
+    // binaural=true (Phase 2.6b): capture the 2-channel binaural bus via
+    // engine.binauralL()/binauralR() — the only place head tracking is audible.
     WavCapture(spe::core::SpatialEngine& engine,
-               int channels, double sr, const std::string& wav_path)
-        : engine_(engine), writer_(channels, sr, wav_path) {}
+               int channels, double sr, const std::string& wav_path,
+               bool binaural)
+        : engine_(engine),
+          writer_(binaural ? 2 : channels, sr, wav_path),
+          binaural_(binaural) {}
 
     void prepareToPlay(double sr, int max_block) override {
         engine_.prepareToPlay(sr, max_block);
     }
     void audioBlock(const spe::audio_io::AudioBlock& block) override {
         engine_.audioBlock(block);
+        if (binaural_) {
+            // Capture the binaural bus (length == this block's num_frames).
+            // Null (no .speh loaded) → write silence so the WAV stays valid.
+            const float* l = engine_.binauralL();
+            const float* r = engine_.binauralR();
+            if (l && r) {
+                float* ch[2] = { const_cast<float*>(l), const_cast<float*>(r) };
+                writer_.append(ch, 2, block.num_frames);
+            }
+            return;
+        }
         // Capture what the engine wrote into output_channels
         writer_.append(const_cast<float**>(block.output_channels),
                        block.output_channel_count, block.num_frames);
@@ -371,6 +388,7 @@ public:
 private:
     spe::core::SpatialEngine& engine_;
     spe::bin::WavWriter       writer_;
+    bool                      binaural_ = false;
 };
 
 } // namespace
@@ -394,6 +412,10 @@ int main(int argc, char** argv) {
     // acknowledge the printed WARNING.
     std::string osc_bind     = "127.0.0.1";
     std::string wav_path;
+    // Phase 2.6b — capture the binaural bus (L/R) to the WAV instead of the
+    // speaker output channels. Used by smoke_head_ypr.py to observe head
+    // tracking, whose effect is only on the B1 binaural path.
+    bool        wav_binaural = false;
     std::string layout_path  = resolve_default_layout("lab_8ch.yaml");
     std::string osc_dialect  = "legacy"; // "legacy" or "adm"
     // v0.5.1 Q1 — optional one-shot binaural telemetry exercise. The
@@ -433,6 +455,7 @@ int main(int argc, char** argv) {
         else if (a == "--adm-send-fps")  adm_send_fps  = nexti(adm_send_fps);
         else if (a == "--osc-bind")    osc_bind     = nexts("127.0.0.1");
         else if (a == "--wav")         wav_path     = nexts("");
+        else if (a == "--wav-binaural") wav_binaural = true;
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
         else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
         else if (a == "--binaural-sofa") binaural_sofa = nexts("");
@@ -455,7 +478,7 @@ int main(int argc, char** argv) {
                         "[--input-backend shm:<path>|null|dante] "
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
                         "[--osc-port 9100] [--osc-bind 127.0.0.1] "
-                        "[--wav OUTPUT.wav] [--layout PATH.yaml] "
+                        "[--wav OUTPUT.wav] [--wav-binaural] [--layout PATH.yaml] "
                         "[--osc-dialect legacy|adm] [--binaural-sofa PATH] "
                         "[--binaural-enable] [--force-probe] "
                         "[--emit-no-sofa-after-ms N]\n"
@@ -612,9 +635,11 @@ int main(int argc, char** argv) {
     std::unique_ptr<WavCapture> wav_cap;
     spe::audio_io::AudioCallback* callback = &engine;
     if (!wav_path.empty()) {
-        wav_cap = std::make_unique<WavCapture>(engine, channels, sr, wav_path);
+        wav_cap = std::make_unique<WavCapture>(engine, channels, sr, wav_path,
+                                               wav_binaural);
         callback = wav_cap.get();
-        std::printf("  WAV capture: %s\n", wav_path.c_str());
+        std::printf("  WAV capture: %s%s\n", wav_path.c_str(),
+                    wav_binaural ? " (binaural bus)" : "");
     }
 
     // Start the driver. The shm path uses the 3-arg start (engine block +

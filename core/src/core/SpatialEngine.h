@@ -2,6 +2,7 @@
 #pragma once
 
 #include "audio_io/AudioCallback.h"
+#include "coords/Coords.h"
 #include "core/Constants.h"
 #include "dsp/ChannelLimiter.h"
 #include "dsp/DelayLine.h"
@@ -59,6 +60,13 @@ public:
     void setLayoutPath(const std::string& path)        { layout_path_ = path; }
     void setBinauralSofaPath(const std::string& path)  { binaural_sofa_path_ = path; }
     void setBinauralEnabled(bool on)                   { binaural_enabled_.store(on); }
+    // Phase 2.6b — set the binaural head pose (degrees). Control-thread API
+    // mirroring the /ypr OSC path; used by tests and host integrations.
+    void setHeadYpr(float yaw_deg, float pitch_deg, float roll_deg) {
+        head_yaw_deg_.store(yaw_deg,   std::memory_order_relaxed);
+        head_pitch_deg_.store(pitch_deg, std::memory_order_relaxed);
+        head_roll_deg_.store(roll_deg, std::memory_order_relaxed);
+    }
 
     // v0.5 P4: binaural mode injection. Same control-thread contract as the
     // other setters above. Forwards to BinauralMonitor::setRequestedMode().
@@ -201,6 +209,10 @@ public:
     const std::string& layoutPath()         const noexcept { return layout_path_; }
     const std::string& binauralSofaPath()   const noexcept { return binaural_sofa_path_; }
     bool               binauralEnabled()    const noexcept { return binaural_enabled_.load(); }
+    // Phase 2.6b — current binaural head pose (degrees), relaxed reads.
+    float headYawDeg()   const noexcept { return head_yaw_deg_.load(std::memory_order_relaxed); }
+    float headPitchDeg() const noexcept { return head_pitch_deg_.load(std::memory_order_relaxed); }
+    float headRollDeg()  const noexcept { return head_roll_deg_.load(std::memory_order_relaxed); }
 
     void audioBlock(const spe::audio_io::AudioBlock& block) override;
     void prepareToPlay(double sample_rate, int max_block_size) override;
@@ -731,6 +743,15 @@ private:
     std::string                layout_path_;
     std::string                binaural_sofa_path_;
     std::atomic<bool>          binaural_enabled_{false};
+    // Phase 2.6b — binaural head-tracking angles (DEGREES). Written by the OSC
+    // control thread (relaxed store) on /ypr; read once per block by the B1
+    // audio path (relaxed load) and applied via rotate_engine_dir_by_head
+    // before the per-object HRTF setDirection. 3 independent relaxed atomics:
+    // the inter-member tearing window is one block and converges; a seqlock is
+    // YAGNI for a head pose that updates at tracker rates (<=120 Hz).
+    std::atomic<float>         head_yaw_deg_{0.f};
+    std::atomic<float>         head_pitch_deg_{0.f};
+    std::atomic<float>         head_roll_deg_{0.f};
     // B-M3 — HRTF catalog (loaded at startup / prepareToPlay, control-thread
     // only). Used by the SysBinauralSofaSelect OSC handler to resolve a catalog
     // name → speh_path before setting the pending flag below.
