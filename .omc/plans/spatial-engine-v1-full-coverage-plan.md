@@ -62,6 +62,8 @@
 - **1.5 (선택, sustained) SIMD**: `core/CMakeLists.txt` `-O3` + 런타임 디스패치/`-march`, per-spk mix를 axpy로 재구조화(GainRamp 선형화). 오디오 동등성 검증.
 - **DoD (10.성능 실측 충족)**: ① 32obj/8spk+룸+바이노럴 ≤40% (스펙). ② 128spk 봉투 측정·문서화. ③ denormal stall 제거(peak 안정). ④ 룸+디코릴 켠 채 실용 씬에서 xrun=0 30분 soak.
 
+> **📋 Phase 2 사전조사(2026-06-07, autopilot 세션) — 아키텍처 결정 선행 필요**: mmhoa 바이노럴=**per-object** 모델(BinauralMonitor 1870L: B1 Direct setDirection/processBlockForObject 오디오스레드 HRTF + B2 AmbiVS). 레퍼런스 7-stage=`BinauralMonitorChain`=**스피커-버스 모니터**(prefeed LP 4200Hz/per-spk → FIR 에너지랭킹 top-24 → HRTF → 딜레이 → 5밴드 EQ). **두 아키텍처가 근본적으로 다름**(per-object vs speaker-bus). mmhoa엔 `/ypr` 헤드트래킹·prefeed LP·FIR랭킹·5밴드EQ 모두 없음. **결정 필요**: (A) mmhoa per-object 경로 확장(2.6 헤드트래킹=각 객체 az/el을 head yaw/pitch/roll로 회전 후 setDirection — ⚠회전 부호=L/R류 리스크, 골든 필수; 5밴드EQ=RoomBiquad 재사용 per-object) vs (B) 레퍼런스 speaker-bus 7-stage 체인 병렬 이식. **architect 검토 권장**. core-first 분할 가능하나 결정 먼저. 가장 자립적 첫 슬라이스=2.6 /ypr 헤드트래킹(신규 OSC 태그+세션상태 head 멤버+회전, 골든=head 회전→정위 이동).
+
 ### Phase 2 — 바이노럴/헤드트래킹 완성 (xlsx 06, ≈2주)
 레퍼런스 BinauralMonitorChain 7-stage 정밀 이식(mmhoa B1/B2·.speh·catalog 기반 확장):
 - **2.1** prefeed LP 4200Hz(per-spk feedSmoothLp[128], kBinauralPrefeedLowPassHz).
