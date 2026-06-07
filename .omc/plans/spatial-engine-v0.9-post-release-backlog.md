@@ -47,8 +47,8 @@
 ### 레인 4 — per-active-object WFS 할당  [STATUS: pending]
 - WFS-active 128 footprint ~111MB(>100MB) 해소. 전체 MAX_OBJECTS×spk 아닌 active-WFS-object 단위 할당. F5(ADR 0021) follow-up.
 
-### 레인 5 — v0.8 P3.6 확인/완료  [STATUS: pending, 선확인]
-- OSC sleep-barrier→event sync. VST3-gated 아닌데 `[ ]` 남음 → 누락/완료 여부 먼저 확인 후 재계획.
+### 레인 5 — v0.8 P3.6 확인/완료  [STATUS: ✅ 완료 확인됨 (2026-06-08, no work needed)]
+- **결론: 이미 완료.** P3.6(OSC sleep-barrier→event sync)는 v0.8 audit에서 **P0로 당겨져 commit `32bfd5a`에서 완료**됨. 3개 테스트(`test_osc_outbound_reply_smoke`/`_multi_producer`/`test_binaural_probe_warning_emission`) 전부 blind wall-clock 배리어 → 조건폴링+bounded deadline+fail-fast로 변환 확인(read-only 코드 검증). 남은 `sleep_for`는 deadline 루프 내 poll 간격(정상). v0.8 audit plan line 132의 `[ ]`는 P0 체크박스의 중복 미표기였음 → 체크 완료. 재검증: ctest 115/115 무-flake. **재계획 불필요.**
 
 ## 변경 이력
 - 2026-06-07: 레인 2 PR6 완료(soak green @HEAD 검증) → 포인터 PR7로 이동.
