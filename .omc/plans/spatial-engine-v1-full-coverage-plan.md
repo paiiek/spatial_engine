@@ -64,6 +64,8 @@
 
 > **📋 Phase 2 사전조사(2026-06-07, autopilot 세션) — 아키텍처 결정 선행 필요**: mmhoa 바이노럴=**per-object** 모델(BinauralMonitor 1870L: B1 Direct setDirection/processBlockForObject 오디오스레드 HRTF + B2 AmbiVS). 레퍼런스 7-stage=`BinauralMonitorChain`=**스피커-버스 모니터**(prefeed LP 4200Hz/per-spk → FIR 에너지랭킹 top-24 → HRTF → 딜레이 → 5밴드 EQ). **두 아키텍처가 근본적으로 다름**(per-object vs speaker-bus). mmhoa엔 `/ypr` 헤드트래킹·prefeed LP·FIR랭킹·5밴드EQ 모두 없음. **결정 필요**: (A) mmhoa per-object 경로 확장(2.6 헤드트래킹=각 객체 az/el을 head yaw/pitch/roll로 회전 후 setDirection — ⚠회전 부호=L/R류 리스크, 골든 필수; 5밴드EQ=RoomBiquad 재사용 per-object) vs (B) 레퍼런스 speaker-bus 7-stage 체인 병렬 이식. **architect 검토 권장**. core-first 분할 가능하나 결정 먼저. 가장 자립적 첫 슬라이스=2.6 /ypr 헤드트래킹(신규 OSC 태그+세션상태 head 멤버+회전, 골든=head 회전→정위 이동).
 
+> **✅ Phase 2 아키텍처 결정(architect, 2026-06-07)**: **Option A 권고 = mmhoa per-object/B2 경로를 7-stage "개념"으로 확장**, 레퍼런스 speaker-bus FIR 랭킹(2.2)은 **이식 안 함**(mmhoa B2 AmbiVS가 이미 24 가상스피커→per-VS HRIR=레퍼 가상스피커 모델 등가, `BinauralMonitor.h:479-509`). 7-stage 중 4개(prefeed LP·delay ring·5밴드EQ·headtracking)는 아키텍처-중립 pre/post로 B1/B2에 그대로 적층; HRTF 합성은 이미 존재. Option B(speaker-bus 병렬이식)=검증된 1870L RT자산 우회 + 새 축매핑(L/R 리스크) 순손실로 기각. **첫 증분=2.6a 헤드회전 코어**(Coords.h 순수함수 yaw/pitch/roll 회전 + 골든, 오디오스레드 밖에서 L/R 리스크 먼저 잠금) → 2.6b /ypr OSC+세션상태 결선 → 2.5 5밴드EQ(RoomBiquad 재사용) → 2.1 prefeed LP → 2.4 delay ring → (2.2 FIR랭킹 생략, 2.3 HRTF 기존). **상세 설계=`.omc/research/PHASE2_BINAURAL_DESIGN.md`(21KB, gitignored — 다음 세션 첫 read 대상)**.
+
 ### Phase 2 — 바이노럴/헤드트래킹 완성 (xlsx 06, ≈2주)
 레퍼런스 BinauralMonitorChain 7-stage 정밀 이식(mmhoa B1/B2·.speh·catalog 기반 확장):
 - **2.1** prefeed LP 4200Hz(per-spk feedSmoothLp[128], kBinauralPrefeedLowPassHz).
