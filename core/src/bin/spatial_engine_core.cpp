@@ -13,9 +13,10 @@
 #include "util/RtAssertNoAlloc.h"
 #include "WavWriter.h"
 
-#if defined(SPE_HAVE_JUCE)
+// DanteBackend.h is JUCE-free safe (JUCE parts are guarded inside it); include
+// unconditionally so list_output_devices() / --list-audio-devices works in both
+// builds (returns empty without JUCE).
 #include "audio_io/DanteBackend.h"
-#endif
 
 // ADR 0019 PR3: shm input backend (POSIX shm — Linux/macOS only, JUCE-free).
 #if defined(__linux__) || defined(__APPLE__)
@@ -398,6 +399,14 @@ int main(int argc, char** argv) {
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
         else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
         else if (a == "--object-source") object_source = nexts("sine");
+        else if (a == "--list-audio-devices") {
+            const auto devs = spe::audio_io::list_output_devices();
+            std::printf("Available output audio devices (%zu):\n", devs.size());
+            for (const auto& d : devs) std::printf("  %s\n", d.c_str());
+            if (devs.empty())
+                std::printf("  (none — headless host / no soundcard / JUCE-free build)\n");
+            return 0;
+        }
         else if (a == "--binaural-sofa") binaural_sofa = nexts("");
         else if (a == "--binaural-enable") binaural_enable = true;
         else if (a == "--force-probe") force_probe = true;
@@ -414,16 +423,20 @@ int main(int argc, char** argv) {
             emit_after_ms      = nexti(emit_after_ms);
         }
         else if (a == "--help" || a == "-h") {
-            std::printf("Usage: spatial_engine_core [--backend null|dante] "
+            std::printf("Usage: spatial_engine_core [--backend null|dante|device[:NAME]] "
                         "[--input-backend shm:<path>|null|dante] "
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
                         "[--osc-port 9100] [--osc-bind 127.0.0.1] "
                         "[--wav OUTPUT.wav] [--layout PATH.yaml] "
                         "[--osc-dialect legacy|adm] [--object-source sine|input] "
-                        "[--binaural-sofa PATH] "
+                        "[--list-audio-devices] [--binaural-sofa PATH] "
                         "[--binaural-enable] [--force-probe] "
                         "[--emit-no-sofa-after-ms N]\n"
                         "\n"
+                        "  --backend X        Output sink. null = discard; device[:NAME] = a real\n"
+                        "                   soundcard via JUCE AudioDeviceManager (default device,\n"
+                        "                   or the named one); dante = device alias (lab default).\n"
+                        "                   --list-audio-devices prints the available outputs.\n"
                         "  --input-backend X  Input source, distinct from --backend (output).\n"
                         "                   shm:<path> = pull PCM from a producer ring (Linux/\n"
                         "                   macOS); pairs with --backend for output. null = a\n"
@@ -565,11 +578,21 @@ int main(int argc, char** argv) {
         // from --backend null (output). This drives the loop with a null input.
         backend = spe::audio_io::make_null_backend(sr, channels, block_size,
                                                    /*input_channels=*/channels);
-    } else if (backend_name == "dante") {
+    } else if (backend_name == "dante"
+               || backend_name == "device"
+               || backend_name.rfind("device:", 0) == 0) {
 #if defined(SPE_HAVE_JUCE)
-        backend = spe::audio_io::make_dante_backend(sr, block_size);
+        // Real soundcard output via JUCE AudioDeviceManager. "dante" = default
+        // device (the Dante virtual card in the lab); "device" = default;
+        // "device:<name>" = a specific output device (see --list-audio-devices).
+        std::string dev_name;
+        if (backend_name.rfind("device:", 0) == 0)
+            dev_name = backend_name.substr(std::string("device:").size());
+        backend = spe::audio_io::make_device_backend(sr, block_size, dev_name);
 #else
-        std::fprintf(stderr, "[warn] dante requires JUCE; using null.\n");
+        std::fprintf(stderr,
+            "[warn] '%s' needs a JUCE build (AudioDeviceManager); using null.\n",
+            backend_name.c_str());
         backend = spe::audio_io::make_null_backend(sr, channels, block_size);
         backend_name = "null";
 #endif
