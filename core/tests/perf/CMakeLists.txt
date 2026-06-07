@@ -66,4 +66,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR SPATIAL_ENGINE_RUN_SOAK)
              COMMAND perf_obj_block_time
              CONFIGURATIONS Release)
     set_tests_properties(perf_obj_block_time PROPERTIES TIMEOUT 300)
+
+    # v1.0 Phase 1.4 — RT-budget SPEAKER sweep. Fixes the O(spk) measurement gap
+    # (perf_obj_block_time sweeps objects at fixed 8 speakers). Sweeps speaker
+    # counts {8..128} at 32 active objects, render-only and render+room; feeds
+    # docs/RT_BUDGET_SPEAKERS.md. Gates render+room <100% budget up to 64 spk.
+    add_executable(perf_speaker_sweep perf_speaker_sweep.cpp)
+    target_link_libraries(perf_speaker_sweep PRIVATE spe_core Threads::Threads)
+    add_test(NAME perf_speaker_sweep
+             COMMAND perf_speaker_sweep
+             CONFIGURATIONS Release)
+    set_tests_properties(perf_speaker_sweep PROPERTIES TIMEOUT 300)
 endif()
