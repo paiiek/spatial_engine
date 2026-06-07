@@ -1,5 +1,18 @@
 # Dreamscape Convergence — 마스터 플랜
 
+> ⛔ **SUPERSEDED (2026-06-07)** — 이 문서는 **구(舊) 6-Phase 수렴 플랜**이다. Phase 0/1 완료 후 **`spatial-engine-v1-full-coverage-plan.md`**(v1.0 Full-Coverage)로 대체되었다. 활성 플랜·resume 포인터·Phase 번호의 **단일 진실원천은 v1.0 플랜의 §6 진행 로그**다.
+>
+> ⚠️ **번호 주의 — 두 플랜의 Phase 번호가 다르다**:
+> | 작업 | 이 구 플랜 §4 | **활성 v1.0 플랜(정준)** |
+> |---|---|---|
+> | 패닝 | Phase 1 | Phase 1(성능 경화에 포함) |
+> | 룸 엔진 | Phase 2 | (Phase 1 토대 위 ⑥ 증분) |
+> | 디코릴레이션 | Phase 3 | Phase 4 후속 |
+> | 헤드트래킹+바이노럴 | Phase 4 | **Phase 2** |
+> | ADM-OSC | Phase 5 | **Phase 3** |
+>
+> 최근 커밋·진행 로그의 "Phase 2=바이노럴 / Phase 3=ADM"는 **v1.0 플랜 기준이며 올바르다**. 이 구 플랜의 §4 번호와 혼동 금지. 아래 §8 진행 로그는 ⑥b(룸)에서 멈춘 **미완 이력**이며, 이후 전체 기록은 v1.0 §6에 있다. (역사적 분석·증분 ①–⑥ 상세는 보존 목적.)
+
 > **목표**: `spatial_engine`이 ① Dreamscape xlsx 스펙 ② `github.com/dreamscapeaudio2023-star/immersive-audio-engine` 레퍼런스 엔진의 기능을 **모두 품으면서**(최소 기준), mmhoa 고유 인프라 우위(테스트·CI·헤드리스·크로스플랫폼·Ambisonics·SHM·VST3)를 유지/강화하여 **하나의 완성·실행 가능한 엔진**으로 수렴.
 
 - **브랜치**: `feat/dreamscape-convergence` (worktree: `/home/seung/mmhoa/spatial_engine-convergence`)
