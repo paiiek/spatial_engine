@@ -7,6 +7,7 @@
 #include "bin/MetricsEmit.h"
 #include "bin/PlayerStaleWatchdog.h"
 #include "geometry/LayoutLoader.h"
+#include "ipc/AdmOscConstants.h"   // v1.0 Phase 3.4: ADM_OSC_MAX_DIST for outbound aed
 #include "ipc/CommandDecoder.h"
 #include "ipc/SceneController.h"   // v0.9 Lane E (E-M3): scene library + load
 #include "scene/CueEngine.h"       // v0.9 Lane E (E-M3): cue automation
@@ -269,6 +270,39 @@ static void forward_to_instances(int send_fd,
         entries.size(), forwarded, dropped);
 }
 
+// v1.0 Phase 3.4 — build an /adm/obj/<id>/aed ,fff OSC message into buf.
+// Returns the byte length, or 0 on capacity overflow. Big-endian floats; OSC
+// strings NUL-terminated and padded to a 4-byte boundary.
+static size_t build_adm_aed(uint8_t* buf, size_t cap, int obj_id,
+                            float az_deg, float el_deg, float dist_norm) noexcept {
+    char addr[32];
+    const int al = std::snprintf(addr, sizeof(addr), "/adm/obj/%d/aed", obj_id);
+    if (al < 0 || al >= static_cast<int>(sizeof(addr))) return 0;  // encode err / truncation
+    size_t pos = 0;
+    auto putStr = [&](const char* s, size_t len /*incl NUL*/) -> bool {
+        const size_t padded = (len + 3) & ~size_t(3);
+        if (pos + padded > cap) return false;
+        std::memcpy(buf + pos, s, len);
+        for (size_t k = len; k < padded; ++k) buf[pos + k] = 0;
+        pos += padded;
+        return true;
+    };
+    auto putF = [&](float f) -> bool {
+        if (pos + 4 > cap) return false;
+        std::uint32_t u; std::memcpy(&u, &f, 4);
+        buf[pos++] = static_cast<uint8_t>((u >> 24) & 0xFF);
+        buf[pos++] = static_cast<uint8_t>((u >> 16) & 0xFF);
+        buf[pos++] = static_cast<uint8_t>((u >>  8) & 0xFF);
+        buf[pos++] = static_cast<uint8_t>( u        & 0xFF);
+        return true;
+    };
+    if (!putStr(addr, static_cast<size_t>(al) + 1)) return 0;
+    const char tt[] = ",fff";
+    if (!putStr(tt, sizeof(tt))) return 0;
+    if (!putF(az_deg) || !putF(el_deg) || !putF(dist_norm)) return 0;
+    return pos;
+}
+
 } // anonymous namespace (forwarder helpers)
 
 #define SPE_STRINGIFY_(x) #x
@@ -373,6 +407,12 @@ int main(int argc, char** argv) {
     int         emit_after_ms      = 1000;
     bool        inject_probe_throughput   = false;
     float       inject_probe_throughput_v = 0.5f;
+    // v1.0 Phase 3.4 — outbound ADM-OSC object broadcast. When adm_send_port>0,
+    // the control tick periodically emits /adm/obj/N/aed for every active object
+    // to 127.0.0.1:adm_send_port at adm_send_fps Hz (the vid2spatial bridge
+    // stream). Disabled by default (port 0).
+    int         adm_send_port  = 0;
+    int         adm_send_fps   = 30;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -389,6 +429,8 @@ int main(int argc, char** argv) {
         else if (a == "--channels")    channels     = nexti(channels);
         else if (a == "--rate")        sr           = nexti(static_cast<int>(sr));
         else if (a == "--osc-port")    osc_port     = nexti(osc_port);
+        else if (a == "--adm-send-port") adm_send_port = nexti(adm_send_port);
+        else if (a == "--adm-send-fps")  adm_send_fps  = nexti(adm_send_fps);
         else if (a == "--osc-bind")    osc_bind     = nexts("127.0.0.1");
         else if (a == "--wav")         wav_path     = nexts("");
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
@@ -663,6 +705,20 @@ int main(int argc, char** argv) {
     // cpu/xrun telemetry, not just on the shm path.
     auto last_metrics_emit = std::chrono::steady_clock::time_point{};
 
+    // v1.0 Phase 3.4 — outbound ADM-OSC broadcast cadence (control thread).
+    auto last_adm_send = std::chrono::steady_clock::time_point{};
+    const int adm_fps_clamped = (adm_send_port > 0)
+        ? (adm_send_fps < 1 ? 1 : (adm_send_fps > 60 ? 60 : adm_send_fps))
+        : 0;
+    const auto adm_send_interval = (adm_fps_clamped > 0)
+        ? std::chrono::nanoseconds(1000000000LL / adm_fps_clamped)
+        : std::chrono::nanoseconds::max();
+    std::vector<spe::ipc::ObjectSnapshot> adm_snap;  // reused; control thread only
+    if (adm_send_port > 0)
+        std::fprintf(stderr,
+            "[adm-send] broadcasting /adm/obj/N/aed to 127.0.0.1:%d @ %d fps\n",
+            adm_send_port, adm_fps_clamped);
+
     while (!g_quit.load() && clock::now() < deadline) {
         auto now = clock::now();
 
@@ -785,6 +841,36 @@ int main(int argc, char** argv) {
                 obs.stage_room_us.load(std::memory_order_relaxed),
                 obs.stage_decorr_us.load(std::memory_order_relaxed),
                 obs.stage_binaural_us.load(std::memory_order_relaxed));
+        }
+
+        // v1.0 Phase 3.4 — periodic outbound ADM-OSC object broadcast (the
+        // vid2spatial bridge stream). At adm_send_fps Hz, snapshot the objects
+        // (RT-safe reader-claim, control thread) and emit /adm/obj/N/aed for each
+        // ACTIVE (!muted) object to 127.0.0.1:adm_send_port. Engine az is right+;
+        // ADM az is left+, so negate (Phase 3.1 convention) on the way out, and
+        // normalise distance by ADM_OSC_MAX_DIST. Reuses fwd_fd (a UDP socket).
+        if (adm_send_port > 0 && fwd_fd >= 0 &&
+            (now - last_adm_send >= adm_send_interval)) {
+            last_adm_send = now;
+            engine.snapshotObjects(adm_snap);
+            struct sockaddr_in dst{};
+            dst.sin_family      = AF_INET;
+            dst.sin_port        = htons(static_cast<uint16_t>(adm_send_port));
+            dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            constexpr float kR2D = 180.f / 3.14159265358979323846f;
+            for (const auto& o : adm_snap) {
+                if (o.muted) continue;  // active == !muted
+                const float adm_az   = -o.az_rad * kR2D;  // engine right+ -> ADM left+
+                const float adm_el   =  o.el_rad * kR2D;
+                const float dist_nrm = (spe::ipc::ADM_OSC_MAX_DIST > 0.f)
+                    ? o.dist_m / spe::ipc::ADM_OSC_MAX_DIST : 0.f;
+                uint8_t pkt[64];
+                const size_t n = build_adm_aed(pkt, sizeof(pkt), o.id,
+                                               adm_az, adm_el, dist_nrm);
+                if (n > 0)
+                    ::sendto(fwd_fd, pkt, n, 0,
+                             reinterpret_cast<struct sockaddr*>(&dst), sizeof(dst));
+            }
         }
 
         // ADR 0019 PR4 (D4) — shm-gated 1 Hz diagnostics tick. poll_diagnostics
