@@ -1303,10 +1303,17 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         }
     }
 
+    // v1.0 Phase 1.4b — per-stage audio-thread timing. steady_clock is vDSO on
+    // Linux (cheap); 0 when a stage does not run this block. Folded into
+    // obs_counters_ at block end for the 1 Hz /sys/metrics tick.
+    double stage_render_us = 0.0, stage_room_us = 0.0,
+           stage_decorr_us = 0.0, stage_binaural_us = 0.0;
+
     // Per-algorithm spatial render (each renderer reads dry_ptrs_,
     // sees only its own algorithm's objects via the masked spans below).
     if (render_ready_.load(std::memory_order_relaxed) && block.output_channel_count > 0) {
         const int n_spk = vbap_.numSpeakers();
+        const auto _ts_render0 = std::chrono::steady_clock::now();
 
         // Phase 1.2 — per-algorithm active-object compaction. Count active
         // objects per algorithm and only fill/process/sum the renderers that
@@ -1404,6 +1411,10 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             }
         }
 
+        const auto _ts_render1 = std::chrono::steady_clock::now();
+        stage_render_us = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            _ts_render1 - _ts_render0).count() * 1e-3;
+
         const int rev_dist = active_reverb_.load(std::memory_order_relaxed);
         if (rev_dist == 2 && room_ready_) {
             // ⑥e (late opp source-bias) — steer this block's late FDN line
@@ -1496,6 +1507,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             }
         }
 
+        stage_room_us = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - _ts_render1).count() * 1e-3;
+
         // Deinterleave mix_buf_ → planar output_channels (speaker bus)
         // Apply per-speaker delay (DelayLine) and gain during deinterleave.
         const int out_ch = std::min(block.output_channel_count, n_spk);
@@ -1520,6 +1534,7 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         // after speaker gains). In place on each planar channel; the bank no-ops
         // when disabled / mix≈0. RT-safe (rings prepare-allocated, lazy reconfig).
         if (decorr_enabled_ && decorr_mix01_ > 1.0e-5f) {
+            const auto _ts_decorr0 = std::chrono::steady_clock::now();
             for (int spk = 0; spk < out_ch; ++spk) {
                 if (!block.output_channels || !block.output_channels[spk]) continue;
                 decorr_bank_.processChannel(spk, block.output_channels[spk],
@@ -1528,6 +1543,8 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                                             decorr_spread_ms_, decorr_ap_,
                                             decorr_seed_);
             }
+            stage_decorr_us = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - _ts_decorr0).count() * 1e-3;
         }
 
         // Per-channel noise generator (array verification): adds white/pink
@@ -1576,6 +1593,7 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         // binaural_enabled_. Pre-P4 the B1 path also ignored this flag; under
         // B2 the expensive 16ch SH+24-conv fan-out would otherwise run while
         // the user thinks binaural is off. Buffers stay zeroed when disabled.
+        const auto _ts_binaural0 = std::chrono::steady_clock::now();
         const bool binaural_enabled_now =
             binaural_enabled_.load(std::memory_order_acquire);
         if (binaural_ok_ && binaural_enabled_now) {
@@ -1814,6 +1832,8 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                           block.output_channels[n_spk + 1]);
             }
         }
+        stage_binaural_us = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - _ts_binaural0).count() * 1e-3;
     }
 
     blocks_processed_.fetch_add(1, std::memory_order_relaxed);
@@ -1837,6 +1857,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                                              std::memory_order_relaxed);
     obs_counters_.per_block_time_p99_us.store(cpu_meter_.p99Us(),
                                               std::memory_order_relaxed);
+    // v1.0 Phase 1.4b — publish per-stage timings (last block, microseconds).
+    // 0 for any stage that did not run this block. Relaxed scalar stores only.
+    obs_counters_.stage_render_us.store(
+        static_cast<std::uint32_t>(stage_render_us + 0.5), std::memory_order_relaxed);
+    obs_counters_.stage_room_us.store(
+        static_cast<std::uint32_t>(stage_room_us + 0.5), std::memory_order_relaxed);
+    obs_counters_.stage_decorr_us.store(
+        static_cast<std::uint32_t>(stage_decorr_us + 0.5), std::memory_order_relaxed);
+    obs_counters_.stage_binaural_us.store(
+        static_cast<std::uint32_t>(stage_binaural_us + 0.5), std::memory_order_relaxed);
 }
 
 // B-M3 — control-tick SOFA swap apply. Runs on the ~1 Hz control tick

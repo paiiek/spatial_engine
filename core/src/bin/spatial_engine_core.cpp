@@ -780,7 +780,11 @@ int main(int argc, char** argv) {
                 obs.per_block_time_p99_us.load(std::memory_order_relaxed),
                 static_cast<std::uint64_t>(driver->xrunCount()),
                 static_cast<std::uint64_t>(engine.engineOverrunCount()),
-                engine.binauralIsRuntimeDemoted() ? 1u : 0u);
+                engine.binauralIsRuntimeDemoted() ? 1u : 0u,
+                obs.stage_render_us.load(std::memory_order_relaxed),
+                obs.stage_room_us.load(std::memory_order_relaxed),
+                obs.stage_decorr_us.load(std::memory_order_relaxed),
+                obs.stage_binaural_us.load(std::memory_order_relaxed));
         }
 
         // ADR 0019 PR4 (D4) — shm-gated 1 Hz diagnostics tick. poll_diagnostics

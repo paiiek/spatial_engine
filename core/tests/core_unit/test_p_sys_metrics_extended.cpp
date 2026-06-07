@@ -218,6 +218,12 @@ int main() {
     // emitAndDrain: emit the 6 fields with the given injected backend xrun,
     // drain + parse the 6 messages into out_fields (key -> parsed value).
     // Returns false (and prints a FAIL line) on any wire/parse error.
+    // v1.0 Phase 1.4b — known per-stage values injected to assert the 4 new
+    // /sys/metrics fields round-trip on the wire (same approach as xrun_count).
+    constexpr std::uint32_t kStageRender = 11, kStageRoom = 22,
+                            kStageDecorr = 33, kStageBinaural = 44;
+    constexpr int kMetricsFieldCount = 10;  // 6 original + 4 stage timings
+
     auto emitAndDrain = [&](std::uint64_t backend_xrun,
                             std::map<std::string, long long>& out_fields) -> bool {
         spe::bin::emitSysMetrics(
@@ -227,10 +233,11 @@ int main() {
             obs.per_block_time_p99_us.load(std::memory_order_relaxed),
             backend_xrun,
             static_cast<std::uint64_t>(engine.engineOverrunCount()),
-            engine.binauralIsRuntimeDemoted() ? 1u : 0u);
+            engine.binauralIsRuntimeDemoted() ? 1u : 0u,
+            kStageRender, kStageRoom, kStageDecorr, kStageBinaural);
 
         out_fields.clear();
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < kMetricsFieldCount; ++i) {
             uint8_t rx[256] = {0};
             struct sockaddr_in from{};
             socklen_t fromlen = sizeof(from);
@@ -268,12 +275,24 @@ int main() {
 
     static const char* kRequired[] = {
         "cpu_pct", "cpu_peak_pct", "p99_us",
-        "xrun_count", "engine_overrun_count", "binaural_demote_count"};
+        "xrun_count", "engine_overrun_count", "binaural_demote_count",
+        "stage_render_us", "stage_room_us", "stage_decorr_us", "stage_binaural_us"};
     for (const char* k : kRequired) {
         if (f1.find(k) == f1.end()) {
             std::fprintf(stderr, "FAIL: missing field '%s'\n", k);
             return fail();
         }
+    }
+    // v1.0 Phase 1.4b — the 4 per-stage fields must round-trip the injected values.
+    if (f1["stage_render_us"]   != static_cast<long long>(kStageRender) ||
+        f1["stage_room_us"]     != static_cast<long long>(kStageRoom) ||
+        f1["stage_decorr_us"]   != static_cast<long long>(kStageDecorr) ||
+        f1["stage_binaural_us"] != static_cast<long long>(kStageBinaural)) {
+        std::fprintf(stderr, "FAIL: stage_* fields did not round-trip "
+                     "(render=%lld room=%lld decorr=%lld binaural=%lld)\n",
+                     f1["stage_render_us"], f1["stage_room_us"],
+                     f1["stage_decorr_us"], f1["stage_binaural_us"]);
+        return fail();
     }
     if (f1["cpu_pct"] < 0 || f1["cpu_pct"] > 100) {
         std::fprintf(stderr, "FAIL: cpu_pct=%lld out of [0,100]\n", f1["cpu_pct"]);
@@ -317,9 +336,9 @@ int main() {
 
     engine.releaseResources();
     ::close(client.fd);
-    std::printf("PASS test_p_sys_metrics_extended (6 /sys/metrics fields via "
-                "shared emitSysMetrics; engine_overrun_count=%lld; "
-                "xrun_count %lld->%lld monotonic)\n",
+    std::printf("PASS test_p_sys_metrics_extended (10 /sys/metrics fields via "
+                "shared emitSysMetrics incl. 4 stage timings; "
+                "engine_overrun_count=%lld; xrun_count %lld->%lld monotonic)\n",
                 f1["engine_overrun_count"], f1["xrun_count"], f2["xrun_count"]);
     return 0;
 }

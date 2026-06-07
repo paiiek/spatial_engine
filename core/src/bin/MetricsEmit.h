@@ -29,7 +29,15 @@ inline void emitSysMetrics(ipc::OSCBackend& osc,
                            std::uint32_t p99_us,
                            std::uint64_t xrun_count,
                            std::uint64_t engine_overrun_count,
-                           std::uint32_t binaural_demote_count) noexcept {
+                           std::uint32_t binaural_demote_count,
+                           // v1.0 Phase 1.4b — per-stage audio-thread timing (µs,
+                           // last block). APPENDED after the original 6 fields so
+                           // the wire contract stays backward-compatible (clients
+                           // read by key=value; older parsers ignore new keys).
+                           std::uint32_t stage_render_us = 0,
+                           std::uint32_t stage_room_us = 0,
+                           std::uint32_t stage_decorr_us = 0,
+                           std::uint32_t stage_binaural_us = 0) noexcept {
     char kv[64];
     std::snprintf(kv, sizeof(kv), "cpu_pct=%u", cpu_pct);
     osc.sendReply("/sys/metrics", ",s", kv);
@@ -44,6 +52,14 @@ inline void emitSysMetrics(ipc::OSCBackend& osc,
                   static_cast<unsigned long long>(engine_overrun_count));
     osc.sendReply("/sys/metrics", ",s", kv);
     std::snprintf(kv, sizeof(kv), "binaural_demote_count=%u", binaural_demote_count);
+    osc.sendReply("/sys/metrics", ",s", kv);
+    std::snprintf(kv, sizeof(kv), "stage_render_us=%u", stage_render_us);
+    osc.sendReply("/sys/metrics", ",s", kv);
+    std::snprintf(kv, sizeof(kv), "stage_room_us=%u", stage_room_us);
+    osc.sendReply("/sys/metrics", ",s", kv);
+    std::snprintf(kv, sizeof(kv), "stage_decorr_us=%u", stage_decorr_us);
+    osc.sendReply("/sys/metrics", ",s", kv);
+    std::snprintf(kv, sizeof(kv), "stage_binaural_us=%u", stage_binaural_us);
     osc.sendReply("/sys/metrics", ",s", kv);
 }
 

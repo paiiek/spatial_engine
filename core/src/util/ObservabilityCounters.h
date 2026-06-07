@@ -59,6 +59,22 @@ struct ObservabilityCounters {
 
     /// Audio thread CPU usage percentage (0–100), sampled each block.
     std::atomic<uint32_t> cpu_pct_audio_thread{0};
+
+    // -----------------------------------------------------------------------
+    // v1.0 Phase 1.4b — per-stage audio-thread timing (microseconds, last
+    // block). The audio thread times each stage with steady_clock (vDSO, cheap)
+    // and stores the last-block value here; the 1 Hz /sys/metrics tick samples
+    // a representative block. Diagnostic only (not a gate). 0 when the stage did
+    // not run that block (render not ready / reverb off / decorr off / binaural
+    // off).
+    std::atomic<uint32_t> stage_render_us{0};    ///< 5-renderer dispatch + mix sum.
+    /// Spatial-room reverb fan-out only (active_reverb==2: late FDN + early
+    /// reflections + cluster, distributed across the speaker bus). Does NOT
+    /// include the per-object reverb-send chains or the global mono FDN/IR
+    /// reverb, which run earlier in the block (outside this timing region).
+    std::atomic<uint32_t> stage_room_us{0};
+    std::atomic<uint32_t> stage_decorr_us{0};    ///< per-speaker decorrelation bank.
+    std::atomic<uint32_t> stage_binaural_us{0};  ///< B1/B2 binaural side-output.
 };
 
 }  // namespace spe::util
