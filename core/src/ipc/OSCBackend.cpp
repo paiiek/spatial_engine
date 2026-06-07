@@ -1,5 +1,7 @@
 // core/src/ipc/OSCBackend.cpp
-// JUCE-free stub path active when SPE_HAVE_JUCE is not defined or 0.
+// Real POSIX-socket OSC impl is used on Linux/macOS for BOTH the JUCE-free and
+// the JUCE-ON build (OSC is plain UDP, no JUCE needed). Only a non-POSIX JUCE
+// target falls back to the stub path at the top of the #if below.
 
 #include "ipc/OSCBackend.h"
 
@@ -32,18 +34,15 @@ static inline bool isCueOrSceneTag(CommandTag tag) noexcept {
 }
 } // namespace spe::ipc
 
-#if defined(SPE_HAVE_JUCE) && SPE_HAVE_JUCE
-// ---- JUCE path (compiled when JUCE submodule is present) -------------------
-// Full UDP receive/send via juce::OSCReceiver / juce::OSCSender.
-// OSC bytes are decoded on the JUCE message thread, then forwarded to sink_.
-// The audio thread never touches this class.
-//
-// v0.5.1 Q1: the JUCE wire path is still deferred to v1+. The outbound
-// reply ring and last_peer_endpoint_ members compile in (they live in the
-// header, allocated on construction) but neither dispatch() nor the
-// reply drain thread exercises any UDP I/O here. This keeps the JUCE
-// build symbol-compatible with the stub path without committing to a
-// JUCE OSC sender pipeline that the v0.5.1 hotfix scope does not need.
+#if defined(SPE_HAVE_JUCE) && SPE_HAVE_JUCE && !(defined(__linux__) || defined(__APPLE__))
+// ---- JUCE-only stub path (non-POSIX JUCE builds, e.g. Windows) -------------
+// OSC is plain UDP and needs no JUCE: on POSIX (Linux/macOS) the JUCE build
+// now compiles the SAME real socket implementation as the JUCE-free build (see
+// the #else below), so a JUCE-ON engine accepts inbound commands AND drives the
+// echo plane exactly like the headless build. Only a non-POSIX JUCE target
+// (Windows, no winsock impl here) falls back to this stub, which keeps the
+// build symbol-compatible. A juce::OSCSender/Receiver path can replace this
+// when Windows is targeted.
 
 #include <juce_osc/juce_osc.h>
 
