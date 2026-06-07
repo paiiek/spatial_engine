@@ -63,15 +63,33 @@ static std::vector<uint8_t> aedPacket(int obj_id, float az_deg, float el_deg, fl
     return p;
 }
 
-// Drive the ADM object at the given ADM azimuth; return {leftEnergy, rightEnergy}.
-static void run(float adm_az_deg, double& left_e, double& right_e) {
+// Minimal OSC encoder for /adm/obj/<id>/xyz ,fff (ADM Cartesian x=right,y=front,z=up).
+static std::vector<uint8_t> xyzPacket(int obj_id, float x, float y, float z) {
+    std::vector<uint8_t> p;
+    auto pushPadded = [&](const std::string& s) {
+        for (char c : s) p.push_back(static_cast<uint8_t>(c));
+        p.push_back(0);
+        while (p.size() % 4 != 0) p.push_back(0);
+    };
+    auto pushF = [&](float f) {
+        uint32_t u; std::memcpy(&u, &f, 4);
+        p.push_back((u>>24)&0xFF); p.push_back((u>>16)&0xFF);
+        p.push_back((u>>8)&0xFF); p.push_back(u&0xFF);
+    };
+    pushPadded("/adm/obj/" + std::to_string(obj_id) + "/xyz");
+    pushPadded(",fff");
+    pushF(x); pushF(y); pushF(z);
+    return p;
+}
+
+// Drive a prebuilt ADM packet on a fresh engine; return {leftEnergy, rightEnergy}.
+static void run_pkt(const std::vector<uint8_t>& pkt, double& left_e, double& right_e) {
     const int N = 8;
     spe::core::SpatialEngine engine(0);
     auto layout = ring8();
     engine.setLayout(layout);
     engine.prepareToPlay(48000.0, 256);
 
-    auto pkt = aedPacket(0, adm_az_deg, 0.f, 0.05f);  // near-field so dist gain is high
     engine.oscBackend().injectPacket(std::span<const uint8_t>(pkt));
 
     std::vector<std::vector<float>> bufs(static_cast<size_t>(N), std::vector<float>(256, 0.f));
@@ -100,6 +118,11 @@ static void run(float adm_az_deg, double& left_e, double& right_e) {
     }
 }
 
+// Convenience: drive an /aed packet at the given ADM azimuth.
+static void run(float adm_az_deg, double& left_e, double& right_e) {
+    run_pkt(aedPacket(0, adm_az_deg, 0.f, 0.05f), left_e, right_e);
+}
+
 int main() {
     double L_left = 0, L_right = 0, R_left = 0, R_right = 0;
 
@@ -116,6 +139,28 @@ int main() {
     CHECK(R_right > 1e-9, "ADM -30 renders non-silent");
     CHECK(R_right > 4.0 * R_left,
           "ADM az=-30 (RIGHT) must light RIGHT speakers >> LEFT (sign symmetric)");
+
+    // --- Phase 3.2: ADM Cartesian xyz path (x=right, y=front, z=up). ---
+    // ADM xyz x=-1 -> LEFT (x is right-positive) -> engine az<0 -> LEFT speakers.
+    double XL_left = 0, XL_right = 0, XR_left = 0, XR_right = 0;
+    run_pkt(xyzPacket(0, -1.f, 0.1f, 0.f), XL_left, XL_right);
+    std::printf("[adm-xyz] xyz x=-1 (left):  left=%.4g  right=%.4g\n", XL_left, XL_right);
+    CHECK(XL_left > 4.0 * XL_right,
+          "ADM xyz x=-1 (LEFT) must light LEFT speakers >> RIGHT (Y<->Z swap + sign correct)");
+
+    run_pkt(xyzPacket(0, +1.f, 0.1f, 0.f), XR_left, XR_right);
+    std::printf("[adm-xyz] xyz x=+1 (right): left=%.4g  right=%.4g\n", XR_left, XR_right);
+    CHECK(XR_right > 4.0 * XR_left,
+          "ADM xyz x=+1 (RIGHT) must light RIGHT speakers >> LEFT");
+
+    // xyz/aed agreement: an ADM source at admAz=+30 horizontal has ADM Cartesian
+    // (x=sin(-30)=-0.5, y=cos(-30)=0.866, z=0); it must land on the SAME side as
+    // the /aed +30 case above (LEFT). Direction agreement, not exact energy.
+    double XA_left = 0, XA_right = 0;
+    run_pkt(xyzPacket(0, -0.5f, 0.866f, 0.f), XA_left, XA_right);
+    std::printf("[adm-xyz] xyz(=aed +30) :   left=%.4g  right=%.4g\n", XA_left, XA_right);
+    CHECK(XA_left > XA_right,
+          "ADM xyz equivalent of aed az=+30 must agree (LEFT) — xyz/aed consistent");
 
     if (failures == 0) { std::printf("test_convergence_adm_az_golden: ALL PASS\n"); return 0; }
     std::fprintf(stderr, "test_convergence_adm_az_golden: %d FAILURE(S)\n", failures);

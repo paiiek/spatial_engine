@@ -4,6 +4,7 @@
 #include "core/SpatialEngine.h"
 #include "geometry/LayoutLoader.h"
 #include "render/AlgorithmAnalyticReference.h"
+#include "ipc/AdmOscConstants.h"
 #include "reverb/ReverbEngine.h"
 #include "util/DenormalGuard.h"
 #include "util/RtAssertNoAlloc.h"
@@ -1148,16 +1149,22 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 c.active = qc.active;
                 break;
             case ipc::CommandTag::ObjXYZ:
-                // Store Cartesian; renderers use spherical (az/el/dist).
-                // Convert: x=right y=up z=forward → az/el via atan2.
+                // Phase 3.2 — ADM-OSC Cartesian. The wire frame is
+                // x=right, y=FRONT, z=UP (normalised [-1,1]); the engine frame is
+                // x=right, y=UP, z=FRONT. So az is atan2(right, front)=atan2(x,y)
+                // and el is asin(up/r)=asin(z/r) — i.e. a Y<->Z swap vs the naive
+                // reading. This makes an ADM source given via xyz land at the SAME
+                // engine az/el as the equivalent /aed (verified by the az golden +
+                // the xyz golden test). Distance: the normalised vector length
+                // scales to metres via the ADM Cartesian half-span.
                 {
                     float r = std::sqrt(qc.xyz_x * qc.xyz_x +
                                         qc.xyz_y * qc.xyz_y +
                                         qc.xyz_z * qc.xyz_z);
                     if (r > 1e-6f) {
-                        c.az   = std::atan2(qc.xyz_x, qc.xyz_z);
-                        c.el   = std::asin(qc.xyz_y / r);
-                        c.dist = r;
+                        c.az   = std::atan2(qc.xyz_x, qc.xyz_y);  // right, front
+                        c.el   = std::asin(qc.xyz_z / r);         // up
+                        c.dist = r * spe::ipc::ADM_OSC_CARTESIAN_HALF_SPAN;
                     }
                     c.active = true;
                 }
