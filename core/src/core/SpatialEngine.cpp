@@ -1160,7 +1160,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 // silently on unmapped channels (channelToIndex returns -1).
                 const int idx = layout_.channelToIndex(static_cast<int>(qc.noise_ch));
                 if (idx >= 0 && static_cast<size_t>(idx) < noise_chans_.size()) {
-                    noise_chans_[static_cast<size_t>(idx)].pink = qc.noise_pink;
+                    auto& nc = noise_chans_[static_cast<size_t>(idx)];
+                    if (qc.noise_pink && !nc.pink) nc.pink_filt.reset();  // fresh state on enable
+                    nc.pink = qc.noise_pink;
                 }
                 break;
             }
@@ -1671,20 +1673,16 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             if (!block.output_channels || !block.output_channels[spk]) continue;
 
             constexpr float kNoiseScale = 1.0f / 2147483648.f;  // int32 → ±1 float
-            constexpr float kPinkAlpha  = 0.05f;                // gentle LP for "pink"
             for (int n = 0; n < block.num_frames; ++n) {
                 // xorshift32 RNG (RT-safe, deterministic)
                 nc.rng ^= nc.rng << 13;
                 nc.rng ^= nc.rng >> 17;
                 nc.rng ^= nc.rng << 5;
                 const float white = static_cast<float>(static_cast<int32_t>(nc.rng)) * kNoiseScale;
-                float sample;
-                if (nc.pink) {
-                    nc.pink_state = nc.pink_state * (1.f - kPinkAlpha) + white * kPinkAlpha;
-                    sample = nc.pink_state * 4.f;  // pink output is quieter; compensate
-                } else {
-                    sample = white;
-                }
+                // pink = canonical Kellet 7-state shaper (−3 dB/oct; deliberate
+                // deviation from the reference's gains — see dsp/PinkNoise.h);
+                // white = raw.
+                const float sample = nc.pink ? nc.pink_filt.processSample(white) : white;
                 block.output_channels[spk][n] += sample * nc.gain_lin * transport_gain;
             }
         }

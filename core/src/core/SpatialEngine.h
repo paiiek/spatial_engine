@@ -7,6 +7,7 @@
 #include "dsp/ChannelLimiter.h"
 #include "dsp/DelayLine.h"
 #include "dsp/PerObjectChain.h"
+#include "dsp/PinkNoise.h"
 #include "geometry/SpeakerLayout.h"
 #include "ipc/Command.h"
 #include "ipc/OSCBackend.h"
@@ -691,8 +692,8 @@ private:
     // Noise generator (per-output-channel array verification)
     struct NoiseChan {
         float    gain_lin   = 0.f;     // 0 = silent (default); set by /noise/{ch}/gain
-        bool     pink       = false;
-        float    pink_state = 0.f;
+        bool     pink       = false;   // false = white, true = pink (−3 dB/oct)
+        spe::dsp::PinkKellet pink_filt;  // canonical Kellet 7-state pink shaper (see dsp/PinkNoise.h)
         uint32_t rng        = 0xCAFEBABEu;
     };
     std::vector<NoiseChan> noise_chans_;

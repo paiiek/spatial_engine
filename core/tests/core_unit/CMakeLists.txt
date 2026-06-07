@@ -79,6 +79,12 @@ add_executable(test_convergence_mdap test_convergence_mdap.cpp)
 target_link_libraries(test_convergence_mdap PRIVATE spe_core)
 add_test(NAME convergence_mdap COMMAND test_convergence_mdap)
 
+# Dreamscape Convergence Phase 4.2a — real pink noise (Paul Kellet 7-state):
+# byte-faithful coefficients + analytic −3 dB/octave magnitude slope.
+add_executable(test_convergence_pink_noise test_convergence_pink_noise.cpp)
+target_link_libraries(test_convergence_pink_noise PRIVATE spe_core)
+add_test(NAME convergence_pink_noise COMMAND test_convergence_pink_noise)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)
