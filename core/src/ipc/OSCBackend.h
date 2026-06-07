@@ -25,6 +25,8 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <unordered_map>
+#include <utility>
 
 namespace spe::ipc {
 
@@ -68,6 +70,21 @@ public:
     // strings fall back to loopback with a stderr warning at start().
     void setBindAddr(const std::string& addr) { bind_addr_ = addr; }
     const std::string& bindAddr() const noexcept { return bind_addr_; }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Sec H3 — OSC auth/safety. The command surface is unauthenticated UDP
+    // (see H2). When a non-empty shared-secret token is set, the inbound
+    // thread admits ONLY senders that first present it via /sys/auth: a match
+    // allowlists that peer (ip:port) for kAuthTtlMs; thereafter the peer's
+    // commands are admitted subject to a per-peer rate cap (kRateMaxPerSec).
+    // Everything else is dropped and audit-counted. Empty token (default) =
+    // auth disabled (current behaviour). Set before start(); pair with
+    // setBindAddr() for LAN deployments.
+    void setAuthToken(const std::string& t) { auth_token_ = t; }
+    bool authEnabled() const noexcept { return !auth_token_.empty(); }
+    std::uint64_t authAccepted() const noexcept { return auth_ok_.load(std::memory_order_relaxed); }
+    std::uint64_t authRejected() const noexcept { return auth_rejected_.load(std::memory_order_relaxed); }
+    std::uint64_t rateDropped()  const noexcept { return rate_dropped_.load(std::memory_order_relaxed); }
 
     // ExternalControl interface.
     // dispatch(): encode cmd to OSC bytes and (JUCE path) send via UDP;
@@ -302,6 +319,18 @@ private:
     int            udp_fd_      = -1;
     std::thread    udp_thread_;
     std::string    bind_addr_;  // v0.5.1 Sec H2 — default "127.0.0.1"
+
+    // Sec H3 — OSC auth/safety. auth_token_ is set once before start(); the two
+    // maps + rate state are touched ONLY on udp_thread_, so they need no locks.
+    // Counters are atomic so the control thread / bin can read them for audit.
+    std::string auth_token_;  // shared secret; empty = auth disabled (default)
+    std::unordered_map<std::uint64_t, std::int64_t> authed_peers_;            // key → last-ok ms
+    std::unordered_map<std::uint64_t, std::pair<std::int64_t, int>> peer_rate_; // key → (window-start ms, count)
+    std::atomic<std::uint64_t> auth_ok_{0};
+    std::atomic<std::uint64_t> auth_rejected_{0};
+    std::atomic<std::uint64_t> rate_dropped_{0};
+    static constexpr std::int64_t kAuthTtlMs     = 60000;  // re-auth after 60s idle
+    static constexpr int          kRateMaxPerSec = 5000;   // per-peer command cap
 
     // v0.5.1 Sec H2 — actual bound address/port (post-bind), used by tests
     // and operators to confirm the listener landed where it should.

@@ -149,6 +149,67 @@ void OSCBackend::outboundDrainLoop() {}
 namespace spe::ipc {
 
 // ---------------------------------------------------------------------------
+// Sec H3 — OSC auth helpers (udp-thread only)
+// ---------------------------------------------------------------------------
+namespace {
+
+// Stable 64-bit key for an IPv4 peer: (s_addr<<16) | port, both network order.
+inline std::uint64_t peerKeyOf(const struct sockaddr_storage& ss) noexcept {
+    if (ss.ss_family != AF_INET) return 0;
+    const auto* sa = reinterpret_cast<const struct sockaddr_in*>(&ss);
+    return (static_cast<std::uint64_t>(sa->sin_addr.s_addr) << 16)
+           | static_cast<std::uint64_t>(ntohs(sa->sin_port));
+}
+
+// Constant-time compare — never branch/return early on the secret's content,
+// so a network attacker can't time-oracle the token byte by byte.
+inline bool constantTimeEq(const std::string& a, const std::string& b) noexcept {
+    if (a.size() != b.size()) return false;
+    unsigned char r = 0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        r |= static_cast<unsigned char>(a[i] ^ b[i]);
+    return r == 0;
+}
+
+// If `p` is an OSC "/sys/auth" message, extract its last string arg (the token,
+// after the legacy [seq,id] prefix) into `out`. Returns true on match.
+inline bool extractSysAuthToken(std::span<const uint8_t> p, std::string& out) {
+    auto pad4 = [](std::size_t n) { return (n + 4) & ~std::size_t(3); };  // L-char OSC string size
+    const char* b = reinterpret_cast<const char*>(p.data());
+    const std::size_t N = p.size();
+    std::size_t z = 0;
+    while (z < N && b[z] != '\0') ++z;
+    if (z >= N || z != 9 || std::memcmp(b, "/sys/auth", 9) != 0) return false;
+    std::size_t off = pad4(z);                       // type-tag string start
+    if (off >= N || b[off] != ',') return false;
+    std::size_t tz = off;
+    while (tz < N && b[tz] != '\0') ++tz;
+    if (tz >= N) return false;
+    const std::string tags(b + off + 1, b + tz);     // e.g. "iis"
+    std::size_t a = off + pad4(tz - off);            // arg-data start
+    bool got = false;
+    for (char t : tags) {
+        if (t == 'i' || t == 'f') { a += 4; if (a > N) return false; }
+        else if (t == 's') {
+            std::size_t e = a;
+            while (e < N && b[e] != '\0') ++e;
+            if (e >= N) return false;
+            out.assign(b + a, b + e);                 // keep last string
+            got = true;
+            a += pad4(e - a);
+        } else return false;
+    }
+    return got;
+}
+
+inline std::int64_t steadyNowMs() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -225,6 +286,39 @@ void OSCBackend::start() {
             if (n > 0 && running_.load(std::memory_order_acquire)) {
                 std::span<const uint8_t> packet(buf.data(),
                                                 static_cast<size_t>(n));
+
+                // Sec H3 — auth gate (active only when a token is configured).
+                // /sys/auth carrying the token allowlists this peer; otherwise
+                // an un-authenticated (or rate-exceeding) peer is dropped here,
+                // BEFORE decode/sink — the audio path never sees it.
+                if (!auth_token_.empty()) {
+                    const std::int64_t  now_ms = steadyNowMs();
+                    const std::uint64_t key    = peerKeyOf(peer);
+                    std::string tok;
+                    if (extractSysAuthToken(packet, tok)) {
+                        if (key != 0 && constantTimeEq(tok, auth_token_)) {
+                            authed_peers_[key] = now_ms;
+                            auth_ok_.fetch_add(1, std::memory_order_relaxed);
+                        } else {
+                            auth_rejected_.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        continue;  // /sys/auth itself is never forwarded
+                    }
+                    auto it = authed_peers_.find(key);
+                    if (key == 0 || it == authed_peers_.end()
+                            || (now_ms - it->second) > kAuthTtlMs) {
+                        auth_rejected_.fetch_add(1, std::memory_order_relaxed);
+                        continue;  // unauthenticated → drop
+                    }
+                    it->second = now_ms;  // refresh idle TTL on activity
+                    auto& rt = peer_rate_[key];
+                    if (now_ms - rt.first >= 1000) { rt.first = now_ms; rt.second = 0; }
+                    if (++rt.second > kRateMaxPerSec) {
+                        rate_dropped_.fetch_add(1, std::memory_order_relaxed);
+                        continue;  // per-peer flood → drop (DoS guard)
+                    }
+                }
+
                 Command cmd = decoder_.decode(packet);
                 if (cmd.tag != CommandTag::Unknown) {
                     if (peer_len > 0

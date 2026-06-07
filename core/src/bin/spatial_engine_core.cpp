@@ -363,6 +363,10 @@ int main(int argc, char** argv) {
     std::string wav_path;
     std::string layout_path  = resolve_default_layout("lab_8ch.yaml");
     std::string osc_dialect  = "legacy"; // "legacy" or "adm"
+    // Sec H3 — optional shared-secret for the OSC command surface. Empty = no
+    // auth (default). When set, only clients presenting it via /sys/auth are
+    // admitted. Recommended whenever --osc-bind is non-loopback.
+    std::string osc_token;
     // Object dry-signal source: "sine" (default, internal test tones) or
     // "input" (route input_channels[i] → object i; pair with --input-backend
     // shm:<path> to render a real streamed stem through the per-object DSP).
@@ -398,6 +402,7 @@ int main(int argc, char** argv) {
         else if (a == "--wav")         wav_path     = nexts("");
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
         else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
+        else if (a == "--osc-token")   osc_token    = nexts("");
         else if (a == "--object-source") object_source = nexts("sine");
         else if (a == "--list-audio-devices") {
             const auto devs = spe::audio_io::list_output_devices();
@@ -429,6 +434,7 @@ int main(int argc, char** argv) {
                         "[--osc-port 9100] [--osc-bind 127.0.0.1] "
                         "[--wav OUTPUT.wav] [--layout PATH.yaml] "
                         "[--osc-dialect legacy|adm] [--object-source sine|input] "
+                        "[--osc-token SECRET] "
                         "[--list-audio-devices] [--binaural-sofa PATH] "
                         "[--binaural-enable] [--force-probe] "
                         "[--emit-no-sofa-after-ms N]\n"
@@ -469,11 +475,22 @@ int main(int argc, char** argv) {
     // explicit non-loopback opt-in prints a WARNING so operators understand
     // they have just exposed the unauthenticated OSC surface beyond 127.0.0.1.
     engine.oscBackend().setBindAddr(osc_bind);
+    // Sec H3 — apply the OSC auth token (empty = disabled) BEFORE start().
+    engine.oscBackend().setAuthToken(osc_token);
+    if (!osc_token.empty()) {
+        std::printf("  osc-auth: ON (clients must present the token via /sys/auth)\n");
+    }
     if (osc_bind != "127.0.0.1") {
-        std::fprintf(stderr,
-            "WARNING: OSC listener bound to %s. Engine is reachable from LAN; "
-            "OSC commands are unauthenticated. Use only on trusted networks.\n",
-            osc_bind.c_str());
+        if (osc_token.empty()) {
+            std::fprintf(stderr,
+                "WARNING: OSC listener bound to %s with NO --osc-token. The engine "
+                "is reachable from LAN and the command surface is UNAUTHENTICATED. "
+                "Pass --osc-token <secret> or use only on trusted networks.\n",
+                osc_bind.c_str());
+        } else {
+            std::fprintf(stderr,
+                "NOTE: OSC listener bound to %s; token auth is ON.\n", osc_bind.c_str());
+        }
     }
 
     // Apply OSC dialect (--osc-dialect legacy|adm)
@@ -836,5 +853,12 @@ int main(int argc, char** argv) {
     std::printf("  stopped. blocks=%llu xruns=%llu\n",
                 static_cast<unsigned long long>(engine.blocksProcessed()),
                 static_cast<unsigned long long>(driver->xrunCount()));
+    // Sec H3 — audit summary (only meaningful when token auth was enabled).
+    if (engine.oscBackend().authEnabled()) {
+        std::printf("  osc-auth audit: accepted=%llu rejected=%llu rate_dropped=%llu\n",
+                    static_cast<unsigned long long>(engine.oscBackend().authAccepted()),
+                    static_cast<unsigned long long>(engine.oscBackend().authRejected()),
+                    static_cast<unsigned long long>(engine.oscBackend().rateDropped()));
+    }
     return 0;
 }
