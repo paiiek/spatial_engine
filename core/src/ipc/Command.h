@@ -54,6 +54,7 @@ enum class CommandTag : uint8_t {
     SysHeadYpr             = 0x1C, // /ypr (alias /sys/ypr) ,fff yaw_deg pitch_deg roll_deg — binaural head tracking (Phase 2.6b)
     SysBinauralEq          = 0x1D, // /sys/binaural_eq/{enable,band} — binaural monitor 5-band peak EQ (Phase 2.5)
     SysBinauralPrefeed     = 0x1E, // /sys/binaural_prefeed ,f cutoff_hz — binaural HRTF prefeed LP corner (Phase 2.1)
+    SysBinauralDelay       = 0x1F, // /sys/binaural_delay ,f ms — binaural monitor stereo delay-ring tap (Phase 2.4)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -467,6 +468,13 @@ struct PayloadSysBinauralPrefeed {
     float cutoff_hz = 4200.f;
 };
 
+// Phase 2.4 — binaural monitor stereo delay-ring tap (milliseconds). float-only,
+// rides the control thread into an engine atomic (read once per block; same
+// contract as /ypr and /sys/binaural_prefeed). 0 ms = no delay (passthrough).
+struct PayloadSysBinauralDelay {
+    float ms = 0.f;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -521,6 +529,7 @@ using CommandPayload = std::variant<
     PayloadSysHeadYpr,
     PayloadSysBinauralEq,
     PayloadSysBinauralPrefeed,
+    PayloadSysBinauralDelay,
     PayloadUnknown
 >;
 

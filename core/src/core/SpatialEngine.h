@@ -81,6 +81,14 @@ public:
     float binauralPrefeedCutoffForTest() const noexcept {
         return bin_prefeed_cutoff_hz_.load(std::memory_order_relaxed);
     }
+    // Phase 2.4 — binaural monitor stereo delay tap (ms). Atomic store (control
+    // thread); the audio path reads it once per block. Mirrors /sys/binaural_delay.
+    void setBinauralDelayMs(float ms) {
+        bin_delay_ms_.store(ms, std::memory_order_relaxed);
+    }
+    float binauralDelayMsForTest() const noexcept {
+        return bin_delay_ms_.load(std::memory_order_relaxed);
+    }
 
     // v0.5 P4: binaural mode injection. Same control-thread contract as the
     // other setters above. Forwards to BinauralMonitor::setRequestedMode().
@@ -704,6 +712,16 @@ private:
     std::array<std::array<float, MAX_BLOCK>, MAX_OBJECTS> bin_prefeed_{};
     std::array<float, MAX_OBJECTS>                        bin_prefeed_lp_{};
     std::atomic<float>                                    bin_prefeed_cutoff_hz_{iae::kBinauralPrefeedLowPassHz};
+    // Phase 2.4 — binaural monitor stereo delay ring (BinauralMonitorChain.cpp:
+    // 132-154), on the final L/R bus BEFORE the EQ (reference order
+    // HRTF→delay→EQ→limit). Rings are pre-allocated at prepareToPlay (control
+    // thread); the audio path only does modulo indexing (alloc 0). The tap (ms)
+    // is read once per block from a relaxed atomic and clamped to the ring; the
+    // write index is audio-thread-only. 0 ms = passthrough.
+    std::vector<float>                                    bin_delay_L_;
+    std::vector<float>                                    bin_delay_R_;
+    int                                                   bin_delay_write_ = 0;
+    std::atomic<float>                                    bin_delay_ms_{0.f};
     // v0.9 Lane C (hoist): per-block per-algorithm object-state scratch. Moved
     // off the audio-callback stack to engine members so the audio thread never
     // carries ~10 KB of stack arrays at MAX_OBJECTS=128. Fixed-size, alloc-once,

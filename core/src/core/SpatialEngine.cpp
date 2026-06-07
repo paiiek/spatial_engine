@@ -312,6 +312,15 @@ SpatialEngine::SpatialEngine(int listen_port)
                     bin_prefeed_cutoff_hz_.store(p->cutoff_hz, std::memory_order_relaxed);
                 }
                 return;
+            case ipc::CommandTag::SysBinauralDelay:
+                // Phase 2.4 — binaural monitor stereo delay tap (ms). Single
+                // float into a relaxed atomic on the control thread; the audio
+                // path reads it once per block and clamps to the ring. Float-only
+                // → early-return (no FIFO slot), like /ypr / prefeed.
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralDelay>(&cmd.payload)) {
+                    bin_delay_ms_.store(p->ms, std::memory_order_relaxed);
+                }
+                return;
             case ipc::CommandTag::SysHandshake:
                 // v0.5.1 Q1 (WM-2) — when the client supplies an explicit
                 // reply_port, retarget our captured peer endpoint so future
@@ -675,6 +684,12 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     // Phase 2.1 — reset the binaural prefeed one-pole state (the cutoff atomic
     // keeps its current value across a re-prepare; default = 4200 Hz).
     bin_prefeed_lp_.fill(0.f);
+    // Phase 2.4 — (re)allocate the binaural monitor stereo delay rings on the
+    // control thread and clear them; the audio path never resizes. The tap
+    // atomic keeps its value across a re-prepare (default 0 ms = passthrough).
+    bin_delay_L_.assign(static_cast<size_t>(iae::kBinauralDelayRingCap), 0.f);
+    bin_delay_R_.assign(static_cast<size_t>(iae::kBinauralDelayRingCap), 0.f);
+    bin_delay_write_ = 0;
 
     // Wire dry_ptrs_ to scratch buffers
     for (int i = 0; i < MAX_OBJECTS; ++i) {
@@ -1927,6 +1942,36 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
 
                 // Decrement xfade counter for this block (no-op when steady).
                 binaural_.finalizeXfadeBlock();
+
+                // Phase 2.4 — binaural monitor stereo delay ring on the final
+                // L/R bus, BEFORE the EQ (reference order HRTF→delay→EQ→limit,
+                // BinauralMonitorChain.cpp:132-154). tap = binauralDelayMs (read
+                // once/block); 0 ms = passthrough. RT-safe: ring pre-allocated
+                // at prepare, modulo indexing only (alloc 0).
+                {
+                    const int cap = static_cast<int>(bin_delay_L_.size());
+                    if (cap >= 4) {
+                        int ds = static_cast<int>(
+                            bin_delay_ms_.load(std::memory_order_relaxed)
+                            * 0.001f * static_cast<float>(sample_rate_) + 0.5f);
+                        ds = std::clamp(ds, 0, cap - 2);
+                        if (ds > 0) {
+                            for (int n = 0; n < block.num_frames; ++n) {
+                                const int wp = (bin_delay_write_ + n) % cap;
+                                const int rp = (wp - ds + cap) % cap;
+                                const float outL = bin_delay_L_[static_cast<std::size_t>(rp)];
+                                const float outR = bin_delay_R_[static_cast<std::size_t>(rp)];
+                                bin_delay_L_[static_cast<std::size_t>(wp)] =
+                                    binaural_l_buf_[static_cast<std::size_t>(n)];
+                                bin_delay_R_[static_cast<std::size_t>(wp)] =
+                                    binaural_r_buf_[static_cast<std::size_t>(n)];
+                                binaural_l_buf_[static_cast<std::size_t>(n)] = outL;
+                                binaural_r_buf_[static_cast<std::size_t>(n)] = outR;
+                            }
+                        }
+                        bin_delay_write_ = (bin_delay_write_ + block.num_frames) % cap;
+                    }
+                }
 
                 // Phase 2.5 — binaural monitor 5-band peak EQ on the final L/R
                 // bus, BEFORE the limiter (reference order: EQ → gain/limit,

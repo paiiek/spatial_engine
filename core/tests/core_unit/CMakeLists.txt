@@ -1021,3 +1021,10 @@ target_link_libraries(test_convergence_binaural_prefeed PRIVATE spe_core)
 target_compile_definitions(test_convergence_binaural_prefeed PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME convergence_binaural_prefeed COMMAND test_convergence_binaural_prefeed)
+
+# Phase 2.4 — binaural monitor stereo delay ring.
+add_executable(test_convergence_binaural_delay test_convergence_binaural_delay.cpp)
+target_link_libraries(test_convergence_binaural_delay PRIVATE spe_core)
+target_compile_definitions(test_convergence_binaural_delay PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME convergence_binaural_delay COMMAND test_convergence_binaural_delay)

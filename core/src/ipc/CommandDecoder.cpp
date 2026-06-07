@@ -502,6 +502,14 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadSysBinauralPrefeed p;
         p.cutoff_hz = (args.n_float > 0) ? getFloat(0) : 4200.f;
         cmd.payload = p;
+    } else if (addr == "/sys/binaural_delay") {
+        // Phase 2.4 — binaural monitor stereo delay-ring tap (ms). ,f ms. The
+        // engine reads it once per block; the tap is clamped engine-side to the
+        // ring. A missing arg defaults to 0 (no delay).
+        cmd.tag = CommandTag::SysBinauralDelay;
+        PayloadSysBinauralDelay p;
+        p.ms = (args.n_float > 0) ? getFloat(0) : 0.f;
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;

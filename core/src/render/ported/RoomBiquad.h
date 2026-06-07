@@ -51,6 +51,10 @@ constexpr float kBinauralEqDefaultQ[kBinauralEqBands] = {
 // the one-pole an effective passthrough (bypass).
 constexpr float kBinauralPrefeedLowPassHz = 4200.f;
 
+// Phase 2.4 — binaural monitor stereo delay-ring capacity in samples
+// (BinauralMonitorChain.cpp:132-154; ~1.36 s at 48 kHz). Tap = binauralDelayMs.
+constexpr int kBinauralDelayRingCap = 65536;
+
 // A single second-order IIR section, byte-faithful to juce::dsp::IIR::Filter<float>
 // with Coefficients<float>::make{Low,High}Pass. Coefficients are stored already
 // normalised by a0 (a0 == 1 for these forms): {b0, b1, b2, a1, a2}.
