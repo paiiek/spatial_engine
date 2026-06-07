@@ -76,7 +76,7 @@ enum class CommandTag : uint8_t {
     CueStop        = 0x3A, // /cue/stop            — freeze + cancel pending dwell
 
     // Noise generator (per-channel array verification)
-    NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink
+    NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink|sweep
     NoiseGain     = 0x41, // /noise/{ch}/gain ,f  dB
 
     // Transport
@@ -233,7 +233,7 @@ struct PayloadCueStop {};
 
 struct PayloadNoiseType {
     uint32_t channel = 0;
-    bool     pink    = false; // false = white, true = pink
+    uint8_t  mode    = 0; // 0 = white, 1 = pink (−3 dB/oct), 2 = log-sweep 20→20k
 };
 
 struct PayloadNoiseGain {

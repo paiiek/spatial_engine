@@ -75,7 +75,7 @@ SpatialEngine::SpatialEngine(int listen_port)
             case ipc::CommandTag::NoiseType:
                 if (auto* p = std::get_if<ipc::PayloadNoiseType>(&cmd.payload)) {
                     qc.noise_ch   = p->channel;
-                    qc.noise_pink = p->pink;
+                    qc.noise_mode = p->mode;
                 }
                 break;
             case ipc::CommandTag::NoiseGain:
@@ -1161,8 +1161,11 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 const int idx = layout_.channelToIndex(static_cast<int>(qc.noise_ch));
                 if (idx >= 0 && static_cast<size_t>(idx) < noise_chans_.size()) {
                     auto& nc = noise_chans_[static_cast<size_t>(idx)];
-                    if (qc.noise_pink && !nc.pink) nc.pink_filt.reset();  // fresh state on enable
-                    nc.pink = qc.noise_pink;
+                    if (qc.noise_mode != nc.mode) {  // fresh state on mode change
+                        if (qc.noise_mode == 1) nc.pink_filt.reset();
+                        if (qc.noise_mode == 2) nc.sweep_gen.reset();
+                    }
+                    nc.mode = qc.noise_mode;
                 }
                 break;
             }
@@ -1663,9 +1666,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 std::chrono::steady_clock::now() - _ts_decorr0).count() * 1e-3;
         }
 
-        // Per-channel noise generator (array verification): adds white/pink
-        // noise scaled by gain_lin to the speaker bus. Bypasses VBAP/reverb;
-        // intended for engineer to confirm physical wiring of each speaker.
+        // Per-channel noise generator (array verification): adds white/pink/
+        // sweep calibration signal scaled by gain_lin to the speaker bus.
+        // Bypasses VBAP/reverb; lets an engineer confirm each speaker's wiring.
         for (int spk = 0; spk < out_ch; ++spk) {
             if (spk >= static_cast<int>(noise_chans_.size())) break;
             auto& nc = noise_chans_[static_cast<size_t>(spk)];
@@ -1679,10 +1682,12 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 nc.rng ^= nc.rng >> 17;
                 nc.rng ^= nc.rng << 5;
                 const float white = static_cast<float>(static_cast<int32_t>(nc.rng)) * kNoiseScale;
-                // pink = canonical Kellet 7-state shaper (−3 dB/oct; deliberate
-                // deviation from the reference's gains — see dsp/PinkNoise.h);
-                // white = raw.
-                const float sample = nc.pink ? nc.pink_filt.processSample(white) : white;
+                // mode 0 = white, 1 = pink (canonical Kellet −3 dB/oct, see
+                // dsp/PinkNoise.h), 2 = log-sweep 20→20k (see dsp/LogSweep.h).
+                float sample;
+                if      (nc.mode == 1) sample = nc.pink_filt.processSample(white);
+                else if (nc.mode == 2) sample = nc.sweep_gen.processSample(sample_rate_);
+                else                   sample = white;
                 block.output_channels[spk][n] += sample * nc.gain_lin * transport_gain;
             }
         }

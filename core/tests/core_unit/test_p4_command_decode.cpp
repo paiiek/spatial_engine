@@ -145,13 +145,13 @@ int main() {
     {
         Command cmd;
         cmd.tag = CommandTag::NoiseType; cmd.seq = 100; cmd.id = 100;
-        PayloadNoiseType p; p.channel = 3; p.pink = false;
+        PayloadNoiseType p; p.channel = 3; p.mode = 0;
         cmd.payload = p;
         Command rt = roundtrip(dec, cmd);
         assert(rt.tag == CommandTag::NoiseType);
         auto& rp = std::get<PayloadNoiseType>(rt.payload);
         assert(rp.channel == 3);
-        assert(rp.pink == false);
+        assert(rp.mode == 0);
         (void)rp;
     }
 
@@ -159,13 +159,27 @@ int main() {
     {
         Command cmd;
         cmd.tag = CommandTag::NoiseType; cmd.seq = 101; cmd.id = 101;
-        PayloadNoiseType p; p.channel = 7; p.pink = true;
+        PayloadNoiseType p; p.channel = 7; p.mode = 1;
         cmd.payload = p;
         Command rt = roundtrip(dec, cmd);
         assert(rt.tag == CommandTag::NoiseType);
         auto& rp = std::get<PayloadNoiseType>(rt.payload);
         assert(rp.channel == 7);
-        assert(rp.pink == true);
+        assert(rp.mode == 1);
+        (void)rp;
+    }
+
+    // --- NoiseType (sweep) ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::NoiseType; cmd.seq = 102; cmd.id = 102;
+        PayloadNoiseType p; p.channel = 5; p.mode = 2;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::NoiseType);
+        auto& rp = std::get<PayloadNoiseType>(rt.payload);
+        assert(rp.channel == 5);
+        assert(rp.mode == 2);
         (void)rp;
     }
 

@@ -85,6 +85,12 @@ add_executable(test_convergence_pink_noise test_convergence_pink_noise.cpp)
 target_link_libraries(test_convergence_pink_noise PRIVATE spe_core)
 add_test(NAME convergence_pink_noise COMMAND test_convergence_pink_noise)
 
+# Dreamscape Convergence Phase 4.2b — log-sweep 20→20k calibration signal:
+# exponential instantaneous-frequency law + rising-frequency proof.
+add_executable(test_convergence_log_sweep test_convergence_log_sweep.cpp)
+target_link_libraries(test_convergence_log_sweep PRIVATE spe_core)
+add_test(NAME convergence_log_sweep COMMAND test_convergence_log_sweep)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)

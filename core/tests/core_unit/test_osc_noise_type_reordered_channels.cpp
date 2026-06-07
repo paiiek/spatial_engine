@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     // Send /noise/5/type ,s pink → vector idx 7 (channel_to_idx_[5]).
     spe::ipc::Command cmd;
     cmd.tag = spe::ipc::CommandTag::NoiseType;
-    spe::ipc::PayloadNoiseType p; p.channel = 5; p.pink = true;
+    spe::ipc::PayloadNoiseType p; p.channel = 5; p.mode = 1;  // pink
     cmd.payload = p;
     engine.dispatchCommand(cmd);
 
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     // Negative case: /noise/9/type (unmapped) → no state mutation.
     spe::ipc::Command cmd_bad;
     cmd_bad.tag = spe::ipc::CommandTag::NoiseType;
-    spe::ipc::PayloadNoiseType p_bad; p_bad.channel = 9; p_bad.pink = true;
+    spe::ipc::PayloadNoiseType p_bad; p_bad.channel = 9; p_bad.mode = 1;  // pink
     cmd_bad.payload = p_bad;
     engine.dispatchCommand(cmd_bad);
     drive_one_block(engine, 8);

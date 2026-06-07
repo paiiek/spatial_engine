@@ -6,6 +6,7 @@
 #include "core/Constants.h"
 #include "dsp/ChannelLimiter.h"
 #include "dsp/DelayLine.h"
+#include "dsp/LogSweep.h"
 #include "dsp/PerObjectChain.h"
 #include "dsp/PinkNoise.h"
 #include "geometry/SpeakerLayout.h"
@@ -381,9 +382,11 @@ public:
     float noiseGainLinAt(size_t idx) const noexcept {
         return (idx < noise_chans_.size()) ? noise_chans_[idx].gain_lin : -1.f;
     }
-    bool noisePinkAt(size_t idx) const noexcept {
-        return (idx < noise_chans_.size()) ? noise_chans_[idx].pink : false;
+    // noise mode: 0 = white, 1 = pink, 2 = log-sweep
+    uint8_t noiseModeAt(size_t idx) const noexcept {
+        return (idx < noise_chans_.size()) ? noise_chans_[idx].mode : 0;
     }
+    bool noisePinkAt(size_t idx) const noexcept { return noiseModeAt(idx) == 1; }
     size_t spkGainLinSize()    const noexcept { return spk_gain_lin_.size(); }
     size_t spkLimitersSize()   const noexcept { return spk_limiters_.size(); }
     size_t noiseChansSize()    const noexcept { return noise_chans_.size(); }
@@ -692,8 +695,9 @@ private:
     // Noise generator (per-output-channel array verification)
     struct NoiseChan {
         float    gain_lin   = 0.f;     // 0 = silent (default); set by /noise/{ch}/gain
-        bool     pink       = false;   // false = white, true = pink (−3 dB/oct)
+        uint8_t  mode       = 0;       // 0 = white, 1 = pink (−3 dB/oct), 2 = log-sweep
         spe::dsp::PinkKellet pink_filt;  // canonical Kellet 7-state pink shaper (see dsp/PinkNoise.h)
+        spe::dsp::LogSweep   sweep_gen;  // 20→20k 1 s log sweep (see dsp/LogSweep.h)
         uint32_t rng        = 0xCAFEBABEu;
     };
     std::vector<NoiseChan> noise_chans_;

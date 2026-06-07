@@ -776,7 +776,9 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             if (subpath == "type" && args.n_str > 0) {
                 PayloadNoiseType p;
                 p.channel = chu;
-                p.pink    = (args.strings[0] == "pink");
+                p.mode    = (args.strings[0] == "pink")  ? 1
+                          : (args.strings[0] == "sweep") ? 2
+                          : 0;  // default/unknown → white
                 cmd.tag     = CommandTag::NoiseType;
                 cmd.payload = p;
             } else if (subpath == "gain") {
@@ -1185,7 +1187,7 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
     case CommandTag::NoiseType: {
         auto& p = std::get<PayloadNoiseType>(cmd.payload);
         addr = "/noise/" + std::to_string(p.channel) + "/type";
-        const char* nm = p.pink ? "pink" : "white";
+        const char* nm = (p.mode == 1) ? "pink" : (p.mode == 2) ? "sweep" : "white";
         tags += 's';
         for (const char* q = nm; *q; ++q) args_buf.push_back(static_cast<uint8_t>(*q));
         args_buf.push_back(0);
