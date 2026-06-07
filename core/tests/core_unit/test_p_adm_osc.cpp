@@ -108,6 +108,22 @@ int main() {
         std::puts("  PASS 4: /adm/obj/2/gain");
     }
 
+    // 4b. Phase 3.3 — ADM gain clamps to [0, 8]: 10.0 → 8.0, -1.0 → 0.0.
+    {
+        std::vector<uint8_t> hi; appendF32(hi, 10.0f);
+        auto pktHi = makeOsc("/adm/obj/2/gain", "f", hi);
+        Command cHi = dec.decode(std::span<const uint8_t>(pktHi));
+        assert(cHi.tag == CommandTag::ObjGain);
+        assert(std::get<PayloadObjGain>(cHi.payload).gain == 8.0f);
+
+        std::vector<uint8_t> lo; appendF32(lo, -1.0f);
+        auto pktLo = makeOsc("/adm/obj/2/gain", "f", lo);
+        Command cLo = dec.decode(std::span<const uint8_t>(pktLo));
+        assert(cLo.tag == CommandTag::ObjGain);
+        assert(std::get<PayloadObjGain>(cLo.payload).gain == 0.0f);
+        std::puts("  PASS 4b: /adm/obj/2/gain clamp [0,8]");
+    }
+
     // 5. /adm/obj/2/mute ,i 1 → ObjMute, muted=true
     {
         std::vector<uint8_t> args;

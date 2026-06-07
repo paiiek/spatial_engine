@@ -239,7 +239,13 @@ static void decodeAdmAddress(const std::string& addr, const OscArgs& args,
         cmd.tag = CommandTag::ObjGain;
         PayloadObjGain p;
         p.obj_id = oid;
-        p.gain   = args.n_float > 0 ? args.floats[0] : 0.f;
+        // Phase 3.3 — ADM object gain is LINEAR, clamped to [0, 8] (max +18 dB),
+        // matching the reference (AdmOscProtocol.cpp:265 jmin(g, 8.f)); the lower
+        // bound rejects nonsensical negative (phase-inverting) gains.
+        {
+            const float g = args.n_float > 0 ? args.floats[0] : 0.f;
+            p.gain = g < 0.f ? 0.f : (g > 8.f ? 8.f : g);
+        }
         cmd.payload = p;
     } else if (subpath == "mute") {
         cmd.tag = CommandTag::ObjMute;
