@@ -521,31 +521,47 @@ std::vector<float> AlgorithmAnalyticReference::vbap_gain(
 // DBAP (Lossius 2009)
 // g_i = (1/d_i^a) / sqrt(Σ 1/d_i^(2a))
 // ---------------------------------------------------------------------------
+int AlgorithmAnalyticReference::dbap_gain_into(
+    const geometry::SpeakerLayout& layout,
+    float src_x, float src_y, float src_z,
+    float rolloff_a,
+    float* out, int out_capacity) noexcept
+{
+    const int N = static_cast<int>(layout.speakers.size());
+    if (N == 0 || N > out_capacity) return 0;
+
+    // Fold the per-speaker weights w_i = d_i^-a into `out`, accumulating
+    // Σ w_i^2, then normalise `out` in place. Same math and iteration order as
+    // the legacy dbap_gain() — bit-identical — but with no heap temporaries.
+    float sum_sq = 0.f;
+    for (int i = 0; i < N; ++i) {
+        const float dx = layout.speakers[static_cast<size_t>(i)].x - src_x;
+        const float dy = layout.speakers[static_cast<size_t>(i)].y - src_y;
+        const float dz = layout.speakers[static_cast<size_t>(i)].z - src_z;
+        float d  = std::sqrt(dx*dx + dy*dy + dz*dz);
+        d = std::max(d, 1e-4f); // avoid div-by-zero
+        const float wi = std::pow(d, -rolloff_a);
+        out[i]  = wi;
+        sum_sq += wi * wi;
+    }
+    float denom = std::sqrt(sum_sq);
+    if (denom < 1e-10f) denom = 1.f;
+    for (int i = 0; i < N; ++i)
+        out[i] /= denom;
+    return N;
+}
+
 std::vector<float> AlgorithmAnalyticReference::dbap_gain(
     const geometry::SpeakerLayout& layout,
     float src_x, float src_y, float src_z,
     float rolloff_a)
 {
     const int N = static_cast<int>(layout.speakers.size());
-    std::vector<float> gains(N, 0.f);
+    std::vector<float> gains(static_cast<size_t>(N), 0.f);
     if (N == 0) return gains;
-
-    std::vector<float> w(N);
-    float sum_sq = 0.f;
-    for (int i = 0; i < N; ++i) {
-        float dx = layout.speakers[i].x - src_x;
-        float dy = layout.speakers[i].y - src_y;
-        float dz = layout.speakers[i].z - src_z;
-        float d  = std::sqrt(dx*dx + dy*dy + dz*dz);
-        d = std::max(d, 1e-4f); // avoid div-by-zero
-        float wi = std::pow(d, -rolloff_a);
-        w[i]     = wi;
-        sum_sq  += wi * wi;
-    }
-    float denom = std::sqrt(sum_sq);
-    if (denom < 1e-10f) denom = 1.f;
-    for (int i = 0; i < N; ++i)
-        gains[i] = w[i] / denom;
+    // Non-RT/test wrapper around the allocation-free overload (mirrors how
+    // vbap_gain() wraps vbap_gain_into()).
+    dbap_gain_into(layout, src_x, src_y, src_z, rolloff_a, gains.data(), N);
     return gains;
 }
 

@@ -970,3 +970,11 @@ add_test(NAME convergence_denormal_guard COMMAND test_convergence_denormal_guard
 add_executable(test_convergence_render_compaction test_convergence_render_compaction.cpp)
 target_link_libraries(test_convergence_render_compaction PRIVATE spe_core)
 add_test(NAME convergence_render_compaction COMMAND test_convergence_render_compaction)
+
+# Dreamscape Convergence v1.0 — Phase 1.3: DBAP audio-thread no-alloc.
+# Drives live DBAP objects (width==0 + width>0) through audioBlock and asserts
+# zero heap allocations via the RT_ASSERTS sentinel (dbap_gain_into, not the
+# std::vector-allocating dbap_gain).
+add_executable(test_convergence_dbap_no_alloc test_convergence_dbap_no_alloc.cpp)
+target_link_libraries(test_convergence_dbap_no_alloc PRIVATE spe_core)
+add_test(NAME convergence_dbap_no_alloc COMMAND test_convergence_dbap_no_alloc)

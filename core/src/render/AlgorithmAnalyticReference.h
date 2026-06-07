@@ -60,6 +60,19 @@ public:
         float src_x, float src_y, float src_z,
         float rolloff_a = 2.0f);
 
+    // RT-SAFE overload (v1.0 Phase 1.3): writes DBAP gains into the caller's
+    // fixed buffer `out` (capacity >= num_speakers). Zero allocation — the
+    // per-speaker weights are folded into `out` itself, then normalised in
+    // place, so no std::vector temporaries (unlike dbap_gain() above, which
+    // allocated two vectors per call on the audio thread). Returns N on
+    // success, 0 if the layout is empty or out_capacity < N. Mirrors
+    // vbap_gain_into. Bit-identical results to dbap_gain().
+    static int dbap_gain_into(
+        const geometry::SpeakerLayout& layout,
+        float src_x, float src_y, float src_z,
+        float rolloff_a,
+        float* out, int out_capacity) noexcept;
+
 private:
     // Azimuth of a speaker in radians (atan2(x, z) in our frame).
     static float speaker_az(const geometry::Speaker& s) noexcept {

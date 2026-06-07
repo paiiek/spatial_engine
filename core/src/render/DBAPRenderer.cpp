@@ -95,10 +95,12 @@ void DBAPRenderer::dbapForPosition(float az_rad, float el_rad, float dist_m,
     const float sy   = d * std::sin(el_rad);
     const float sz   = d * std::cos(az_rad) * std::cos(el_rad);
 
-    auto gains = AlgorithmAnalyticReference::dbap_gain(layout_, sx, sy, sz, rolloff_a_);
-    const int S = num_speakers_;
-    for (int s = 0; s < S; ++s)
-        out_gains[s] = (s < static_cast<int>(gains.size())) ? gains[s] : 0.f;
+    // RT-safe (Phase 1.3): write straight into the caller's fixed buffer
+    // (final_gains/g_v are float[MAX_SPEAKERS]); no per-block std::vector alloc.
+    const int n = AlgorithmAnalyticReference::dbap_gain_into(
+        layout_, sx, sy, sz, rolloff_a_, out_gains, spe::MAX_SPEAKERS);
+    for (int s = n; s < num_speakers_; ++s)
+        out_gains[s] = 0.f;  // capacity/empty fallback (n==num_speakers_ normally)
 }
 
 } // namespace spe::render
