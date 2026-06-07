@@ -47,6 +47,13 @@ add_executable(test_convergence_coords test_convergence_coords.cpp)
 target_link_libraries(test_convergence_coords PRIVATE spe_core)
 add_test(NAME convergence_coords COMMAND test_convergence_coords)
 
+# Dreamscape Convergence Phase 2 increment 2.6a — binaural head-rotation core
+# (rotate_engine_dir_by_head): yaw-only is additive (az'=az+yaw), P0 L/R lock
+# (yaw+30 front -> az'=+30 RIGHT), zero=identity, pitch/roll finite & in-range.
+add_executable(test_convergence_head_rotate test_convergence_head_rotate.cpp)
+target_link_libraries(test_convergence_head_rotate PRIVATE spe_core)
+add_test(NAME convergence_head_rotate COMMAND test_convergence_head_rotate)
+
 # Dreamscape Convergence Phase 1 PoC — ported VAP kernel end-to-end through the
 # coordinate adapter (equal-power, L/R invariant, volumetric-vs-directional).
 add_executable(test_convergence_vap_port test_convergence_vap_port.cpp)

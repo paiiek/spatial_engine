@@ -112,4 +112,53 @@ inline std::array<float, 3> pipeline_dir_to_ported(float az_rad, float el_rad) {
     return {ce * std::sin(az_rad), ce * std::cos(az_rad), std::sin(el_rad)};
 }
 
+// ── Phase 2 (Binaural / Headtracking): head-rotation of an engine direction ──
+// Rotate an engine-frame source direction (az, el) by the listener's head
+// orientation (yaw, pitch, roll in radians) and return the head-relative
+// (az', el'). Applied at the binaural lookup boundary (before setDirection), so
+// turning the head re-points every source against the HRTF set.
+//
+// Engine Cartesian frame: x = right, y = up, z = front; az = atan2(x, z) so
+// RIGHT = +az (same convention as the rest of this file). Direction vector:
+//   d = (cosEl*sinAz, sinEl, cosEl*cosAz).
+// Composition (Tait-Bryan): d' = Ry(yaw) · Rx(pitch) · Rz(roll) · d, then
+//   az' = atan2(d'.x, d'.z), el' = asin(clamp(d'.y, -1, 1)).
+//
+// ★ L/R SIGN LOCK (P0 — same bug class as the 2026-03-01 stereo_pan and the
+// Phase 3.1 −az inversions): yaw uses the standard right-handed Ry so that a
+// yaw-only rotation reduces to the ADDITIVE form  az' = az + yaw  (el' = el).
+// Net behaviour: headYaw +30° on a front source (az=0) → az' = +30° → R-louder
+// (matches stereo_pan_from_pipeline_az(+30°) > 0 above). If a golden ever fails,
+// flip ONLY the yaw sign here (the single authority) — NEVER touch downstream az.
+inline std::pair<float, float> rotate_engine_dir_by_head(float az_rad, float el_rad,
+                                                          float yaw_rad, float pitch_rad,
+                                                          float roll_rad) {
+    const float ce = std::cos(el_rad);
+    const float x = ce * std::sin(az_rad);   // right
+    const float y = std::sin(el_rad);        // up
+    const float z = ce * std::cos(az_rad);   // front
+
+    // Rz(roll) about +Z (front)
+    const float cr = std::cos(roll_rad), sr = std::sin(roll_rad);
+    const float x1 = x * cr - y * sr;
+    const float y1 = x * sr + y * cr;
+    const float z1 = z;
+
+    // Rx(pitch) about +X (right)
+    const float cp = std::cos(pitch_rad), sp = std::sin(pitch_rad);
+    const float x2 = x1;
+    const float y2 = y1 * cp - z1 * sp;
+    const float z2 = y1 * sp + z1 * cp;
+
+    // Ry(yaw) about +Y (up) — standard RH so az' = az + yaw (LOCKED).
+    const float cy = std::cos(yaw_rad), sy = std::sin(yaw_rad);
+    const float x3 = x2 * cy + z2 * sy;
+    const float y3 = y2;
+    const float z3 = -x2 * sy + z2 * cy;
+
+    const float az_out = std::atan2(x3, z3);
+    const float el_out = std::asin(std::fmax(-1.0f, std::fmin(1.0f, y3)));
+    return {az_out, el_out};
+}
+
 }  // namespace spe::coords
