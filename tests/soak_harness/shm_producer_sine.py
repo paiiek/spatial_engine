@@ -36,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 import time
@@ -61,17 +62,6 @@ def _discover_ipc_sink():
               file=sys.stderr)
         return None
     return IpcRingSink
-
-
-def _build_ramp_block(numpy, start_frame: int, block_size: int, channels: int):
-    """(block_size, channels) float32 block where row f == float(start_frame + f).
-
-    Identical across channels so the wire reader can assert at any single slot.
-    """
-    frames = numpy.arange(start_frame, start_frame + block_size, dtype=numpy.float64)
-    block = numpy.empty((block_size, channels), dtype=numpy.float32)
-    block[:] = frames.astype(numpy.float32)[:, None]
-    return block
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -103,12 +93,26 @@ def main(argv: list[str] | None = None) -> int:
 
     block_seconds = args.block_size / float(args.rate)
     n_blocks = max(1, int(round(args.duration / block_seconds)))
+
+    # ROOT-CAUSE robustness (REV6 cold-verify finding): a Python cyclic-GC pause
+    # mid-stream stalls this loop past the consumer's ring cushion → a spurious
+    # consumer underrun. Disable the cyclic collector for the streaming window
+    # (re-enabled in finally) and reuse ONE preallocated ramp buffer so the loop
+    # does no per-block allocation that could trigger GC. write() copies the
+    # block into the ring (verified ipc_sink.py: `ring[...] = col[...]`), so
+    # reusing the buffer is safe. Refcount frees the tiny per-block temps with no
+    # collector pause.
+    ramp_block = np.empty((args.block_size, args.channels), dtype=np.float32)
+    base_idx = np.arange(args.block_size, dtype=np.float64)  # 0..block-1, reused
+    gc.disable()
     start = time.monotonic()
     try:
         frame = 0
         for b in range(n_blocks):
-            block = _build_ramp_block(np, frame, args.block_size, args.channels)
-            sink.write(block)
+            # ramp value = global frame index, identical across channels (the
+            # assertion-3c witness; float32 exact for integer frames < 2**24).
+            ramp_block[:] = (base_idx + frame).astype(np.float32)[:, None]
+            sink.write(ramp_block)
             frame += args.block_size
             # Pace to wall-clock block cadence (real-time streaming, not a burst).
             target = start + (b + 1) * block_seconds
@@ -116,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             if slack > 0:
                 time.sleep(slack)
     finally:
+        gc.enable()
         sink.close()  # DRAINING(drain_dwell_s) → CLOSED → unlink
     return EXIT_OK
 

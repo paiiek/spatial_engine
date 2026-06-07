@@ -192,7 +192,7 @@ def _run_soak(duration_s: float, full: bool) -> dict:
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline:
             if producer.poll() is not None:
-                out, err = producer.communicate()
+                _, err = producer.communicate()
                 if producer.returncode == 3:
                     pytest.skip("producer reported adm_player import failure")
                 raise AssertionError(
@@ -208,7 +208,21 @@ def _run_soak(duration_s: float, full: bool) -> dict:
                 mm.close(); mm = None
                 os.close(fd); fd = None
             time.sleep(0.01)
-        assert mm is not None, "readiness gate timed out (no ring / prebuffer)"
+        if mm is None:
+            # Richer diagnostic on timeout: drain the producer's stderr tail so a
+            # slow/hung producer (cold numpy import on a loaded runner, etc.) is
+            # triageable rather than a bare "timed out".
+            tail = ""
+            if producer.poll() is None:
+                producer.terminate()
+            try:
+                _, err = producer.communicate(timeout=3)
+                tail = err.decode(errors="replace")[-400:]
+            except Exception:  # noqa: BLE001
+                pass
+            raise AssertionError(
+                f"readiness gate timed out (no ring / prebuffer >= {prebuffer_frames} "
+                f"frames in 8 s). producer stderr tail: {tail!r}")
         cap = _read_u32(mm, ipc.OFF_CAPACITY_FRAMES)
 
         # ── spawn engine; handshake from the listening socket ─────────────
