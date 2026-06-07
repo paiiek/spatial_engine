@@ -73,6 +73,16 @@ struct QueuedCmd {
     float    decorr_ap = 0.62f;
     int32_t  decorr_stages = 4;
     uint32_t decorr_seed = 0;
+    // Phase 2.5 — binaural monitor 5-band peak EQ (SysBinauralEq). bin_eq_op
+    // mirrors ipc::PayloadSysBinauralEq::Op; Enable toggles the master flag,
+    // Band recoeffs one band on the audio-thread drain (applyBinauralEq). POD —
+    // no string in the hot path.
+    uint8_t  bin_eq_op      = 0;     // PayloadSysBinauralEq::Op
+    bool     bin_eq_enable  = false;
+    int32_t  bin_eq_band    = 0;
+    float    bin_eq_freq_hz = 1000.f;
+    float    bin_eq_gain_db = 0.f;
+    float    bin_eq_q       = 1.f;
 };
 
 // SPSC ring buffer. T defaults to QueuedCmd so the existing audio-path

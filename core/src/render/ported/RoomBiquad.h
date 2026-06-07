@@ -34,6 +34,16 @@ constexpr float kRoomEarlyClusterLpfHz = 10000.f;
 constexpr float kRoomLateHpfHz         = 45.f;
 constexpr float kRoomLateLpfHz         = 16000.f;
 
+// Phase 2.5 — binaural monitor 5-band peaking EQ on the final L/R bus
+// (BinauralMonitorChain.cpp:156-202). Band count + default freq/Q mirror the
+// reference contract (SpatialSessionState.h:559-561); default gains are all
+// 0 dB (a 0 dB peak biquad is a unity passthrough, so the default EQ is flat).
+constexpr int   kBinauralEqBands = 5;
+constexpr float kBinauralEqDefaultFreqHz[kBinauralEqBands] = {
+    120.f, 400.f, 1250.f, 4000.f, 12000.f };
+constexpr float kBinauralEqDefaultQ[kBinauralEqBands] = {
+    1.f, 1.f, 1.f, 1.f, 1.f };
+
 // A single second-order IIR section, byte-faithful to juce::dsp::IIR::Filter<float>
 // with Coefficients<float>::make{Low,High}Pass. Coefficients are stored already
 // normalised by a0 (a0 == 1 for these forms): {b0, b1, b2, a1, a2}.
@@ -43,6 +53,13 @@ public:
     void setLowPass(double sampleRate, float frequency, float q = kRoomEqDefaultQ) noexcept;
     // Configure as a high-pass (JUCE makeHighPass, juce_IIRFilter.cpp:101-117).
     void setHighPass(double sampleRate, float frequency, float q = kRoomEqDefaultQ) noexcept;
+    // Configure as an RBJ peaking (bell) EQ, byte-faithful to
+    // juce::dsp::IIR::Coefficients<float>::makePeakFilter (the form the binaural
+    // monitor chain uses, BinauralMonitorChain.cpp:178). `gainDb` is the band's
+    // peak gain in decibels — 0 dB yields b==a (a true unity passthrough), so a
+    // flat-gain band is a no-op. Frequency is jmax'd to 2 Hz exactly as JUCE
+    // does; callers clamp freq/gainDb/Q to sane ranges (the engine drain does).
+    void setPeak(double sampleRate, float frequency, float q, float gainDb) noexcept;
 
     // Clear the filter state (keeps coefficients). A default-constructed biquad
     // is a unity passthrough (b0=1, rest 0) until set{Low,High}Pass configures it.

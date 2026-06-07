@@ -472,6 +472,28 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         p.pitch_deg = getFloat(1);
         p.roll_deg  = getFloat(2);
         cmd.payload = p;
+    } else if (addr == "/sys/binaural_eq/enable") {
+        // Phase 2.5 — binaural monitor 5-band peak EQ master enable. ,i {0|1}.
+        // Single leading int (not ,ii), so no seq/id offset; the engine reads
+        // the flag on the audio-thread drain. Clamping happens engine-side.
+        cmd.tag = CommandTag::SysBinauralEq;
+        PayloadSysBinauralEq p;
+        p.op     = PayloadSysBinauralEq::Op::Enable;
+        p.enable = (getInt(0) != 0);
+        cmd.payload = p;
+    } else if (addr == "/sys/binaural_eq/band") {
+        // Phase 2.5 — set one EQ band. ,ifff band freq_hz gain_db [q]. Single
+        // leading int (band) then floats; a missing Q defaults to 1. The audio-
+        // thread drain (applyBinauralEq) clamps + recoeffs the band's L/R RBJ
+        // biquads next to the DSP that consumes them.
+        cmd.tag = CommandTag::SysBinauralEq;
+        PayloadSysBinauralEq p;
+        p.op      = PayloadSysBinauralEq::Op::Band;
+        p.band    = getInt(0);
+        p.freq_hz = getFloat(0);
+        p.gain_db = getFloat(1);
+        p.q       = (args.n_float > 2) ? getFloat(2) : 1.f;
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;

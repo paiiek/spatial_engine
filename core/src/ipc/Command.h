@@ -52,6 +52,7 @@ enum class CommandTag : uint8_t {
     SysBinauralResetDemote = 0x1A, // /sys/binaural_reset_demote ,i {0|1} — v0.7 D-S1 user hatch
     SysBinauralSofaSelect  = 0x1B, // /sys/binaural_sofa_select ,s "<name>" — B-M3 catalog name → live SOFA swap
     SysHeadYpr             = 0x1C, // /ypr (alias /sys/ypr) ,fff yaw_deg pitch_deg roll_deg — binaural head tracking (Phase 2.6b)
+    SysBinauralEq          = 0x1D, // /sys/binaural_eq/{enable,band} — binaural monitor 5-band peak EQ (Phase 2.5)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -441,6 +442,22 @@ struct PayloadSysHeadYpr {
     float roll_deg  = 0.f;
 };
 
+// Phase 2.5 — binaural monitor 5-band peak EQ on the final L/R bus
+// (BinauralMonitorChain.cpp:156-202). One tag + op selector (mirrors RoomCtl):
+//   /sys/binaural_eq/enable ,i {0|1}        Enable  (active)
+//   /sys/binaural_eq/band   ,ifff band f g [q]  Band  (one band's freq/gainDb/Q)
+// POD/float-only so it rides the normal cmd_fifo_ → the audio-thread drain
+// (applyBinauralEq) recoeffs that band's L/R RBJ biquads next to the DSP.
+struct PayloadSysBinauralEq {
+    enum class Op : uint8_t { Enable = 0, Band = 1 };
+    Op    op      = Op::Enable;
+    bool  enable  = false;
+    int   band    = 0;      // 0..kBinauralEqBands-1 (Band op)
+    float freq_hz = 1000.f; // band center (Band op)
+    float gain_db = 0.f;    // band peak gain dB (Band op)
+    float q       = 1.f;    // band Q (Band op)
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -493,6 +510,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralResetDemote,
     PayloadSysBinauralSofaSelect,
     PayloadSysHeadYpr,
+    PayloadSysBinauralEq,
     PayloadUnknown
 >;
 

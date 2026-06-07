@@ -1003,3 +1003,14 @@ target_link_libraries(test_convergence_head_ypr_golden PRIVATE spe_core)
 target_compile_definitions(test_convergence_head_ypr_golden PRIVATE
     SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
 add_test(NAME convergence_head_ypr_golden COMMAND test_convergence_head_ypr_golden)
+
+# Phase 2.5 — binaural monitor 5-band peak EQ.
+add_executable(test_osc_sys_binaural_eq_roundtrip test_osc_sys_binaural_eq_roundtrip.cpp)
+target_link_libraries(test_osc_sys_binaural_eq_roundtrip PRIVATE spe_core)
+add_test(NAME osc_sys_binaural_eq_roundtrip COMMAND test_osc_sys_binaural_eq_roundtrip)
+
+add_executable(test_convergence_binaural_eq test_convergence_binaural_eq.cpp)
+target_link_libraries(test_convergence_binaural_eq PRIVATE spe_core)
+target_compile_definitions(test_convergence_binaural_eq PRIVATE
+    SPE_FIXTURES_DIR="${SPE_FIXTURES_DIR}")
+add_test(NAME convergence_binaural_eq COMMAND test_convergence_binaural_eq)

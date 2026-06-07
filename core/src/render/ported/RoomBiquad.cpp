@@ -57,4 +57,39 @@ void RoomBiquad::setHighPass(double sampleRate, float frequency, float q) noexce
     a2_ = c1 * (1.f - invQ * n + nSquared);
 }
 
+void RoomBiquad::setPeak(double sampleRate, float frequency, float q, float gainDb) noexcept {
+    // juce::dsp::IIR::Coefficients<float>::makePeakFilter (RBJ peaking EQ). All
+    // float arithmetic, matching the reference Coefficients<float> instantiation,
+    // so the realised coefficients are bit-identical to the JUCE chain.
+    //
+    // The reference passes gainFactor = juce::Decibels::decibelsToGain(gainDb)
+    // (juce_Decibels.h): linear = 10^(dB/20) for dB > -100, else 0. We fold that
+    // conversion in here so the caller works in dB (the SpatialSessionState
+    // contract field is binauralEqGainDb). A 0 dB band gives gainFactor = 1 →
+    // A = 1 → alphaTimesA == alphaOverA → b == a → unity passthrough.
+    const float gainFactor = (gainDb > -100.f)
+                                 ? std::pow(10.f, gainDb * 0.05f)
+                                 : 0.f;
+    // A floor on A keeps alpha/A finite for pathological deep cuts; in-range
+    // gains (the engine clamps to ±24 dB) never reach it, so byte-faithfulness
+    // is preserved where it matters.
+    const float A = std::max(1.0e-6f, std::sqrt(gainFactor));
+
+    const float omega = (2.f * kPiF * std::max(frequency, 2.f))
+                        / static_cast<float>(sampleRate);
+    const float alpha = std::sin(omega) / (q * 2.f);
+    const float c2    = -2.f * std::cos(omega);
+    const float alphaTimesA = alpha * A;
+    const float alphaOverA  = alpha / A;
+
+    // JUCE Coefficients ctor stores {b0,b1,b2,a1,a2} normalised by a0.
+    //   (b0,b1,b2,a0,a1,a2) = (1+αA, c2, 1-αA, 1+α/A, c2, 1-α/A)
+    const float a0inv = 1.f / (1.f + alphaOverA);
+    b0_ = (1.f + alphaTimesA) * a0inv;
+    b1_ = c2 * a0inv;
+    b2_ = (1.f - alphaTimesA) * a0inv;
+    a1_ = c2 * a0inv;
+    a2_ = (1.f - alphaOverA) * a0inv;
+}
+
 } // namespace iae

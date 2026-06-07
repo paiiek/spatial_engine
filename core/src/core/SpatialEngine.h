@@ -67,6 +67,11 @@ public:
         head_pitch_deg_.store(pitch_deg, std::memory_order_relaxed);
         head_roll_deg_.store(roll_deg, std::memory_order_relaxed);
     }
+    // Phase 2.5 — binaural monitor EQ master enable. Atomic store, so this is
+    // safe from the control thread (mirrors the /sys/binaural_eq/enable path).
+    void setBinauralEqEnabled(bool on) {
+        binaural_eq_active_.store(on, std::memory_order_relaxed);
+    }
 
     // v0.5 P4: binaural mode injection. Same control-thread contract as the
     // other setters above. Forwards to BinauralMonitor::setRequestedMode().
@@ -389,6 +394,13 @@ public:
     // early/cluster EQ; its own corners. Not RT-safe; test only.
     const iae::RoomBiquad& lateEqHpForTest() const noexcept { return late_eq_hp_; }
     const iae::RoomBiquad& lateEqLpForTest() const noexcept { return late_eq_lp_; }
+    // Phase 2.5 — binaural monitor EQ introspection (test only, not RT-safe).
+    bool binauralEqActiveForTest() const noexcept {
+        return binaural_eq_active_.load(std::memory_order_relaxed);
+    }
+    const iae::RoomBiquad& binauralEqLForTest(size_t b) const noexcept { return bin_eq_L_[b]; }
+    const iae::RoomBiquad& binauralEqRForTest(size_t b) const noexcept { return bin_eq_R_[b]; }
+    float binauralEqGainDbForTest(size_t b) const noexcept { return bin_eq_gain_db_[b]; }
     // ⑦ test-only — decorrelation param introspection (not RT-safe).
     bool          decorrEnabledForTest() const noexcept { return decorr_enabled_; }
     float         decorrMixForTest()     const noexcept { return decorr_mix01_; }
@@ -565,6 +577,14 @@ private:
     // lockstep (reference contract). All values are clamped here, next to the
     // DSP that consumes them. Enable aliases /reverb/select "room" (1) / fdn (0).
     void applyRoomCtl(const util::QueuedCmd& qc) noexcept;
+
+    // Phase 2.5 — apply one drained SysBinauralEq command. Runs on the AUDIO
+    // thread inside the FIFO drain (same thread as the binaural post-chain), so
+    // the RBJ peak recoeffs (RoomBiquad::setPeak, pure float math) are race-free
+    // and allocation-free. Enable toggles the master flag; Band clamps + recoeffs
+    // one band's L/R biquads (shared coeffs, independent state). Coeff-only — no
+    // state reset, so live tuning never ticks the bus.
+    void applyBinauralEq(const util::QueuedCmd& qc) noexcept;
 
     // ⑥e-2 Cluster (mid-field) diffusion — a shared mono bus fed by every active
     // object's predelayed+EQ'd send (xdel*cSend), run through an absorption EQ
@@ -752,6 +772,19 @@ private:
     std::atomic<float>         head_yaw_deg_{0.f};
     std::atomic<float>         head_pitch_deg_{0.f};
     std::atomic<float>         head_roll_deg_{0.f};
+    // Phase 2.5 — binaural monitor 5-band peak EQ on the final L/R bus
+    // (BinauralMonitorChain.cpp:156-202). The master flag is an atomic (read
+    // once/block by the audio path; settable from the control thread). The
+    // per-band coeffs (bin_eq_L_/R_) and param mirrors are touched ONLY on the
+    // audio thread (initialize() + the FIFO drain applyBinauralEq + the per-
+    // sample post-chain), so they need no atomics. L/R share coeffs but keep
+    // independent biquad state. Default = off + flat (0 dB) = unity passthrough.
+    std::atomic<bool>          binaural_eq_active_{false};
+    std::array<iae::RoomBiquad, iae::kBinauralEqBands> bin_eq_L_{};
+    std::array<iae::RoomBiquad, iae::kBinauralEqBands> bin_eq_R_{};
+    std::array<float, iae::kBinauralEqBands>           bin_eq_freq_{};
+    std::array<float, iae::kBinauralEqBands>           bin_eq_gain_db_{};
+    std::array<float, iae::kBinauralEqBands>           bin_eq_q_{};
     // B-M3 — HRTF catalog (loaded at startup / prepareToPlay, control-thread
     // only). Used by the SysBinauralSofaSelect OSC handler to resolve a catalog
     // name → speh_path before setting the pending flag below.

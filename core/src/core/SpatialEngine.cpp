@@ -165,6 +165,18 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.decorr_seed      = p->seed;
                 }
                 break;
+            case ipc::CommandTag::SysBinauralEq:
+                // Phase 2.5 — marshal the binaural EQ op into the POD FIFO slot;
+                // the audio-thread drain (applyBinauralEq) clamps + recoeffs.
+                if (auto* p = std::get_if<ipc::PayloadSysBinauralEq>(&cmd.payload)) {
+                    qc.bin_eq_op      = static_cast<uint8_t>(p->op);
+                    qc.bin_eq_enable  = p->enable;
+                    qc.bin_eq_band    = p->band;
+                    qc.bin_eq_freq_hz = p->freq_hz;
+                    qc.bin_eq_gain_db = p->gain_db;
+                    qc.bin_eq_q       = p->q;
+                }
+                break;
             case ipc::CommandTag::OutputGain:
                 if (auto* p = std::get_if<ipc::PayloadOutputGain>(&cmd.payload)) {
                     qc.output_ch       = p->channel;
@@ -636,6 +648,22 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     binaural_lim_L_.setThreshold(std::pow(10.f, -1.f / 20.f));
     binaural_lim_R_.setThreshold(std::pow(10.f, -1.f / 20.f));
 
+    // Phase 2.5 — binaural monitor 5-band peak EQ. Initialise each band to its
+    // reference default freq/Q with 0 dB gain (a 0 dB peak biquad is a unity
+    // passthrough), so the EQ is flat until /sys/binaural_eq tunes it. Reset the
+    // L/R state for a clean start. Master flag defaults off (reference
+    // binauralMonitorEqActive=false); a re-prepare leaves the current flag.
+    for (int b = 0; b < iae::kBinauralEqBands; ++b) {
+        const size_t bi = static_cast<size_t>(b);
+        bin_eq_freq_[bi]    = iae::kBinauralEqDefaultFreqHz[bi];
+        bin_eq_gain_db_[bi] = 0.f;
+        bin_eq_q_[bi]       = iae::kBinauralEqDefaultQ[bi];
+        bin_eq_L_[bi].setPeak(sample_rate, bin_eq_freq_[bi], bin_eq_q_[bi], 0.f);
+        bin_eq_R_[bi].setPeak(sample_rate, bin_eq_freq_[bi], bin_eq_q_[bi], 0.f);
+        bin_eq_L_[bi].reset();
+        bin_eq_R_[bi].reset();
+    }
+
     // Wire dry_ptrs_ to scratch buffers
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         dry_ptrs_[static_cast<size_t>(i)] = dry_scratch_[static_cast<size_t>(i)].data();
@@ -992,6 +1020,39 @@ void SpatialEngine::applyDecorrCtl(const util::QueuedCmd& qc) noexcept {
     }
 }
 
+// Phase 2.5 — apply one drained SysBinauralEq command (audio thread, inside the
+// FIFO drain). Enable toggles the master flag; Band clamps freq/gainDb/Q and
+// recoeffs that band's L/R RBJ biquads in lockstep (shared coeffs, independent
+// state). RT-safe: pure float math (RoomBiquad::setPeak), no allocation, no
+// state reset (coeff-only = glitch-free live tuning). The param mirrors feed
+// introspection (binauralEqGainDbForTest).
+void SpatialEngine::applyBinauralEq(const util::QueuedCmd& qc) noexcept {
+    using Op = ipc::PayloadSysBinauralEq::Op;
+    switch (static_cast<Op>(qc.bin_eq_op)) {
+    case Op::Enable:
+        binaural_eq_active_.store(qc.bin_eq_enable, std::memory_order_relaxed);
+        break;
+    case Op::Band: {
+        const int b = qc.bin_eq_band;
+        if (b < 0 || b >= iae::kBinauralEqBands) break;  // ignore out-of-range band
+        const size_t bi = static_cast<size_t>(b);
+        // Clamp next to the DSP (same philosophy as applyRoomCtl). Keep the
+        // corner strictly inside (0, Nyquist); the ±24 dB gain clamp guarantees
+        // setPeak's A = sqrt(gain) stays well clear of its 1e-6 floor.
+        const float fnyq = static_cast<float>(0.45 * sample_rate_);
+        const float f = std::clamp(qc.bin_eq_freq_hz, 10.f, std::max(20.f, fnyq));
+        const float g = std::clamp(qc.bin_eq_gain_db, -24.f, 24.f);
+        const float q = std::clamp(qc.bin_eq_q, 0.1f, 10.f);
+        bin_eq_freq_[bi]    = f;
+        bin_eq_gain_db_[bi] = g;
+        bin_eq_q_[bi]       = q;
+        bin_eq_L_[bi].setPeak(sample_rate_, f, q, g);
+        bin_eq_R_[bi].setPeak(sample_rate_, f, q, g);
+        break;
+    }
+    }
+}
+
 void SpatialEngine::computeLateFdnGains(const iae::Vec3& opp, float lateDiffuse01,
                                         int n_spk) noexcept {
     for (int k = 0; k < iae::RoomFdn::kOrder; ++k) {
@@ -1110,6 +1171,9 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 break;
             case ipc::CommandTag::DecorrCtl:
                 applyDecorrCtl(qc);
+                break;
+            case ipc::CommandTag::SysBinauralEq:
+                applyBinauralEq(qc);
                 break;
             case ipc::CommandTag::SysAmbiOrder:
                 ambisonic_.setOrder(static_cast<int>(qc.ambi_order));
@@ -1817,6 +1881,27 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
 
                 // Decrement xfade counter for this block (no-op when steady).
                 binaural_.finalizeXfadeBlock();
+
+                // Phase 2.5 — binaural monitor 5-band peak EQ on the final L/R
+                // bus, BEFORE the limiter (reference order: EQ → gain/limit,
+                // BinauralMonitorChain.cpp:190-208). Shared by B1 and B2 (both
+                // write binaural_*_buf_). Gated on the master flag; flat bands
+                // (0 dB) are a unity passthrough so an enabled-but-untuned EQ is
+                // a no-op. RT-safe: RoomBiquad::processSample is pure float math.
+                if (binaural_eq_active_.load(std::memory_order_relaxed)) {
+                    for (int n = 0; n < block.num_frames; ++n) {
+                        const std::size_t ni = static_cast<std::size_t>(n);
+                        float l = binaural_l_buf_[ni];
+                        float r = binaural_r_buf_[ni];
+                        for (int b = 0; b < iae::kBinauralEqBands; ++b) {
+                            const std::size_t bi = static_cast<std::size_t>(b);
+                            l = bin_eq_L_[bi].processSample(l);
+                            r = bin_eq_R_[bi].processSample(r);
+                        }
+                        binaural_l_buf_[ni] = l;
+                        binaural_r_buf_[ni] = r;
+                    }
+                }
 
                 // Apply per-channel limiter to prevent clipping under heavy load
                 // (shared by B1 and B2 since both paths write to binaural_*_buf_).
