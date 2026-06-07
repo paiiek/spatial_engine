@@ -962,3 +962,11 @@ add_test(NAME convergence_room_engine COMMAND test_convergence_room_engine)
 add_executable(test_convergence_denormal_guard test_convergence_denormal_guard.cpp)
 target_link_libraries(test_convergence_denormal_guard PRIVATE spe_core)
 add_test(NAME convergence_denormal_guard COMMAND test_convergence_denormal_guard)
+
+# Dreamscape Convergence v1.0 — Phase 1.2: per-algorithm active-object compaction.
+# Byte-exact equivalence: a transient WFS object (deactivated, then skipped) must
+# yield output bit-identical to an engine that never had WFS (no stale-scratch
+# leak), plus an all-5-algorithm finite/non-silent sanity check.
+add_executable(test_convergence_render_compaction test_convergence_render_compaction.cpp)
+target_link_libraries(test_convergence_render_compaction PRIVATE spe_core)
+add_test(NAME convergence_render_compaction COMMAND test_convergence_render_compaction)

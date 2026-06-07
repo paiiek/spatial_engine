@@ -1308,19 +1308,47 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
     if (render_ready_.load(std::memory_order_relaxed) && block.output_channel_count > 0) {
         const int n_spk = vbap_.numSpeakers();
 
-        // v0.9 Lane C (hoist): scratch arrays are now engine members
-        // (vbap_objs_/dbap_objs_/wfs_objs_/ambisonic_objs_) rather than stack
-        // locals — RT-identical, just off the audio-thread stack. Each must be
-        // re-zeroed per block because every object is written into exactly ONE
-        // algorithm array (the prior stack locals were zero-initialised fresh
-        // each block).
-        vbap_objs_.fill(render::ObjectState{});
-        dbap_objs_.fill(render::ObjectState{});
-        wfs_objs_.fill(render::ObjectState{});
-        ambisonic_objs_.fill(render::ObjectState{});
-        vap_objs_.fill(render::ObjectState{});
+        // Phase 1.2 — per-algorithm active-object compaction. Count active
+        // objects per algorithm and only fill/process/sum the renderers that
+        // have >=1 active object. This is BIT-EXACT vs. always running all five:
+        // every renderer produces all-zero output when it has 0 active objects
+        // (VBAP/DBAP/VAP/WFS memset the bus then skip inactive objects; the
+        // Ambisonic decode is a pure stateless matmul of zeroed SH buffers), and
+        // none of them advance per-object state (gain ramps / WFS delay lines /
+        // decoder) for INACTIVE objects — so a skipped renderer would have added
+        // exactly +0.0f (a + 0.0f == a) and its ramp/delay state on the next
+        // block is identical whether or not processBlock ran this block.
+        //
+        // v0.9 Lane C (hoist): the *_objs_ scratch arrays are engine members
+        // (off the audio-thread stack). A running renderer's array is cleared
+        // (fill) then populated with ITS active objects only; a skipped
+        // renderer's array/scratch keeps stale data but is never read.
+        int n_act[5] = {0, 0, 0, 0, 0};  // index = Algorithm enum value
+        // n_act/ran are sized for algorithm enum values 0..4. If a new algorithm
+        // is added, grow these arrays — otherwise the index below overflows.
+        static_assert(static_cast<int>(ipc::Algorithm::VAP) == 4,
+                      "n_act[5]/ran[5] assume Algorithm enum values 0..4");
         for (int i = 0; i < MAX_OBJECTS; ++i) {
             const auto& c = obj_cache_[static_cast<size_t>(i)];
+            if (!c.active) continue;
+            ++n_act[static_cast<size_t>(static_cast<uint8_t>(c.algo))];
+        }
+        const bool run_vbap = n_act[static_cast<int>(ipc::Algorithm::VBAP)]      > 0;
+        const bool run_wfs  = n_act[static_cast<int>(ipc::Algorithm::WFS)]       > 0;
+        const bool run_dbap = n_act[static_cast<int>(ipc::Algorithm::DBAP)]      > 0;
+        const bool run_ambi = n_act[static_cast<int>(ipc::Algorithm::Ambisonic)] > 0;
+        const bool run_vap  = n_act[static_cast<int>(ipc::Algorithm::VAP)]       > 0;
+
+        if (run_vbap) vbap_objs_.fill(render::ObjectState{});
+        if (run_dbap) dbap_objs_.fill(render::ObjectState{});
+        if (run_wfs)  wfs_objs_.fill(render::ObjectState{});
+        if (run_ambi) ambisonic_objs_.fill(render::ObjectState{});
+        if (run_vap)  vap_objs_.fill(render::ObjectState{});
+        // Populate only ACTIVE objects (inactive slots stay default-inactive and
+        // are skipped by every renderer — identical output to writing them).
+        for (int i = 0; i < MAX_OBJECTS; ++i) {
+            const auto& c = obj_cache_[static_cast<size_t>(i)];
+            if (!c.active) continue;
             const render::ObjectState s = {c.az, c.el, c.dist, c.active, c.width_rad};
             switch (c.algo) {
             case ipc::Algorithm::WFS:       wfs_objs_[i]       = s; break;
@@ -1332,36 +1360,48 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             }
         }
 
-        vbap_.processBlock(
+        if (run_vbap) vbap_.processBlock(
             std::span<const render::ObjectState>(vbap_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             vbap_scratch_.data(), block.num_frames);
-        dbap_.processBlock(
+        if (run_dbap) dbap_.processBlock(
             std::span<const render::ObjectState>(dbap_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             dbap_scratch_.data(), block.num_frames);
-        wfs_.processBlock(
+        if (run_wfs) wfs_.processBlock(
             std::span<const render::ObjectState>(wfs_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             wfs_scratch_.data(), block.num_frames);
-        ambisonic_.processBlock(
+        if (run_ambi) ambisonic_.processBlock(
             std::span<const render::ObjectState>(ambisonic_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             ambisonic_scratch_.data(), block.num_frames);
-        vap_.processBlock(
+        if (run_vap) vap_.processBlock(
             std::span<const render::ObjectState>(vap_objs_.data(), MAX_OBJECTS),
             std::span<const float* const>(dry_ptrs_.data(), MAX_OBJECTS),
             vap_scratch_.data(), block.num_frames);
 
-        // Sum per-algorithm scratches into mix_buf_
+        // Sum only the scratches of renderers that ran, in the original
+        // VBAP→DBAP→WFS→Ambisonic→VAP order (left-assoc, so the all-run case is
+        // bit-identical to the prior fixed 5-way sum; skipped renderers' +0.0f
+        // terms are dropped, which is exact).
         const int total = n_spk * block.num_frames;
-        for (int idx = 0; idx < total; ++idx) {
-            mix_buf_[static_cast<size_t>(idx)] =
-                vbap_scratch_[static_cast<size_t>(idx)] +
-                dbap_scratch_[static_cast<size_t>(idx)] +
-                wfs_scratch_ [static_cast<size_t>(idx)] +
-                ambisonic_scratch_[static_cast<size_t>(idx)] +
-                vap_scratch_[static_cast<size_t>(idx)];
+        const float* ran[5];
+        int n_ran = 0;
+        if (run_vbap) ran[n_ran++] = vbap_scratch_.data();
+        if (run_dbap) ran[n_ran++] = dbap_scratch_.data();
+        if (run_wfs)  ran[n_ran++] = wfs_scratch_.data();
+        if (run_ambi) ran[n_ran++] = ambisonic_scratch_.data();
+        if (run_vap)  ran[n_ran++] = vap_scratch_.data();
+        if (n_ran == 0) {
+            std::fill(mix_buf_.begin(),
+                      mix_buf_.begin() + total, 0.0f);
+        } else {
+            for (int idx = 0; idx < total; ++idx) {
+                float acc = ran[0][idx];
+                for (int r = 1; r < n_ran; ++r) acc += ran[r][idx];
+                mix_buf_[static_cast<size_t>(idx)] = acc;
+            }
         }
 
         const int rev_dist = active_reverb_.load(std::memory_order_relaxed);
