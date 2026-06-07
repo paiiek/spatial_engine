@@ -262,7 +262,8 @@ static void test_cross_prefix_collision() {
         Command cmd = dec.decode(std::span<const uint8_t>(pkt));
         assert(cmd.tag == CommandTag::ObjMove);
         auto& p = std::get<PayloadObjMove>(cmd.payload);
-        assert(std::fabs(p.az_rad - 1.5f * DEG2RAD) < EPS);
+        // Phase 3.1: ADM az (left+) is negated to the engine frame (right+).
+        assert(std::fabs(p.az_rad - (-1.5f * DEG2RAD)) < EPS);
         assert(std::fabs(p.el_rad - 0.2f * DEG2RAD) < EPS);
         assert(std::fabs(p.dist_m - 5.0f) < EPS);
         (void)p;

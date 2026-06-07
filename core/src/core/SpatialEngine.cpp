@@ -31,11 +31,15 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.dist_m = p->dist_m;
                     qc.active = true;
                     // M5.1 echo: ObjMove originates from /adm/obj/N/aed.
+                    // Phase 3.1 — p->az_rad is engine-frame (right+); the echo
+                    // re-emits ADM-frame (left+), so negate engine -> ADM. With
+                    // the inbound decode negation this makes the echo a faithful
+                    // ADM->ADM passthrough (an external "left" comes back "left").
                     static constexpr float kRad2Deg =
                         180.f / 3.14159265358979323846f;
                     static constexpr float kMaxDist = 20.f;
                     osc_backend_.echoPlane().markAed(
-                        p->obj_id, p->az_rad * kRad2Deg,
+                        p->obj_id, -p->az_rad * kRad2Deg,
                         p->el_rad * kRad2Deg,
                         kMaxDist > 0.f ? p->dist_m / kMaxDist : 0.f);
                 }

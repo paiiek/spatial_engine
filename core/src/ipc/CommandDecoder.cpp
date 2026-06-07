@@ -215,16 +215,24 @@ static void decodeAdmAddress(const std::string& addr, const OscArgs& args,
         cmd.payload = p;
     };
 
+    // v1.0 Phase 3.1 — ADM-OSC azimuth is LEFT-positive (ITU-R BS.2076 / the
+    // reference engine's AdmOscProtocol.h: "front 0°, left +"), but the mmhoa
+    // engine renders RIGHT-positive (az=atan2(x,z); sx=d·sin(az) -> az>0 = right).
+    // They are opposite, so converting an inbound ADM azimuth to the engine
+    // frame NEGATES it: app_az = -adm_az. Without this every ADM source is
+    // L/R-inverted. The outbound AdmV1 encode and the echo re-emit negate back
+    // (engine -> ADM), so round-trips remain identity. el and dist are unchanged
+    // (ADM el up+ matches the engine; dist already scales by ADM_OSC_MAX_DIST).
     if (subpath == "azim") {
-        setMove(args.n_float > 0 ? args.floats[0] * DEG2RAD : 0.f, 0.f, 1.f);
+        setMove(args.n_float > 0 ? -args.floats[0] * DEG2RAD : 0.f, 0.f, 1.f);
     } else if (subpath == "elev") {
         setMove(0.f, args.n_float > 0 ? args.floats[0] * DEG2RAD : 0.f, 1.f);
     } else if (subpath == "dist") {
         // normalised [0..1] → metres via MAX_DIST
         setMove(0.f, 0.f, (args.n_float > 0 ? args.floats[0] : 0.f) * MAX_DIST);
     } else if (subpath == "aed") {
-        // ,fff  azimuth_deg  elevation_deg  distance_normalised
-        setMove((args.n_float > 0 ? args.floats[0] : 0.f) * DEG2RAD,
+        // ,fff  azimuth_deg(ADM left+)  elevation_deg  distance_normalised
+        setMove((args.n_float > 0 ? -args.floats[0] : 0.f) * DEG2RAD,
                 (args.n_float > 1 ? args.floats[1] : 0.f) * DEG2RAD,
                 (args.n_float > 2 ? args.floats[2] : 0.f) * MAX_DIST);
     } else if (subpath == "gain") {
@@ -853,8 +861,11 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         case CommandTag::ObjMove: {
             auto& p = std::get<PayloadObjMove>(cmd.payload);
             addr = "/adm/obj/" + std::to_string(p.obj_id) + "/aed";
-            // ADM-OSC: az degrees, el degrees, dist normalised [0..1]
-            add_f_adm(p.az_rad * RAD2DEG);
+            // ADM-OSC: az degrees(ADM left+), el degrees, dist normalised [0..1].
+            // Phase 3.1 — engine az is right+; ADM az is left+, so negate on the
+            // way out (engine -> ADM). Pairs with the inbound decode negation to
+            // keep encode/decode round-trips identity.
+            add_f_adm(-p.az_rad * RAD2DEG);
             add_f_adm(p.el_rad * RAD2DEG);
             add_f_adm(MAX_DIST_ADM > 0.f ? p.dist_m / MAX_DIST_ADM : 0.f);
             break;

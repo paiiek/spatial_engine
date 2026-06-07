@@ -44,7 +44,9 @@ static constexpr float EPS = 1e-4f;
 int main() {
     CommandDecoder dec;
 
-    // 1. /adm/obj/3/azim ,f 45.0 → ObjMove, obj_id=3, az_rad≈0.785
+    // 1. /adm/obj/3/azim ,f 45.0 → ObjMove, obj_id=3.
+    //    Phase 3.1: ADM az is LEFT-positive, engine az is RIGHT-positive, so the
+    //    decode negates: ADM +45° (left) → engine az ≈ -0.785.
     {
         std::vector<uint8_t> args;
         appendF32(args, 45.0f);
@@ -53,9 +55,9 @@ int main() {
         assert(cmd.tag == CommandTag::ObjMove);
         auto& p = std::get<PayloadObjMove>(cmd.payload);
         assert(p.obj_id == 3);
-        assert(std::fabs(p.az_rad - 45.0f * DEG2RAD) < EPS);
+        assert(std::fabs(p.az_rad - (-45.0f * DEG2RAD)) < EPS);
         (void)p;
-        std::puts("  PASS 1: /adm/obj/3/azim");
+        std::puts("  PASS 1: /adm/obj/3/azim (ADM left+ -> engine right+ negated)");
     }
 
     // 2. /adm/obj/0/elev ,f 30.0 → ObjMove, el_rad≈0.524
@@ -72,7 +74,9 @@ int main() {
         std::puts("  PASS 2: /adm/obj/0/elev");
     }
 
-    // 3. /adm/obj/1/aed ,fff 90.0 -15.0 0.5 → az≈1.571, el≈-0.262, dist≈10.0
+    // 3. /adm/obj/1/aed ,fff 90.0 -15.0 0.5 → el≈-0.262, dist≈10.0.
+    //    Phase 3.1: ADM +90° az (left) → engine az ≈ -1.571 (negated); el/dist
+    //    unchanged.
     {
         std::vector<uint8_t> args;
         appendF32(args, 90.0f);
@@ -83,11 +87,11 @@ int main() {
         assert(cmd.tag == CommandTag::ObjMove);
         auto& p = std::get<PayloadObjMove>(cmd.payload);
         assert(p.obj_id == 1);
-        assert(std::fabs(p.az_rad - 90.0f * DEG2RAD) < EPS);
+        assert(std::fabs(p.az_rad - (-90.0f * DEG2RAD)) < EPS);
         assert(std::fabs(p.el_rad - (-15.0f * DEG2RAD)) < EPS);
         assert(std::fabs(p.dist_m - 0.5f * MAX_DIST) < EPS);
         (void)p;
-        std::puts("  PASS 3: /adm/obj/1/aed");
+        std::puts("  PASS 3: /adm/obj/1/aed (az negated)");
     }
 
     // 4. /adm/obj/2/gain ,f 0.5 → ObjGain, gain_linear=0.5

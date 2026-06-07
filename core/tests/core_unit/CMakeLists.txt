@@ -978,3 +978,10 @@ add_test(NAME convergence_render_compaction COMMAND test_convergence_render_comp
 add_executable(test_convergence_dbap_no_alloc test_convergence_dbap_no_alloc.cpp)
 target_link_libraries(test_convergence_dbap_no_alloc PRIVATE spe_core)
 add_test(NAME convergence_dbap_no_alloc COMMAND test_convergence_dbap_no_alloc)
+
+# Dreamscape Convergence v1.0 — Phase 3.1: ADM-OSC azimuth L/R golden test.
+# Proves end-to-end (OSC wire -> decode -> render) that ADM az=+30 (LEFT,
+# ADM left-positive) lights LEFT speakers >> RIGHT, and az=-30 the converse.
+add_executable(test_convergence_adm_az_golden test_convergence_adm_az_golden.cpp)
+target_link_libraries(test_convergence_adm_az_golden PRIVATE spe_core)
+add_test(NAME convergence_adm_az_golden COMMAND test_convergence_adm_az_golden)
