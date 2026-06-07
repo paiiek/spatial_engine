@@ -30,7 +30,13 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 
-PER_BLOCK_P99_THRESHOLD_US = 933   # floor(64/48000 * 0.7 * 1e6)
+# v1.0 Phase 1.4c — per-block p99 threshold = 70% of the RT budget, DERIVED from
+# the live block size / sample rate instead of a hardcoded 933 µs (which assumed
+# block=64 @ 48 kHz). Use p99_threshold_us(block, sr) for any non-default config.
+P99_BUDGET_FRACTION = 0.70
+def p99_threshold_us(block: int = 64, sample_rate: int = 48000) -> int:
+    return int(block / sample_rate * P99_BUDGET_FRACTION * 1e6)
+PER_BLOCK_P99_THRESHOLD_US = p99_threshold_us()  # default block=64 -> 933 µs
 CORE_RSS_SLOPE_LIMIT_MB_H = 1.0
 UI_RSS_SLOPE_LIMIT_MB_H = 5.0
 HEARTBEAT_MISS_THRESHOLD_MS = 300
