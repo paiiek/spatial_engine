@@ -362,6 +362,10 @@ int main(int argc, char** argv) {
     std::string wav_path;
     std::string layout_path  = resolve_default_layout("lab_8ch.yaml");
     std::string osc_dialect  = "legacy"; // "legacy" or "adm"
+    // Object dry-signal source: "sine" (default, internal test tones) or
+    // "input" (route input_channels[i] → object i; pair with --input-backend
+    // shm:<path> to render a real streamed stem through the per-object DSP).
+    std::string object_source = "sine";
     // v0.5.1 Q1 — optional one-shot binaural telemetry exercise. The
     // standalone otherwise never invokes the probe path (only VST3
     // setActive does), so the soak harness has no way to observe the
@@ -393,6 +397,7 @@ int main(int argc, char** argv) {
         else if (a == "--wav")         wav_path     = nexts("");
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
         else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
+        else if (a == "--object-source") object_source = nexts("sine");
         else if (a == "--binaural-sofa") binaural_sofa = nexts("");
         else if (a == "--binaural-enable") binaural_enable = true;
         else if (a == "--force-probe") force_probe = true;
@@ -414,7 +419,8 @@ int main(int argc, char** argv) {
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
                         "[--osc-port 9100] [--osc-bind 127.0.0.1] "
                         "[--wav OUTPUT.wav] [--layout PATH.yaml] "
-                        "[--osc-dialect legacy|adm] [--binaural-sofa PATH] "
+                        "[--osc-dialect legacy|adm] [--object-source sine|input] "
+                        "[--binaural-sofa PATH] "
                         "[--binaural-enable] [--force-probe] "
                         "[--emit-no-sofa-after-ms N]\n"
                         "\n"
@@ -423,6 +429,10 @@ int main(int argc, char** argv) {
                         "                   macOS); pairs with --backend for output. null = a\n"
                         "                   distinct null INPUT source. dante (default) = current\n"
                         "                   behavior (the --backend selection drives I/O).\n"
+                        "  --object-source X  Object dry signal. sine (default) = internal test\n"
+                        "                   tones; input = route input_channels[i] into object i\n"
+                        "                   (pair with --input-backend shm:<path> to render a real\n"
+                        "                   streamed stem through the per-object DSP + panner).\n"
                         "  --osc-bind ADDR  Inbound OSC UDP bind address. Default 127.0.0.1\n"
                         "                   (loopback only — single-host IPC). Pass 0.0.0.0\n"
                         "                   to bind every interface (cross-machine setups).\n"
@@ -460,6 +470,13 @@ int main(int argc, char** argv) {
     } else {
         std::printf("  osc-dialect: legacy\n");
     }
+
+    // Apply object dry-signal source (--object-source sine|input)
+    const bool object_source_input = (object_source == "input");
+    engine.setObjectSourceInput(object_source_input);
+    std::printf("  object-source: %s\n",
+                object_source_input ? "input (route input_channels[i] → object i)"
+                                    : "sine (internal test tones)");
 
     // Load speaker layout
     auto layout_result = spe::geometry::load_layout(layout_path);

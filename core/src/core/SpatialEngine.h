@@ -213,6 +213,15 @@ public:
     void setTransportPlay(bool play) noexcept { transport_play_.store(play); }
     bool isTransportPlaying() const noexcept  { return transport_play_.load(); }
 
+    // Object dry-signal source. false (default) = internal per-object sine
+    // tones (preserves historical + test behavior); true = route the input
+    // backend's channel i into object i's dry signal, so a real musical source
+    // (e.g. a stem streamed over the shm ring) flows through the per-object DSP
+    // chain + panner. The per-object active gate still applies (an object is
+    // silent until activated by OSC). Safe to call from any thread.
+    void setObjectSourceInput(bool use_input) noexcept { object_source_input_.store(use_input); }
+    bool objectSourceIsInput() const noexcept { return object_source_input_.load(); }
+
     // ─────────────────────────────────────────────────────────────────────
     // ADR 0018 D-5 — external-player heartbeat liveness.
     //
@@ -516,6 +525,9 @@ private:
     std::atomic<bool>          render_ready_{false};
     std::atomic<bool>          transport_play_{true};
     std::atomic<bool>          ltc_chase_enable_{false};
+    // false = internal sine tones (default); true = route input_channels[i] →
+    // object i dry signal (real musical source). See setObjectSourceInput().
+    std::atomic<bool>          object_source_input_{false};
 
     // ADR 0018 D-5 — external-player heartbeat liveness state. All accessed
     // from the control / IO thread only (plus a relaxed read for /sys/state).

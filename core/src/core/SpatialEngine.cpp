@@ -696,7 +696,14 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         }
     }
 
-    // Generate per-object sine tones (RT-safe: no alloc, uses std::sin)
+    // Per-object dry signal source (RT-safe: no alloc). Default = internal sine
+    // tones; when object-source=input is selected AND the backend supplies input
+    // channels, route input_channels[i] → object i so a real musical source
+    // (e.g. a stem over the shm ring) flows through the per-object DSP + panner.
+    const bool use_input =
+        object_source_input_.load(std::memory_order_relaxed)
+        && block.input_channels != nullptr
+        && block.input_channel_count > 0;
     const float dt = 1.0f / static_cast<float>(sample_rate_);
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         auto& scratch = dry_scratch_[static_cast<size_t>(i)];
@@ -705,7 +712,15 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             std::fill(scratch.begin(), scratch.begin() + block.num_frames, 0.0f);
             continue;
         }
-        // Unique frequency per object: 110, 165, 220, 275, 330 ... Hz
+        if (use_input && i < block.input_channel_count
+                && block.input_channels[i] != nullptr) {
+            // Real source: copy input channel i verbatim into object i's dry buf.
+            std::copy(block.input_channels[i],
+                      block.input_channels[i] + block.num_frames,
+                      scratch.begin());
+            continue;
+        }
+        // Internal sine tone — unique frequency per object: 110, 165, 220, 275 … Hz
         float freq  = 110.0f * (1 + static_cast<float>(i) * 0.5f);
         float omega = 2.0f * static_cast<float>(M_PI) * freq * dt;
         float phase = osc_phases_[static_cast<size_t>(i)];
