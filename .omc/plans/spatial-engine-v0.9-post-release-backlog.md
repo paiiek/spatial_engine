@@ -11,7 +11,7 @@
 
 ## 현재 진행 포인터
 - **ACTIVE**: 레인 2 (ADR 0019 **PR7**) — pending, ralplan 착수 예정 (PR6 완료로 PR7이 다음)
-- 완료한 레인: **레인 2 (ADR 0019 PR6) ✅ 2026-06-07** — branch `feat/adr0019-pr6-soak`, commits `30f5ce8`(plan REV4)+`799a485`(impl)+`0a6da21`(REV6)+`7ab732d`(REV7)+`b14ed4a`(JUCE-ON ,iis 링크 fix, 별도). 검증@HEAD: NO_JUCE 빌드 클린(에러0/경고0), ctest **115/115**, pytest **261p/6s**, shm soak smoke 30p, full 60s soak green, AC1~AC9 전부 충족. **미머지·미태그(사용자 판단 대기)**. PR6 plan: `.omc/plans/spatial-engine-v0.9-laneG-adr0019-pr6-soak.md`.
+- 완료한 레인: **레인 2 (ADR 0019 PR6) ✅ 2026-06-08 — v0.9.1 릴리스 머지 완료** — merge commit `96ae451` → main, annotated tag **`v0.9.1`** push(origin). 포함 커밋: `30f5ce8`(plan REV4)+`799a485`(impl)+`0a6da21`(REV6)+`7ab732d`(REV7)+`b14ed4a`(JUCE-ON ,iis 링크 fix)+`d49fef2`(close-out)+`3a773a6`(CHANGELOG). 검증: NO_JUCE 빌드 클린, ctest **115/115**(머지 후 재확인), pytest **261p/6s**, shm soak smoke 30p, full 60s soak 1p, **JUCE-ON ,iis 링크 오브젝트레벨 증명**(T↔U; 풀 JUCE-app 빌드는 호스트 X11 dev 부재로 불가). VST3 빌드(Option B=JUCE-free)도 재설정 후 green(`spatial_engine_vst3.so`+vst3 테스트) → **Lane 3 선결조건 충족**. PR6 plan: `.omc/plans/spatial-engine-v0.9-laneG-adr0019-pr6-soak.md`.
 - 완료한 레인: **레인 1 (F4) ✅ 2026-06-02** — commits `2392730`(plan REV5) + `c6c8415`(impl), push 완료. 5-iter ralplan consensus → executor → 독립 code-review APPROVE-WITH-NITS(MAJOR=주석 over-claim만, 수정함). 게이트: ctest 115/115 @64+@128, RT-asserts, TSan soak_scene_save_race 0 races/0 tears 양캡, pytest 260p/4s. 구현: F4a 직렬화+emit, F4b 3-buffer reader-claim publish handshake(seqlock optimistic은 그 자체가 formal race라 교체), param-7 decoder reject. **후속(optional)**: AC9 soak에 reader-slow 변종 추가, tearing tolerance absolute화(둘 다 non-blocking, 리뷰어 MINOR).
 
 ## 순서별 백로그
