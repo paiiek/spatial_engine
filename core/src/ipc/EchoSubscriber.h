@@ -6,12 +6,12 @@
 // transport message once per OSC-IO-thread "tick".
 //
 // Design (from M5 plan SS2):
-//   - Addresses echoed: /adm/obj/N/{aed,xyz,gain,mute,active,width,name}
+//   - Addresses echoed: /adm/obj/N/{aed,xyz,gain,mute,active,width,name,dsp}
 //     and /transport/{play,stop}.
 //   - Coalesce: same (obj_id, addr-enum) within one flush() call -> latest.
-//     Dirty-bit map: kEchoMaxObjects objects x 7 addresses (v0.9 Lane C:
-//     kEchoMaxObjects derives from spe::MAX_OBJECTS — 64 → 448 bits / 128 →
-//     896 bits).
+//     Dirty-bit map: kEchoMaxObjects objects x 8 addresses (v0.9 Lane C:
+//     kEchoMaxObjects derives from spe::MAX_OBJECTS — 64 → 512 bits / 128 →
+//     1024 bits).
 //   - Values: stored per (obj, addr) so flush() can re-emit without needing
 //     the audio-thread obj_cache_. Echo emits wire-level idempotent values
 //     (inbound values, not engine-internal spherical conversions).
@@ -38,7 +38,7 @@
 namespace spe::ipc {
 
 // Number of echo address types per object.
-static constexpr int kEchoAddrCount = 7;
+static constexpr int kEchoAddrCount = 8;
 
 enum class EchoAddr : uint8_t {
     Aed    = 0,
@@ -48,6 +48,7 @@ enum class EchoAddr : uint8_t {
     Active = 4,
     Width  = 5,
     Name   = 6,
+    Dsp    = 7,
 };
 
 static constexpr std::size_t kMaxEchoSubscribers = 4;
@@ -68,6 +69,10 @@ struct EchoObjCache {
     int   active    = 0;
     float width_rad = 0.f;
     char  name[32]  = {};
+    // C7: per-object DSP echo values, indexed by ObjDsp param 0..6 (slot 7
+    // unused — width routes to /adm/obj/N/width). Values only; the dirty mask
+    // lives in EchoDirtyMap so dirty_.clear() resets it uniformly.
+    float dsp_value[8] = {};
 };
 
 // Dirty-bit map: bit[obj][addr] set when a pending echo exists.
@@ -77,11 +82,17 @@ struct EchoDirtyMap {
     static constexpr std::size_t kObjBytes     = (kTotalObjBits + 7) / 8;
 
     uint8_t obj_bits[kObjBytes] = {};
+    // C7: per-object DSP param dirty mask (bits 0..6; bit 7 unused since width
+    // routes to /adm/obj/N/width). Co-located with obj_bits so the single
+    // clear() resets ALL dirty state (flush-end, no-subscriber early return,
+    // close()) — no separate reset site can be missed.
+    uint8_t dsp_param_dirty[kEchoMaxObjects] = {};
     bool    transport_play      = false;
     bool    transport_stop      = false;
 
     void clear() noexcept {
         std::memset(obj_bits, 0, sizeof(obj_bits));
+        std::memset(dsp_param_dirty, 0, sizeof(dsp_param_dirty));
         transport_play = false;
         transport_stop = false;
     }
@@ -177,6 +188,15 @@ public:
         if (obj_id >= kEchoMaxObjects) return;
         obj_cache_[obj_id].width_rad = width_rad;
         dirty_.mark(obj_id, EchoAddr::Width);
+    }
+    // C7: per-object DSP echo. param 0..6 → /adm/obj/N/dsp ,if param value.
+    // param 7 (Width) is ignored here (no-op): width is single-sourced on
+    // /adm/obj/N/width via markWidth, so the mark site routes p7 there.
+    void markDsp(uint32_t obj_id, uint8_t param, float value) noexcept {
+        if (obj_id >= kEchoMaxObjects || param > 6) return;
+        obj_cache_[obj_id].dsp_value[param] = value;
+        dirty_.dsp_param_dirty[obj_id] |= static_cast<uint8_t>(1u << param);
+        dirty_.mark(obj_id, EchoAddr::Dsp);
     }
     void markName(uint32_t obj_id, const char* name) noexcept {
         if (obj_id >= kEchoMaxObjects || !name) return;

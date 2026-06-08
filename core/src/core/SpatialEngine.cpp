@@ -89,6 +89,16 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.obj_id    = p->obj_id;
                     qc.dsp_param = static_cast<uint8_t>(p->param);
                     qc.dsp_value = p->value;
+                    // C7 echo: param 7 (Width) shares c.width_rad with ObjWidth
+                    // (apply case 7 == ObjWidth's field), so route it to
+                    // markWidth → /adm/obj/N/width (the canonical width
+                    // address). params 0..6 echo on /adm/obj/N/dsp. A param-7
+                    // write produces NO /adm/obj/N/dsp packet.
+                    if (p->param == ipc::PayloadObjDsp::Param::Width)
+                        osc_backend_.echoPlane().markWidth(p->obj_id, p->value);
+                    else
+                        osc_backend_.echoPlane().markDsp(
+                            p->obj_id, static_cast<uint8_t>(p->param), p->value);
                 }
                 break;
             case ipc::CommandTag::SysReset:

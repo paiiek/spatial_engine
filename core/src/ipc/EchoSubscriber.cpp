@@ -241,6 +241,20 @@ void EchoPlane::flush(int64_t now_ms, int send_fd) noexcept {
             buildAndSend(addr, ",s", nullptr, 0, nullptr, 0, c.name, now_ms,
                          send_fd);
         }
+        // C7: per-param DSP echo. One /adm/obj/N/dsp ,if (param,value) packet
+        // per dirty param this tick (param 7 never set — width routes to
+        // /adm/obj/N/width). dsp_param_dirty is zeroed by dirty_.clear() below,
+        // so no per-object inline clear is needed.
+        if (dirty_.test(oid, EchoAddr::Dsp)) {
+            char addr[32];
+            std::snprintf(addr, sizeof(addr), "/adm/obj/%u/dsp", oid);
+            for (int p = 0; p <= 6; ++p) {
+                if ((dirty_.dsp_param_dirty[obj] & (1u << p)) == 0) continue;
+                int p_int = p;
+                buildAndSend(addr, ",if", &c.dsp_value[p], 1, &p_int, 1, nullptr,
+                             now_ms, send_fd);
+            }
+        }
     }
 
     if (dirty_.transport_play) {
