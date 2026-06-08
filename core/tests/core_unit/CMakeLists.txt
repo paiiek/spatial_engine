@@ -103,6 +103,12 @@ add_executable(test_convergence_layout_save test_convergence_layout_save.cpp)
 target_link_libraries(test_convergence_layout_save PRIVATE spe_core)
 add_test(NAME convergence_layout_save COMMAND test_convergence_layout_save)
 
+# Dreamscape Convergence Phase 4.3 inc 2a — 50-slot layout library:
+# save/load/clear/occupancy/label + persistence across re-open.
+add_executable(test_convergence_layout_library test_convergence_layout_library.cpp)
+target_link_libraries(test_convergence_layout_library PRIVATE spe_core)
+add_test(NAME convergence_layout_library COMMAND test_convergence_layout_library)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)

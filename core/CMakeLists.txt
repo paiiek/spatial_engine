@@ -113,6 +113,7 @@ set(SPE_CORE_SOURCES
     src/core/SpatialEngine.cpp
     src/geometry/SpeakerLayout.cpp
     src/geometry/LayoutLoader.cpp
+    src/geometry/LayoutLibrary.cpp
     src/render/LayoutCompatibilityChecker.cpp
     src/render/AlgorithmAnalyticReference.cpp
     src/render/VBAPRenderer.cpp
