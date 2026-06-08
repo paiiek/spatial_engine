@@ -17,9 +17,10 @@ struct QueuedCmd {
     float    gain        = 1.f;
     bool     active      = false;
     ipc::Algorithm algo  = ipc::Algorithm::VBAP;
-    // Noise generator (NoiseType/NoiseGain)
+    // Noise generator (NoiseType/NoiseGain/NoiseSource)
     uint32_t noise_ch    = 0;
-    uint8_t  noise_mode  = 0;   // 0 = white, 1 = pink, 2 = log-sweep
+    uint8_t  noise_mode  = 0;   // 0 = white, 1 = pink, 2 = log-sweep, 3 = passthrough
+    int32_t  noise_source = 0;  // input channel for passthrough mode
     float    noise_gain_db = -60.f;
     // ObjDsp parameter setter (EQ band gain dB / delay ms / k_hf 0..1 / reverb send 0..1)
     uint8_t  dsp_param   = 0;  // 0..3 EQ band, 4 delay_ms, 5 k_hf, 6 reverb_send

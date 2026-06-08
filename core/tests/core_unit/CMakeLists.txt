@@ -91,6 +91,12 @@ add_executable(test_convergence_log_sweep test_convergence_log_sweep.cpp)
 target_link_libraries(test_convergence_log_sweep PRIVATE spe_core)
 add_test(NAME convergence_log_sweep COMMAND test_convergence_log_sweep)
 
+# Dreamscape Convergence Phase 4.2c — speaker-check input passthrough:
+# /noise/{ch}/type passthrough + /noise/{ch}/source routes input→speaker.
+add_executable(test_convergence_speaker_check test_convergence_speaker_check.cpp)
+target_link_libraries(test_convergence_speaker_check PRIVATE spe_core)
+add_test(NAME convergence_speaker_check COMMAND test_convergence_speaker_check)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)

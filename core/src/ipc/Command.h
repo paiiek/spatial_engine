@@ -76,8 +76,9 @@ enum class CommandTag : uint8_t {
     CueStop        = 0x3A, // /cue/stop            — freeze + cancel pending dwell
 
     // Noise generator (per-channel array verification)
-    NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink|sweep
+    NoiseType     = 0x40, // /noise/{ch}/type ,s  white|pink|sweep|passthrough
     NoiseGain     = 0x41, // /noise/{ch}/gain ,f  dB
+    NoiseSource   = 0x42, // /noise/{ch}/source ,i  input channel for passthrough
 
     // Transport
     TransportPlay = 0x50, // /transport/play
@@ -233,12 +234,17 @@ struct PayloadCueStop {};
 
 struct PayloadNoiseType {
     uint32_t channel = 0;
-    uint8_t  mode    = 0; // 0 = white, 1 = pink (−3 dB/oct), 2 = log-sweep 20→20k
+    uint8_t  mode    = 0; // 0=white, 1=pink (−3 dB/oct), 2=log-sweep 20→20k, 3=input passthrough
 };
 
 struct PayloadNoiseGain {
     uint32_t channel = 0;
     float    gain_db = -60.f; // -60 dB ≡ effectively muted
+};
+
+struct PayloadNoiseSource {
+    uint32_t channel = 0;     // output speaker channel
+    int32_t  source  = 0;     // input channel routed to it in passthrough mode
 };
 
 // ADR 0018 D-2 — /transport/play optionally carries a `,d unix_time_seconds`
@@ -511,6 +517,7 @@ using CommandPayload = std::variant<
     PayloadCueStop,
     PayloadNoiseType,
     PayloadNoiseGain,
+    PayloadNoiseSource,
     PayloadTransportPlay,
     PayloadTransportStop,
     PayloadObjDsp,

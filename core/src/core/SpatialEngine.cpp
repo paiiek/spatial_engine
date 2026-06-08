@@ -84,6 +84,12 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.noise_gain_db = p->gain_db;
                 }
                 break;
+            case ipc::CommandTag::NoiseSource:
+                if (auto* p = std::get_if<ipc::PayloadNoiseSource>(&cmd.payload)) {
+                    qc.noise_ch     = p->channel;
+                    qc.noise_source = p->source;
+                }
+                break;
             case ipc::CommandTag::TransportPlay:
                 // M5.1 — echo transport events.
                 osc_backend_.echoPlane().markTransportPlay();
@@ -1180,6 +1186,13 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 }
                 break;
             }
+            case ipc::CommandTag::NoiseSource: {
+                const int idx = layout_.channelToIndex(static_cast<int>(qc.noise_ch));
+                if (idx >= 0 && static_cast<size_t>(idx) < noise_chans_.size()) {
+                    noise_chans_[static_cast<size_t>(idx)].in_src = qc.noise_source;
+                }
+                break;
+            }
             case ipc::CommandTag::TransportPlay:
                 transport_play_.store(true, std::memory_order_relaxed);
                 break;
@@ -1676,6 +1689,14 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             if (!block.output_channels || !block.output_channels[spk]) continue;
 
             constexpr float kNoiseScale = 1.0f / 2147483648.f;  // int32 → ±1 float
+            // mode 3 = passthrough: route input channel in_src to this speaker
+            // (engineer wiring check). Resolve the input pointer once per block;
+            // null when no input backend / out-of-range source → emits silence.
+            const float* in_ptr = nullptr;
+            if (nc.mode == 3 && block.input_channels && nc.in_src >= 0 &&
+                nc.in_src < block.input_channel_count) {
+                in_ptr = block.input_channels[nc.in_src];
+            }
             for (int n = 0; n < block.num_frames; ++n) {
                 // xorshift32 RNG (RT-safe, deterministic)
                 nc.rng ^= nc.rng << 13;
@@ -1683,10 +1704,12 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 nc.rng ^= nc.rng << 5;
                 const float white = static_cast<float>(static_cast<int32_t>(nc.rng)) * kNoiseScale;
                 // mode 0 = white, 1 = pink (canonical Kellet −3 dB/oct, see
-                // dsp/PinkNoise.h), 2 = log-sweep 20→20k (see dsp/LogSweep.h).
+                // dsp/PinkNoise.h), 2 = log-sweep 20→20k (see dsp/LogSweep.h),
+                // 3 = input passthrough (in_ptr, silence if unavailable).
                 float sample;
                 if      (nc.mode == 1) sample = nc.pink_filt.processSample(white);
                 else if (nc.mode == 2) sample = nc.sweep_gen.processSample(sample_rate_);
+                else if (nc.mode == 3) sample = in_ptr ? in_ptr[n] : 0.f;
                 else                   sample = white;
                 block.output_channels[spk][n] += sample * nc.gain_lin * transport_gain;
             }

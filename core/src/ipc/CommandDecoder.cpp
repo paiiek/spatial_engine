@@ -776,8 +776,9 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             if (subpath == "type" && args.n_str > 0) {
                 PayloadNoiseType p;
                 p.channel = chu;
-                p.mode    = (args.strings[0] == "pink")  ? 1
-                          : (args.strings[0] == "sweep") ? 2
+                p.mode    = (args.strings[0] == "pink")        ? 1
+                          : (args.strings[0] == "sweep")       ? 2
+                          : (args.strings[0] == "passthrough") ? 3
                           : 0;  // default/unknown → white
                 cmd.tag     = CommandTag::NoiseType;
                 cmd.payload = p;
@@ -786,6 +787,12 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
                 p.channel = chu;
                 p.gain_db = getFloat(0);
                 cmd.tag     = CommandTag::NoiseGain;
+                cmd.payload = p;
+            } else if (subpath == "source") {
+                PayloadNoiseSource p;
+                p.channel = chu;
+                p.source  = getInt(0);
+                cmd.tag     = CommandTag::NoiseSource;
                 cmd.payload = p;
             } else {
                 makeUnknown();
@@ -1187,7 +1194,8 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
     case CommandTag::NoiseType: {
         auto& p = std::get<PayloadNoiseType>(cmd.payload);
         addr = "/noise/" + std::to_string(p.channel) + "/type";
-        const char* nm = (p.mode == 1) ? "pink" : (p.mode == 2) ? "sweep" : "white";
+        const char* nm = (p.mode == 1) ? "pink" : (p.mode == 2) ? "sweep"
+                       : (p.mode == 3) ? "passthrough" : "white";
         tags += 's';
         for (const char* q = nm; *q; ++q) args_buf.push_back(static_cast<uint8_t>(*q));
         args_buf.push_back(0);
@@ -1198,6 +1206,12 @@ bool CommandDecoder::encode(const Command& cmd, std::vector<uint8_t>& out,
         auto& p = std::get<PayloadNoiseGain>(cmd.payload);
         addr = "/noise/" + std::to_string(p.channel) + "/gain";
         add_f(p.gain_db);
+        break;
+    }
+    case CommandTag::NoiseSource: {
+        auto& p = std::get<PayloadNoiseSource>(cmd.payload);
+        addr = "/noise/" + std::to_string(p.channel) + "/source";
+        add_i(p.source);
         break;
     }
     case CommandTag::TransportPlay: {

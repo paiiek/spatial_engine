@@ -183,6 +183,34 @@ int main() {
         (void)rp;
     }
 
+    // --- NoiseType (passthrough) ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::NoiseType; cmd.seq = 103; cmd.id = 103;
+        PayloadNoiseType p; p.channel = 2; p.mode = 3;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::NoiseType);
+        auto& rp = std::get<PayloadNoiseType>(rt.payload);
+        assert(rp.channel == 2);
+        assert(rp.mode == 3);
+        (void)rp;
+    }
+
+    // --- NoiseSource ---
+    {
+        Command cmd;
+        cmd.tag = CommandTag::NoiseSource; cmd.seq = 104; cmd.id = 104;
+        PayloadNoiseSource p; p.channel = 2; p.source = 5;
+        cmd.payload = p;
+        Command rt = roundtrip(dec, cmd);
+        assert(rt.tag == CommandTag::NoiseSource);
+        auto& rp = std::get<PayloadNoiseSource>(rt.payload);
+        assert(rp.channel == 2);
+        assert(rp.source == 5);
+        (void)rp;
+    }
+
     // --- NoiseGain ---
     {
         Command cmd;
