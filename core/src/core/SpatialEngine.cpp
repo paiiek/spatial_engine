@@ -304,6 +304,33 @@ SpatialEngine::SpatialEngine(int listen_port)
                     }
                 }
                 return;
+            case ipc::CommandTag::SysStateRequest: {
+                // C6 — full-state UDP-loss resync. Runs on the OSC IO thread.
+                // No audio FIFO enqueue (early-return group). Requires a prior
+                // echo /sys/handshake; a non-subscriber request is a no-op.
+                if (!osc_backend_.echoPlane().hasSubscribers()) return;
+                using clock = std::chrono::steady_clock;
+                const int64_t now_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        clock::now().time_since_epoch())
+                        .count();
+                // REV2 amendment #4: this GLOBAL debounce is correct ONLY while
+                // the dump is BROADCAST (one serviced request refreshes every
+                // subscriber). If a targeted-unicast emit is ever adopted, this
+                // MUST become per-subscriber or it silently suppresses another
+                // client's resync.
+                if (now_ms - last_state_request_ms_ < kStateRequestDebounceMs)
+                    return;  // Decision 6
+                last_state_request_ms_ = now_ms;
+                // REV4: include_dsp_only=true → pure-DSP inactive objects are
+                // dumped so the client reconciles EXACTLY to obj_cache_.
+                // /scene/save keeps the default false (byte-identical).
+                // Mutex-serialized inside snapshotObjects().
+                snapshotObjects(state_dump_buf_, /*include_dsp_only=*/true);
+                osc_backend_.echoPlane().emitStateDump(
+                    state_dump_buf_, now_ms, osc_backend_.udpFdForEcho());
+                return;
+            }
             default:
                 return;  // not queued
             }
@@ -321,7 +348,11 @@ SpatialEngine::SpatialEngine(int listen_port)
             }
         },
         listen_port)
-{}
+{
+    // C6 (Decision 3) — pre-reserve the resync dump buffer so steady-state
+    // /sys/state_request handling allocates nothing (not the audio thread).
+    state_dump_buf_.reserve(MAX_OBJECTS);
+}
 
 SpatialEngine::~SpatialEngine() {
     osc_backend_.stop();
@@ -335,7 +366,11 @@ void SpatialEngine::setLayout(spe::geometry::SpeakerLayout layout) {
 // F4b — consistent control-thread snapshot of obj_cache_ via the three-buffer
 // published_index_ handshake (retry-until-stable seqlock reader). NOT RT-safe;
 // called from the control loop only. See SpatialEngine.h for the mechanism.
-void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const {
+void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out,
+                                    bool include_dsp_only) const {
+    // C6 (REV2 amendment #1) — serialize the two non-RT readers (scene-save @
+    // control loop + state_request @ OSC IO). The audio writer never locks.
+    std::lock_guard<std::mutex> lk(state_snapshot_mtx_);
     // AC8 — algo enum ↔ ObjectSnapshot.algorithm (int) round-trip is a plain
     // static_cast in both directions; assert each variant survives compile-time.
     static_assert(static_cast<int>(ipc::Algorithm::VBAP)      == 0, "VBAP enum value");
@@ -369,13 +404,25 @@ void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         const ObjCache& c = local[static_cast<std::size_t>(i)];
         // Emit objects driven at least once: any non-default field, or active.
-        const bool touched = c.active || c.az != 0.f || c.el != 0.f || c.dist != 1.f ||
-                             c.gain_lin != 1.f || c.reverb_send != 0.f || c.width_rad != 0.f ||
-                             c.algo != ipc::Algorithm::VBAP;
+        // C6 (REV4): when include_dsp_only, also catch objects whose ONLY
+        // non-default state is a per-object DSP param (EQ band / user delay /
+        // k_hf) so the resync dump reconciles EXACTLY to obj_cache_. The clause
+        // is gated on the flag, so /scene/save (default false) is unchanged.
+        const bool touched =
+            c.active || c.az != 0.f || c.el != 0.f || c.dist != 1.f ||
+            c.gain_lin != 1.f || c.reverb_send != 0.f || c.width_rad != 0.f ||
+            c.algo != ipc::Algorithm::VBAP ||
+            (include_dsp_only &&
+             (c.k_hf != 0.5f || c.user_delay_ms != 0.f ||
+              c.eq_gain_db[0] != 0.f || c.eq_gain_db[1] != 0.f ||
+              c.eq_gain_db[2] != 0.f || c.eq_gain_db[3] != 0.f));
         if (!touched) continue;
         out.push_back(ipc::ObjectSnapshot{ /*id*/ i, c.az, c.el, c.dist,
                                            static_cast<int>(c.algo), c.gain_lin,
-                                           /*muted*/ !c.active, c.width_rad, c.reverb_send });
+                                           /*muted*/ !c.active, c.width_rad, c.reverb_send,
+                                           c.k_hf, c.user_delay_ms,
+                                           {c.eq_gain_db[0], c.eq_gain_db[1],
+                                            c.eq_gain_db[2], c.eq_gain_db[3]} });
     }
     // Release the claim so the writer may reuse this buffer once it publishes
     // elsewhere. (After this point we no longer touch snap_buf_[idx].)

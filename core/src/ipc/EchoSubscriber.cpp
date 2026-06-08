@@ -269,4 +269,78 @@ void EchoPlane::flush(int64_t now_ms, int send_fd) noexcept {
     dirty_.clear();
 }
 
+// ---- C6 full-state resync dump ----------------------------------------------
+
+void EchoPlane::emitStateDump(const std::vector<ObjectSnapshot>& objs,
+                              int64_t now_ms, int send_fd) noexcept {
+    if (!hasSubscribers()) return;
+
+    // Same conversions the ObjMove echo uses (SpatialEngine.cpp:32-38).
+    static constexpr float kRad2Deg = 180.f / 3.14159265358979323846f;
+    static constexpr float kMaxDist = 20.f;
+
+    for (const auto& o : objs) {
+        const uint32_t oid = static_cast<uint32_t>(o.id);
+        char addr[32];
+
+        // /adm/obj/N/aed ,fff — az_deg, el_deg, dist_norm.
+        std::snprintf(addr, sizeof(addr), "/adm/obj/%u/aed", oid);
+        const float aed[3] = {o.az_rad * kRad2Deg, o.el_rad * kRad2Deg,
+                              kMaxDist > 0.f ? o.dist_m / kMaxDist : 0.f};
+        buildAndSend(addr, ",fff", aed, 3, nullptr, 0, nullptr, now_ms, send_fd);
+
+        // /adm/obj/N/gain ,f
+        std::snprintf(addr, sizeof(addr), "/adm/obj/%u/gain", oid);
+        buildAndSend(addr, ",f", &o.gain_linear, 1, nullptr, 0, nullptr, now_ms,
+                     send_fd);
+
+        // /adm/obj/N/active ,i — active is the canonical liveness flag.
+        std::snprintf(addr, sizeof(addr), "/adm/obj/%u/active", oid);
+        int active = o.muted ? 0 : 1;
+        buildAndSend(addr, ",i", nullptr, 0, &active, 1, nullptr, now_ms,
+                     send_fd);
+
+        // /adm/obj/N/width ,f
+        std::snprintf(addr, sizeof(addr), "/adm/obj/%u/width", oid);
+        buildAndSend(addr, ",f", &o.width_rad, 1, nullptr, 0, nullptr, now_ms,
+                     send_fd);
+
+        // /adm/obj/N/dsp ,if (param, value) — one packet per non-default param.
+        // Param map (Command.h PayloadObjDsp::Param): 0..3 → eq_gain_db[0..3],
+        // 4 → user_delay_ms, 5 → k_hf, 6 → reverb_send. Mirror the C7 emit at
+        // EchoSubscriber.cpp:254 EXACTLY: float arg = value, int arg = param-id.
+        std::snprintf(addr, sizeof(addr), "/adm/obj/%u/dsp", oid);
+        for (int p = 0; p <= 3; ++p) {
+            if (o.eq_gain_db[p] == 0.f) continue;
+            int param_id = p;
+            float value = o.eq_gain_db[p];
+            buildAndSend(addr, ",if", &value, 1, &param_id, 1, nullptr, now_ms,
+                         send_fd);
+        }
+        if (o.user_delay_ms != 0.f) {
+            int param_id = 4;
+            float value = o.user_delay_ms;
+            buildAndSend(addr, ",if", &value, 1, &param_id, 1, nullptr, now_ms,
+                         send_fd);
+        }
+        if (o.k_hf != 0.5f) {
+            int param_id = 5;
+            float value = o.k_hf;
+            buildAndSend(addr, ",if", &value, 1, &param_id, 1, nullptr, now_ms,
+                         send_fd);
+        }
+        if (o.reverb_send != 0.f) {
+            int param_id = 6;
+            float value = o.reverb_send;
+            buildAndSend(addr, ",if", &value, 1, &param_id, 1, nullptr, now_ms,
+                         send_fd);
+        }
+    }
+
+    // /sys/state ,i <count> — completion sentinel (ReplyTag::StateUpdate=0x03).
+    int count = static_cast<int>(objs.size());
+    buildAndSend("/sys/state", ",i", nullptr, 0, &count, 1, nullptr, now_ms,
+                 send_fd);
+}
+
 }  // namespace spe::ipc

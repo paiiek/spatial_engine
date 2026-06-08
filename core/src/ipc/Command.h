@@ -50,6 +50,7 @@ enum class CommandTag : uint8_t {
     SysBinauralMode    = 0x19, // /sys/binaural_mode ,i {0|1} — 0 = B1 Direct, 1 = B2 AmbiVS (v0.5 P4)
     SysBinauralResetDemote = 0x1A, // /sys/binaural_reset_demote ,i {0|1} — v0.7 D-S1 user hatch
     SysBinauralSofaSelect  = 0x1B, // /sys/binaural_sofa_select ,s "<name>" — B-M3 catalog name → live SOFA swap
+    SysStateRequest        = 0x1C, // /sys/state_request ,i token — client asks for full-state resync (C6)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -302,6 +303,13 @@ struct PayloadSysBinauralSofaSelect {
     std::string name;
 };
 
+// C6 — /sys/state_request ,i token. Client asks the engine to re-emit the
+// full authoritative object state (UDP-loss resync). token is an optional
+// client-chosen request id (0 when absent / legacy).
+struct PayloadSysStateRequest {
+    uint32_t token = 0;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -350,6 +358,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralMode,
     PayloadSysBinauralResetDemote,
     PayloadSysBinauralSofaSelect,
+    PayloadSysStateRequest,
     PayloadUnknown
 >;
 

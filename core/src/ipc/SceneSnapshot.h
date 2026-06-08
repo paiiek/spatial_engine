@@ -17,6 +17,13 @@ struct ObjectSnapshot {
     bool  muted       = false;
     float width_rad   = 0.f; // source spread in radians (0 = point source)
     float reverb_send = 0.f; // reverb send level (0..1, linear)
+    // C6 — additive per-object DSP detail for full-state resync. Defaults match
+    // SpatialEngine::ObjCache so an unset object is byte-identical to before.
+    // NOT serialized by toJson/fromJson (fixed key order) → scenes stay
+    // byte-identical; carried only by the /sys/state_request dump.
+    float k_hf          = 0.5f;
+    float user_delay_ms = 0.f;
+    float eq_gain_db[4] = {0.f, 0.f, 0.f, 0.f};
 };
 
 struct SceneSnapshot {

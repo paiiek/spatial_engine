@@ -445,6 +445,13 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadSysBinauralResetDemote p;
         p.enable = (getInt(0) != 0);
         cmd.payload = p;
+    } else if (addr == "/sys/state_request") {
+        // C6: ,i token — client asks for a full-state resync. A bare ,i token
+        // (no seq/id prefix) decodes token as ints[0]; a no-arg variant → 0.
+        cmd.tag = CommandTag::SysStateRequest;
+        PayloadSysStateRequest p;
+        p.token = static_cast<uint32_t>(getInt(0));
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;

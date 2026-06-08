@@ -28,10 +28,12 @@
 
 #include "core/Constants.h"
 #include "ipc/Command.h"
+#include "ipc/SceneSnapshot.h"  // C6 — ObjectSnapshot for emitStateDump
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
@@ -212,6 +214,14 @@ public:
     // send_fd: OSCBackend's UDP socket fd (or -1 in tests for no-socket path).
     // now_ms: current wall-clock milliseconds.
     void flush(int64_t now_ms, int send_fd) noexcept;
+
+    // C6 — full-state resync. Re-emits each touched object on the existing echo
+    // addresses (aed/gain/active/width/dsp) to ALL active subscribers via the
+    // existing rate guard, then a single /sys/state ,i <count> completion
+    // sentinel. Does NOT touch the dirty map or the inbound echo obj_cache_
+    // (no coalesce). No-op when there are no subscribers.
+    void emitStateDump(const std::vector<ObjectSnapshot>& objs,
+                       int64_t now_ms, int send_fd) noexcept;
 
     // Accessors for tests.
     std::size_t subscriberCount() const noexcept {

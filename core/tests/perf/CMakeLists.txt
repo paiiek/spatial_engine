@@ -46,6 +46,20 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR SPATIAL_ENGINE_RUN_SOAK)
              CONFIGURATIONS Release)
     set_tests_properties(soak_scene_save_race PROPERTIES TIMEOUT 120)
 
+    # v0.9 Lane 6 (C6 / T8) — state-resync concurrency gate. One "audio" thread
+    # drives obj_cache_ writes through the production drain + three-buffer
+    # publish; TWO "control" threads call snapshotObjects() mid-flight on
+    # DIFFERENT threads — the /scene/save path (include_dsp_only=false) and the
+    # /sys/state_request path (true) — proving the C6 state_snapshot_mtx_
+    # serializes both non-RT readers. Asserts ZERO data races (under
+    # -fsanitize=thread) AND a correlated-field-pair no-tearing invariant.
+    add_executable(state_resync_race state_resync_race.cpp)
+    target_link_libraries(state_resync_race PRIVATE spe_core Threads::Threads)
+    add_test(NAME state_resync_race
+             COMMAND state_resync_race
+             CONFIGURATIONS Release)
+    set_tests_properties(state_resync_race PROPERTIES TIMEOUT 120)
+
     # v0.9 Lane C (C-M3 + C-M4) — RT-budget + memory-footprint measurement.
     # Drives audioBlock() at the heaviest config (8ch + VBAP + B2 binaural
     # Direct per-object) across object counts {8,16,32,64,96,128}; counts above

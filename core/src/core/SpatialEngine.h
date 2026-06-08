@@ -29,6 +29,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 namespace spe::core {
@@ -353,7 +354,16 @@ public:
     // audioBlock. Emits objects driven at least once (touched heuristic). NOT RT.
     // Distinct from objCacheActiveAt (test-only / "Not RT-safe") — this is its
     // own synchronized path.
-    void snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const;
+    //
+    // C6 (REV4): include_dsp_only extends the "touched" predicate to also emit
+    // objects whose ONLY non-default state is a per-object DSP param (EQ band /
+    // user delay / k_hf). The /sys/state_request resync caller passes true so the
+    // dump reconciles EXACTLY to obj_cache_; /scene/save keeps the default false
+    // → scene-save output stays byte-identical. Both non-RT callers run on
+    // DIFFERENT threads (scene-save @ control loop, state_request @ OSC IO), so
+    // the body is serialized by state_snapshot_mtx_ (the audio writer never locks).
+    void snapshotObjects(std::vector<ipc::ObjectSnapshot>& out,
+                         bool include_dsp_only = false) const;
     std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
@@ -447,6 +457,27 @@ private:
     std::array<std::array<ObjCache, MAX_OBJECTS>, 3> snap_buf_{}; // ~24 KB @128
     std::atomic<int>         snap_published_idx_{-1};   // last index published; -1 = none yet
     mutable std::atomic<int> snap_reader_busy_idx_{-1}; // index reader is reading; -1 = idle
+
+    // C6 (REV2 amendment #1) — serialize the TWO non-RT snapshotObjects() readers
+    // that run on DIFFERENT threads: /scene/save (control loop) + /sys/state_request
+    // (OSC IO). Both stomp the single snap_reader_busy_idx_ claim slot, so without
+    // this lock two concurrent readers break the F4b writer-avoidance invariant →
+    // torn read vs the audio writer. The audio WRITER never takes this mutex —
+    // the RT publish path (two atomic loads + one release store) stays lock-free.
+    // mutable because snapshotObjects() is const.
+    mutable std::mutex state_snapshot_mtx_;
+    // C6 (Decision 3) — pre-reserved dump buffer for the state_request handler so
+    // steady-state resync requests allocate nothing. reserve(MAX_OBJECTS) in ctor.
+    std::vector<ipc::ObjectSnapshot> state_dump_buf_;
+    // C6 (Decision 6) — debounce: ignore a state_request within 500 ms of the last
+    // serviced one. Single-threaded on the OSC IO thread → no locking needed.
+    // NOTE: this inherits the whole-sink "single OSC-IO-thread" contract (shared
+    // with cmd_fifo_ enqueue, echo marks, and flush). If SysStateRequest is ever
+    // delivered concurrently via an in-process injectCommand() path (VST3 host
+    // control plane) AND the UDP IO thread, this plain int64_t + the echo rate
+    // tokens would race — make it atomic / per-source then.
+    int64_t last_state_request_ms_ = 0;
+    static constexpr int64_t kStateRequestDebounceMs = 500; // REV2 amendment #3
 
     // Per-object sine oscillator (RT-safe: no alloc)
     std::array<float, MAX_OBJECTS> osc_phases_{};
