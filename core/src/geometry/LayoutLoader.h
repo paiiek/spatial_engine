@@ -27,6 +27,12 @@ using LayoutResult = std::variant<SpeakerLayout, std::string>;
 // Returns LayoutResult with SpeakerLayout on success, std::string error on failure.
 LayoutResult load_layout(const std::string& yaml_path);
 
+// Serialise a speaker layout to a YAML file readable by load_layout().
+// Writes Cartesian x/y/z (the stored geometry) at full float precision so
+// load_layout(save_layout(L)) round-trips the speakers exactly. Returns true on
+// success, false on any I/O failure. Control-thread only (does file I/O).
+bool save_layout(const SpeakerLayout& layout, const std::string& yaml_path);
+
 // Convenience: returns true if result holds a SpeakerLayout.
 inline bool is_ok(const LayoutResult& r) {
     return std::holds_alternative<SpeakerLayout>(r);

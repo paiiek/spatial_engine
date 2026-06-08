@@ -5,12 +5,24 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <fstream>
+#include <limits>
 #include <sstream>
 
 namespace spe::geometry {
 
 static std::string make_error(const std::string& msg) {
     return msg;
+}
+
+static const char* regularity_to_string(Regularity r) {
+    switch (r) {
+        case Regularity::LINEAR:      return "LINEAR";
+        case Regularity::CIRCULAR:    return "CIRCULAR";
+        case Regularity::PLANAR_GRID: return "PLANAR_GRID";
+        case Regularity::IRREGULAR:   break;
+    }
+    return "IRREGULAR";
 }
 
 LayoutResult load_layout(const std::string& yaml_path) {
@@ -104,6 +116,31 @@ LayoutResult load_layout(const std::string& yaml_path) {
     if (layout.speakers.empty()) return make_error(kErrMissingSpeakers);
 
     return layout;
+}
+
+bool save_layout(const SpeakerLayout& layout, const std::string& yaml_path) {
+    std::ofstream out(yaml_path, std::ios::trunc);
+    if (!out) return false;
+
+    // max_digits10 guarantees float values reload bit-exactly.
+    out.precision(std::numeric_limits<float>::max_digits10);
+
+    out << "version: \"" << (layout.version.empty() ? "1.0" : layout.version) << "\"\n";
+    out << "name: \"" << layout.name << "\"\n";
+    out << "regularity_hint: \"" << regularity_to_string(layout.regularity) << "\"\n";
+    out << "speakers:\n";
+    for (const auto& s : layout.speakers) {
+        // Cartesian form (x/y/z) preserves the stored geometry exactly; az/el is
+        // lossy on load (converted to x/y/z), so we never write it back.
+        out << "  - channel: " << s.channel << "\n";
+        out << "    x: " << s.x << "\n";
+        out << "    y: " << s.y << "\n";
+        out << "    z: " << s.z << "\n";
+        if (s.delay_ms != 0.f) out << "    delay_ms: " << s.delay_ms << "\n";
+        if (s.gain_db  != 0.f) out << "    gain_db: "  << s.gain_db  << "\n";
+    }
+    out.flush();
+    return static_cast<bool>(out);
 }
 
 }  // namespace spe::geometry
