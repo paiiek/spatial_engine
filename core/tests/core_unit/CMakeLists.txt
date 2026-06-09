@@ -116,6 +116,12 @@ add_executable(test_convergence_layout_slot_osc test_convergence_layout_slot_osc
 target_link_libraries(test_convergence_layout_slot_osc PRIVATE spe_core)
 add_test(NAME convergence_layout_slot_osc COMMAND test_convergence_layout_slot_osc)
 
+# Phase 4.3 Inc 3 — reprepareForLayout() is a byte-identical extraction of
+# prepareToPlay's has_layout_ branch: prepare vs prepare+reprep renders bit-for-bit.
+add_executable(test_convergence_reprepare_identical test_convergence_reprepare_identical.cpp)
+target_link_libraries(test_convergence_reprepare_identical PRIVATE spe_core)
+add_test(NAME convergence_reprepare_identical COMMAND test_convergence_reprepare_identical)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)

@@ -523,6 +523,71 @@ void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const
     snap_reader_busy_idx_.store(-1, std::memory_order_release);
 }
 
+// Phase 4.3 Inc 3 — layout-dependent (re)preparation, extracted verbatim from
+// prepareToPlay's has_layout_ branch (code-motion only, byte-identical). Pure
+// control-thread work: allocates renderer/scratch/limiter state sized to the
+// CURRENT layout_. Reads sample_rate_ / max_block_size_ members (the originals
+// were the prepareToPlay params, identical values). Inc 4's runtime layout swap
+// calls this after a quiescence handshake retires the audio callback, so reading
+// obj_cache_ and reallocating here is race-free. NOT callable from the audio thread.
+void SpatialEngine::reprepareForLayout() {
+    vbap_.prepareToPlay(layout_, sample_rate_);
+    dbap_.prepareToPlay(layout_, sample_rate_);
+    wfs_.prepareToPlay(layout_, sample_rate_); // F5-M3b: leaves WFS lazy (unallocated)
+    // F5-M3b safety net: prepareToPlay leaves WFS delay lines unallocated. If
+    // a prior session already routed an object to WFS (obj_cache_ persists
+    // across a re-prepare / layout reload), re-allocate now so that object is
+    // not silently muted. Audio is stopped during prepare → reading obj_cache_
+    // is safe; at first-ever prepare all objects are VBAP so this is a no-op.
+    for (const auto& oc : obj_cache_)
+        if (oc.algo == ipc::Algorithm::WFS) { wfs_.ensureAllocated(); break; }
+    ambisonic_.applyPendingDecoderTypeChange(); // apply any pending type before prepare
+    applyPendingBinauralSofa(); // B-M3: apply any pending catalog SOFA swap before prepare
+    ambisonic_.prepareToPlay(layout_, sample_rate_);
+    vap_.prepareToPlay(layout_, sample_rate_);
+    const int n_spk = vbap_.numSpeakers();
+    const size_t total = static_cast<size_t>(n_spk) * max_block_size_;
+    mix_buf_.assign(total, 0.f);
+    vbap_scratch_.assign(total, 0.f);
+    dbap_scratch_.assign(total, 0.f);
+    wfs_scratch_.assign(total, 0.f);
+    ambisonic_scratch_.assign(total, 0.f);
+    vap_scratch_.assign(total, 0.f);
+    // Per-channel noise generator state (one entry per speaker output).
+    // Size > 1 avoids OOB if a /noise/{ch}/* command arrives before layout.
+    noise_chans_.assign(static_cast<size_t>(std::max(n_spk, 1)), NoiseChan{});
+
+    // ⑥b/⑥e — initialise the 8 late FDN line gain vectors. The authoritative
+    // gains are recomputed every block in audioBlock via computeLateFdnGains()
+    // with the live source-energy opp-bias; this control-thread call seeds them
+    // with the reference no-energy default (opp = +up, minimum diffuse) so the
+    // member is valid before the first room block. Native analytic VBAP, same
+    // elevation-aware core the renderers use. room_ready_ gates the RT reads.
+    computeLateFdnGains(iae::Vec3{ 0.f, 1.f, 0.f }, iae::kLateDiffuseMin, n_spk);
+    room_ready_ = true;
+
+    // Per-speaker time-alignment: delay lines + gain scalars
+    spk_delays_.resize(static_cast<size_t>(n_spk));
+    spk_gain_lin_.resize(static_cast<size_t>(n_spk));
+    spk_delay_samples_.resize(static_cast<size_t>(n_spk));
+    for (int i = 0; i < n_spk; ++i) {
+        spk_delays_[static_cast<size_t>(i)].prepareToPlay(sample_rate_);
+        const float gain_db = (i < static_cast<int>(layout_.speakers.size()))
+            ? layout_.speakers[static_cast<size_t>(i)].gain_db : 0.f;
+        spk_gain_lin_[static_cast<size_t>(i)] = std::pow(10.f, gain_db / 20.f);
+        const float delay_ms = (i < static_cast<int>(layout_.speakers.size()))
+            ? layout_.speakers[static_cast<size_t>(i)].delay_ms : 0.f;
+        spk_delay_samples_[static_cast<size_t>(i)] =
+            delay_ms * 0.001f * static_cast<float>(sample_rate_);
+    }
+
+    // Per-channel limiters
+    spk_limiters_.assign(static_cast<size_t>(n_spk), spe::dsp::ChannelLimiter{});
+    for (auto& lim : spk_limiters_) lim.prepare(sample_rate_);
+
+    render_ready_.store(true);
+}
+
 void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     sample_rate_    = sample_rate;
     max_block_size_ = max_block_size;
@@ -546,61 +611,11 @@ void SpatialEngine::prepareToPlay(double sample_rate, int max_block_size) {
     }
 
     if (has_layout_) {
-        vbap_.prepareToPlay(layout_, sample_rate);
-        dbap_.prepareToPlay(layout_, sample_rate);
-        wfs_.prepareToPlay(layout_, sample_rate); // F5-M3b: leaves WFS lazy (unallocated)
-        // F5-M3b safety net: prepareToPlay leaves WFS delay lines unallocated. If
-        // a prior session already routed an object to WFS (obj_cache_ persists
-        // across a re-prepare / layout reload), re-allocate now so that object is
-        // not silently muted. Audio is stopped during prepare → reading obj_cache_
-        // is safe; at first-ever prepare all objects are VBAP so this is a no-op.
-        for (const auto& oc : obj_cache_)
-            if (oc.algo == ipc::Algorithm::WFS) { wfs_.ensureAllocated(); break; }
-        ambisonic_.applyPendingDecoderTypeChange(); // apply any pending type before prepare
-        applyPendingBinauralSofa(); // B-M3: apply any pending catalog SOFA swap before prepare
-        ambisonic_.prepareToPlay(layout_, sample_rate);
-        vap_.prepareToPlay(layout_, sample_rate);
-        const int n_spk = vbap_.numSpeakers();
-        const size_t total = static_cast<size_t>(n_spk) * max_block_size;
-        mix_buf_.assign(total, 0.f);
-        vbap_scratch_.assign(total, 0.f);
-        dbap_scratch_.assign(total, 0.f);
-        wfs_scratch_.assign(total, 0.f);
-        ambisonic_scratch_.assign(total, 0.f);
-        vap_scratch_.assign(total, 0.f);
-        // Per-channel noise generator state (one entry per speaker output).
-        // Size > 1 avoids OOB if a /noise/{ch}/* command arrives before layout.
-        noise_chans_.assign(static_cast<size_t>(std::max(n_spk, 1)), NoiseChan{});
-
-        // ⑥b/⑥e — initialise the 8 late FDN line gain vectors. The authoritative
-        // gains are recomputed every block in audioBlock via computeLateFdnGains()
-        // with the live source-energy opp-bias; this control-thread call seeds them
-        // with the reference no-energy default (opp = +up, minimum diffuse) so the
-        // member is valid before the first room block. Native analytic VBAP, same
-        // elevation-aware core the renderers use. room_ready_ gates the RT reads.
-        computeLateFdnGains(iae::Vec3{ 0.f, 1.f, 0.f }, iae::kLateDiffuseMin, n_spk);
-        room_ready_ = true;
-
-        // Per-speaker time-alignment: delay lines + gain scalars
-        spk_delays_.resize(static_cast<size_t>(n_spk));
-        spk_gain_lin_.resize(static_cast<size_t>(n_spk));
-        spk_delay_samples_.resize(static_cast<size_t>(n_spk));
-        for (int i = 0; i < n_spk; ++i) {
-            spk_delays_[static_cast<size_t>(i)].prepareToPlay(sample_rate);
-            const float gain_db = (i < static_cast<int>(layout_.speakers.size()))
-                ? layout_.speakers[static_cast<size_t>(i)].gain_db : 0.f;
-            spk_gain_lin_[static_cast<size_t>(i)] = std::pow(10.f, gain_db / 20.f);
-            const float delay_ms = (i < static_cast<int>(layout_.speakers.size()))
-                ? layout_.speakers[static_cast<size_t>(i)].delay_ms : 0.f;
-            spk_delay_samples_[static_cast<size_t>(i)] =
-                delay_ms * 0.001f * static_cast<float>(sample_rate);
-        }
-
-        // Per-channel limiters
-        spk_limiters_.assign(static_cast<size_t>(n_spk), spe::dsp::ChannelLimiter{});
-        for (auto& lim : spk_limiters_) lim.prepare(sample_rate);
-
-        render_ready_.store(true);
+        // Phase 4.3 Inc 3 — all layout-dependent (re)preparation extracted into
+        // reprepareForLayout() so a runtime layout swap (Inc 4) can re-run EXACTLY
+        // this work off the audio thread after quiescing. Uses sample_rate_ /
+        // max_block_size_ members (set above) → byte-identical to the inline form.
+        reprepareForLayout();
     } else {
         // Provide minimum noise capacity (1 channel) so OSC commands don't OOB.
         if (noise_chans_.empty()) noise_chans_.resize(1);

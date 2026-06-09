@@ -366,6 +366,14 @@ public:
     // Mirrors applyPendingAmbiDecoderChange() in cadence and threading contract.
     void applyPendingBinauralSofa();
 
+    // Phase 4.3 Inc 3 — layout-dependent (re)preparation, extracted verbatim from
+    // prepareToPlay's has_layout_ branch (byte-identical code-motion). Sizes the
+    // renderer/scratch/limiter/per-speaker state to the CURRENT layout_ using the
+    // sample_rate_ / max_block_size_ members. CONTROL-THREAD ONLY — the caller MUST
+    // ensure the audio callback is stopped/quiesced first (prepareToPlay calls it
+    // pre-start; Inc 4's runtime swap calls it behind a quiescence handshake).
+    void reprepareForLayout();
+
     // Phase 4.3 Inc 2b — root directory for the 50-slot layout library. Set
     // BEFORE start() (mirrors setLayoutPath); the bin derives an XDG path, tests
     // pass a tmp dir. When unset (empty) applyPendingLayoutSlotOp() falls back to
