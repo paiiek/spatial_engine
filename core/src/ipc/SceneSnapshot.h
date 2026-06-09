@@ -24,6 +24,12 @@ struct ObjectSnapshot {
     float k_hf          = 0.5f;
     float user_delay_ms = 0.f;
     float eq_gain_db[4] = {0.f, 0.f, 0.f, 0.f};
+    // A3 — additive trailing per-object input→object route, carried ONLY by the
+    // /sys/state_request resync dump (NOT by toJson/fromJson → scenes stay
+    // byte-identical, exactly the C6 k_hf/user_delay_ms/eq_gain_db pattern;
+    // F-A3-persist owns the scene-JSON keys later). Defaults match ObjCache.
+    int32_t input_src_ch = -1;
+    float   input_gain   = 1.f;
 };
 
 struct SceneSnapshot {

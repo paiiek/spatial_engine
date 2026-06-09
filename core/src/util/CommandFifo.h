@@ -43,6 +43,11 @@ struct QueuedCmd {
     float    xyz_z     = 0.f;   // ObjXYZ Cartesian z
     float    width_rad = 0.f;   // ObjWidth source width in radians
     char     obj_name[32] = {}; // ObjName label (truncated, null-terminated)
+    // A3 — input→object routing (ObjInput). src_ch=-1 ⇒ default 1:1 (use obj
+    // index i); gain is a linear input trim. int32_t mirrors PayloadObjInput so
+    // the drain apply is a direct int32←int32 assign (no narrowing). POD-safe.
+    int32_t  input_src_ch = -1;
+    float    input_gain   = 1.f;
 };
 
 // SPSC ring buffer. T defaults to QueuedCmd so the existing audio-path

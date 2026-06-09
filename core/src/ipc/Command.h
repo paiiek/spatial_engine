@@ -35,6 +35,7 @@ enum class CommandTag : uint8_t {
     ObjActiveAdm = 0x07,  // /adm/obj/n/active ,i  — active flag (ADM-OSC)
     ObjWidth     = 0x08,  // /adm/obj/n/width ,f   — source width in radians
     ObjName      = 0x09,  // /adm/obj/n/name ,s    — source label
+    ObjInput     = 0x0A,  // /obj/input ,iiiif schema seq obj_id src_ch gain — input→object routing (A3); logical payload is (obj_id,src_ch,gain), same schema/seq-prefixed wire as /obj/dsp
 
     // System
     SysHandshake  = 0x10, // /sys/handshake — client sends schema_version
@@ -260,6 +261,18 @@ struct PayloadObjDsp {
     float    value  = 0.f;
 };
 
+// A3 — input→object routing. Mirrors PayloadObjDsp's ,iif obj_id <int> <float>
+// template. src_ch is the input channel index to feed into object obj_id; the
+// sentinel -1 means "use the object index i" (the default 1:1 mapping). gain is
+// a linear input trim applied at the dry-source copy stage (unclamped — negative
+// = phase invert, matching PayloadObjGain). src_ch < live input_channel_count is
+// enforced at RENDER time (the live count is unknown at decode time).
+struct PayloadObjInput {
+    uint32_t obj_id = 0;
+    int32_t  src_ch = -1;
+    float    gain   = 1.f;
+};
+
 struct PayloadOutputGain {
     uint32_t channel = 0;
     float    gain_db = 0.f;
@@ -349,6 +362,7 @@ using CommandPayload = std::variant<
     PayloadTransportPlay,
     PayloadTransportStop,
     PayloadObjDsp,
+    PayloadObjInput,
     PayloadReverbSelect,
     PayloadOutputGain,
     PayloadOutputLimit,

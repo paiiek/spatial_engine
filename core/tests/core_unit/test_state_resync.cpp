@@ -204,6 +204,22 @@ static void dDsp(core::SpatialEngine& e, uint32_t id, uint8_t param, float v) {
     c.payload = p;
     e.dispatchCommand(c);
 }
+static void dInput(core::SpatialEngine& e, uint32_t id, int32_t src, float gain) {
+    Command c;
+    c.tag = CommandTag::ObjInput;
+    PayloadObjInput p;
+    p.obj_id = id;
+    p.src_ch = src;
+    p.gain   = gain;
+    c.payload = p;
+    e.dispatchCommand(c);
+}
+static void dReset(core::SpatialEngine& e) {
+    Command c;
+    c.tag = CommandTag::SysReset;
+    c.payload = PayloadSysReset{};
+    e.dispatchCommand(c);
+}
 static void dStateRequest(core::SpatialEngine& e, uint32_t token) {
     Command c;
     c.tag = CommandTag::SysStateRequest;
@@ -736,6 +752,67 @@ static void test_t10_pure_dsp_inactive() {
     std::puts("PASS test_t10_pure_dsp_inactive");
 }
 
+// ── T11 — A3 input routing in the resync dump (/adm/obj/N/input ,if) ──────────
+// The C6 "client reconciles EXACTLY to obj_cache_" invariant must hold for the
+// new authoritative routing fields: a pure-routing object IS dumped, the packet
+// carries int-slot=src_ch + float-slot=gain, and after /sys/reset the route is
+// cleared so the object is no longer dumped.
+static void test_t11_input_routing_resync() {
+    core::SpatialEngine engine(0);
+    engine.prepareToPlay(48000.0, AudioRig::FRAMES);
+    engine.oscBackend().echoPlane().open();
+
+    AudioRig rig;
+    // Object 4: ONLY a non-default input route (no move) → pure-routing object.
+    dInput(engine, 4, /*src*/ 1, /*gain*/ 2.0f);
+    rig.pump(engine);
+    {
+        const auto r = engine.objInputRouteAt(4);
+        assert(r.src_ch == 1 && std::fabs(r.gain - 2.0f) < 1e-6f);
+    }
+
+    RxSock rx = bindRx();
+    engine.oscBackend().echoPlane().addSubscriber(
+        loopbackNet(), rx.port, EchoPlane::kEchoSubscriberTag, 0);
+
+    std::vector<ipc::ObjectSnapshot> buf;
+    engine.snapshotObjects(buf, /*include_dsp_only=*/true);
+    // Pure-routing object IS present in the dump (touched-predicate coverage).
+    bool present = false;
+    for (const auto& o : buf) if (o.id == 4) present = true;
+    assert(present);
+
+    const int sfd = makeSendSock();
+    engine.oscBackend().echoPlane().emitStateDump(buf, 0, sfd);
+
+    OscMsg msgs[16];
+    const int cnt = drainAll(rx.fd, msgs, 16);
+    const OscMsg* in4 = findAddr(msgs, cnt, "/adm/obj/4/input");
+    assert(in4 && std::strcmp(in4->types, ",if") == 0);
+    // Authoritative wire order: int slot = src_ch, float slot = gain.
+    assert(in4->ni == 1 && in4->i[0] == 1);
+    assert(in4->nf == 1 && std::fabs(in4->f[0] - 2.0f) < 1e-4f);
+
+    // /sys/reset clears the route → object no longer dumped, no /input packet.
+    dReset(engine);
+    rig.pump(engine);
+    {
+        const auto r = engine.objInputRouteAt(4);
+        assert(r.src_ch == -1 && std::fabs(r.gain - 1.0f) < 1e-6f);
+    }
+    std::vector<ipc::ObjectSnapshot> buf2;
+    engine.snapshotObjects(buf2, true);
+    for (const auto& o : buf2) assert(o.id != 4);
+    engine.oscBackend().echoPlane().emitStateDump(buf2, 0, sfd);
+    OscMsg msgs2[16];
+    const int cnt2 = drainAll(rx.fd, msgs2, 16);
+    assert(findAddr(msgs2, cnt2, "/adm/obj/4/input") == nullptr);
+
+    ::close(sfd);
+    ::close(rx.fd);
+    std::puts("PASS test_t11_input_routing_resync");
+}
+
 int main() {
     std::puts("test_state_resync: C6 /sys/state_request full-state resync");
     test_t1_happy_reconcile();
@@ -747,6 +824,7 @@ int main() {
     test_t7_no_subscriber_noop();
     test_t9_sustained_frequency();
     test_t10_pure_dsp_inactive();
+    test_t11_input_routing_resync();
     std::puts("test_state_resync: ALL PASS");
     return 0;
 }

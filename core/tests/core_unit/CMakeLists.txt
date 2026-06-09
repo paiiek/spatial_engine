@@ -311,6 +311,15 @@ add_executable(test_state_resync test_state_resync.cpp)
 target_link_libraries(test_state_resync PRIVATE spe_core Threads::Threads)
 add_test(NAME state_resync COMMAND test_state_resync)
 
+# v0.9 Lane 6 (A3): per-object input→object audio routing (remap + per-route
+# gain + fan-out) + decoder unit. Loads configs/lab_8ch.yaml for a real layout
+# so the render-loop audio assertions are non-silent. Inherits -UNDEBUG (top).
+add_executable(test_a3_input_routing test_a3_input_routing.cpp)
+target_link_libraries(test_a3_input_routing PRIVATE spe_core)
+target_compile_definitions(test_a3_input_routing PRIVATE
+    SPE_CONFIGS_DIR="${SPE_CONFIGS_DIR}")
+add_test(NAME a3_input_routing COMMAND test_a3_input_routing "${SPE_CONFIGS_DIR}")
+
 # Phase C3: ADM-OSC v1.0 compatibility tests (new tags, round-trip, cross-prefix)
 add_executable(test_p_adm_osc_v1_compat test_p_adm_osc_v1_compat.cpp)
 target_link_libraries(test_p_adm_osc_v1_compat PRIVATE spe_core Threads::Threads)

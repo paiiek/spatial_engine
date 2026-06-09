@@ -348,6 +348,17 @@ public:
     }
     size_t objCacheSize() const noexcept { return obj_cache_.size(); }
 
+    // A3 (test introspection) — per-object input→object route from obj_cache_.
+    // Primary state proof for the routing tests: proves decode→drain→cache
+    // directly. NOT RT-safe; returns the default {-1, 1.0} on OOB.
+    struct InputRoute { int32_t src_ch; float gain; };
+    InputRoute objInputRouteAt(size_t obj) const noexcept {
+        return (obj < obj_cache_.size())
+                   ? InputRoute{obj_cache_[obj].input_src_ch,
+                                obj_cache_[obj].input_gain}
+                   : InputRoute{-1, 1.f};
+    }
+
     // F4b: consistent control-thread snapshot of authoritative object state into
     // scene ObjectSnapshots. Synchronized via the three-buffer published_index_
     // handshake; safe to call from the control loop concurrently with the RT
@@ -423,6 +434,14 @@ private:
         // 4-band EQ gain (dB) — freq/Q stay at PerObjectChain defaults
         std::array<float, 4> eq_gain_db{0.f, 0.f, 0.f, 0.f};
         float width_rad = 0.f;  // source spread in radians (0 = point source)
+        // A3 — input→object routing. input_src_ch=-1 ⇒ default 1:1 (object i ←
+        // input channel i, byte-identical to the legacy --object-source input);
+        // input_gain is a linear input trim applied at the dry-source copy stage.
+        // int32_t (NOT int16) avoids the wrap mis-route class; both ride the
+        // fixed snap_buf_ copy. /sys/reset → obj_cache_.fill(ObjCache{}) restores
+        // these defaults for free.
+        int32_t input_src_ch = -1;
+        float   input_gain   = 1.f;
     };
     std::array<ObjCache, MAX_OBJECTS> obj_cache_{};
 

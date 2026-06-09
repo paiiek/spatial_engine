@@ -335,6 +335,22 @@ void EchoPlane::emitStateDump(const std::vector<ObjectSnapshot>& objs,
             buildAndSend(addr, ",if", &value, 1, &param_id, 1, nullptr, now_ms,
                          send_fd);
         }
+
+        // /adm/obj/N/input ,if <src_ch:int> <gain:float> — A3 input→object route.
+        // Emitted only for a non-default route so the resync dump reconciles
+        // EXACTLY to obj_cache_ (C6 invariant). Type-tag ",if" ⇒ WIRE order is
+        // int src_ch first, float gain second — the SAME slot mapping as the dsp
+        // emit above (int=param_id, float=value). buildAndSend's C++ params are
+        // (float_array, n_float, int_array, n_int) but it serializes per the
+        // type-tag, so passing &gain as the float arg and &src as the int arg
+        // yields wire [int src_ch][float gain].
+        if (o.input_src_ch != -1 || o.input_gain != 1.f) {
+            std::snprintf(addr, sizeof(addr), "/adm/obj/%u/input", oid);
+            int   src  = o.input_src_ch;
+            float gain = o.input_gain;
+            buildAndSend(addr, ",if", &gain, 1, &src, 1, nullptr, now_ms,
+                         send_fd);
+        }
     }
 
     // /sys/state ,i <count> — completion sentinel (ReplyTag::StateUpdate=0x03).

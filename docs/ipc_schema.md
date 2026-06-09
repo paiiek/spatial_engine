@@ -50,6 +50,44 @@ Switch rendering algorithm for one object.
 Triggers a 256-sample crossfade on the audio thread (ADR 0006). If `(layout, algo)` pair
 is incompatible, core sends `/sys/warning type=layout_incompatible` and ignores the swap.
 
+#### `/obj/input`
+
+A3 (v0.9 Lane 6) — per-object input→object routing. Route an input channel into one
+object with a per-route linear gain (input trim), enabling channel remap and many-to-one
+fan-out. Only meaningful when the engine runs `--object-source input`. A native `/obj/*`
+command (alongside `/obj/gain`, `/obj/dsp`), distinct from the ADM `/adm/obj/n/*` family.
+
+```
+/obj/input  ,iif
+            obj_id  src_ch  gain
+```
+
+On the wire, native `/obj/*` commands carry the `schema_version`+`seq` int prefix, so the
+full datagram is `,iiiif schema_version seq obj_id src_ch gain` (same convention as
+`/obj/dsp`).
+
+| Arg | Type | Notes |
+|-----|------|-------|
+| `obj_id` | i (int32) | Target object index `[0, MAX_OBJECTS)`; out-of-range dropped at the drain. |
+| `src_ch` | i (int32) | Input channel to feed into the object. **`-1`** = default 1:1 (object `i` ← input channel `i`) and the reset value. `src_ch >= -1` required (else the packet is rejected as Unknown). |
+| `gain`   | f (float32) | Linear input trim, **unclamped** (negative = phase invert, matching `/obj/gain`). Default `1.0` = unity. |
+
+Semantics:
+
+- **Block-stepped gain** — `gain` is applied as a per-block scalar at the dry-source copy
+  stage (it changes only at block boundaries when the command FIFO drains), composing
+  multiplicatively with the per-object `gain_lin`. Consistent with `gain_lin`'s
+  `ramp_samples=0` step; no new click class.
+- **Out-of-range `src_ch`** (>= the live `input_channel_count`) falls through to the
+  object's internal **sine** test tone and silently ignores `gain` — the legacy fallback.
+- **Default route is byte-identical** to the previous 1:1 behaviour (`in[n]*1.0f == in[n]`).
+  `/sys/reset` clears every object's route to the default.
+- **Deferred:** live per-change echo (F-A3-echo) and scene-JSON persistence (F-A3-persist).
+
+The full-state resync dump (`/sys/state_request`) re-emits a non-default route as the
+**outbound** echo `/adm/obj/N/input ,if <src_ch:int> <gain:float>` (type-tag `,if` ⇒ int
+slot = `src_ch`, float slot = `gain`), so a client reconciles EXACTLY to the engine state.
+
 ### Noise Generator Commands
 
 #### `/noise/{channel}/type`
