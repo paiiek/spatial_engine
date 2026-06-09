@@ -35,6 +35,7 @@ enum class CommandTag : uint8_t {
     ObjActiveAdm = 0x07,  // /adm/obj/n/active ,i  — active flag (ADM-OSC)
     ObjWidth     = 0x08,  // /adm/obj/n/width ,f   — source width in radians
     ObjName      = 0x09,  // /adm/obj/n/name ,s    — source label
+    ObjInput     = 0x0A,  // /obj/input ,iiiif schema seq obj_id src_ch gain — input→object routing (A3); logical payload is (obj_id,src_ch,gain), same schema/seq-prefixed wire as /obj/dsp
 
     // System
     SysHandshake  = 0x10, // /sys/handshake — client sends schema_version
@@ -50,6 +51,7 @@ enum class CommandTag : uint8_t {
     SysBinauralMode    = 0x19, // /sys/binaural_mode ,i {0|1} — 0 = B1 Direct, 1 = B2 AmbiVS (v0.5 P4)
     SysBinauralResetDemote = 0x1A, // /sys/binaural_reset_demote ,i {0|1} — v0.7 D-S1 user hatch
     SysBinauralSofaSelect  = 0x1B, // /sys/binaural_sofa_select ,s "<name>" — B-M3 catalog name → live SOFA swap
+    SysStateRequest        = 0x1C, // /sys/state_request ,i token — client asks for full-state resync (C6)
 
     // Heartbeat
     HbPing        = 0x20, // /hb/ping       — publisher → subscriber
@@ -259,6 +261,18 @@ struct PayloadObjDsp {
     float    value  = 0.f;
 };
 
+// A3 — input→object routing. Mirrors PayloadObjDsp's ,iif obj_id <int> <float>
+// template. src_ch is the input channel index to feed into object obj_id; the
+// sentinel -1 means "use the object index i" (the default 1:1 mapping). gain is
+// a linear input trim applied at the dry-source copy stage (unclamped — negative
+// = phase invert, matching PayloadObjGain). src_ch < live input_channel_count is
+// enforced at RENDER time (the live count is unknown at decode time).
+struct PayloadObjInput {
+    uint32_t obj_id = 0;
+    int32_t  src_ch = -1;
+    float    gain   = 1.f;
+};
+
 struct PayloadOutputGain {
     uint32_t channel = 0;
     float    gain_db = 0.f;
@@ -302,6 +316,13 @@ struct PayloadSysBinauralSofaSelect {
     std::string name;
 };
 
+// C6 — /sys/state_request ,i token. Client asks the engine to re-emit the
+// full authoritative object state (UDP-loss resync). token is an optional
+// client-chosen request id (0 when absent / legacy).
+struct PayloadSysStateRequest {
+    uint32_t token = 0;
+};
+
 struct PayloadUnknown {
     std::string address; // original OSC address for diagnostics
 };
@@ -341,6 +362,7 @@ using CommandPayload = std::variant<
     PayloadTransportPlay,
     PayloadTransportStop,
     PayloadObjDsp,
+    PayloadObjInput,
     PayloadReverbSelect,
     PayloadOutputGain,
     PayloadOutputLimit,
@@ -350,6 +372,7 @@ using CommandPayload = std::variant<
     PayloadSysBinauralMode,
     PayloadSysBinauralResetDemote,
     PayloadSysBinauralSofaSelect,
+    PayloadSysStateRequest,
     PayloadUnknown
 >;
 

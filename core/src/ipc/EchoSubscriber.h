@@ -6,12 +6,12 @@
 // transport message once per OSC-IO-thread "tick".
 //
 // Design (from M5 plan SS2):
-//   - Addresses echoed: /adm/obj/N/{aed,xyz,gain,mute,active,width,name}
+//   - Addresses echoed: /adm/obj/N/{aed,xyz,gain,mute,active,width,name,dsp}
 //     and /transport/{play,stop}.
 //   - Coalesce: same (obj_id, addr-enum) within one flush() call -> latest.
-//     Dirty-bit map: kEchoMaxObjects objects x 7 addresses (v0.9 Lane C:
-//     kEchoMaxObjects derives from spe::MAX_OBJECTS — 64 → 448 bits / 128 →
-//     896 bits).
+//     Dirty-bit map: kEchoMaxObjects objects x 8 addresses (v0.9 Lane C:
+//     kEchoMaxObjects derives from spe::MAX_OBJECTS — 64 → 512 bits / 128 →
+//     1024 bits).
 //   - Values: stored per (obj, addr) so flush() can re-emit without needing
 //     the audio-thread obj_cache_. Echo emits wire-level idempotent values
 //     (inbound values, not engine-internal spherical conversions).
@@ -28,17 +28,19 @@
 
 #include "core/Constants.h"
 #include "ipc/Command.h"
+#include "ipc/SceneSnapshot.h"  // C6 — ObjectSnapshot for emitStateDump
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
 namespace spe::ipc {
 
 // Number of echo address types per object.
-static constexpr int kEchoAddrCount = 7;
+static constexpr int kEchoAddrCount = 8;
 
 enum class EchoAddr : uint8_t {
     Aed    = 0,
@@ -48,6 +50,7 @@ enum class EchoAddr : uint8_t {
     Active = 4,
     Width  = 5,
     Name   = 6,
+    Dsp    = 7,
 };
 
 static constexpr std::size_t kMaxEchoSubscribers = 4;
@@ -68,6 +71,10 @@ struct EchoObjCache {
     int   active    = 0;
     float width_rad = 0.f;
     char  name[32]  = {};
+    // C7: per-object DSP echo values, indexed by ObjDsp param 0..6 (slot 7
+    // unused — width routes to /adm/obj/N/width). Values only; the dirty mask
+    // lives in EchoDirtyMap so dirty_.clear() resets it uniformly.
+    float dsp_value[8] = {};
 };
 
 // Dirty-bit map: bit[obj][addr] set when a pending echo exists.
@@ -77,11 +84,17 @@ struct EchoDirtyMap {
     static constexpr std::size_t kObjBytes     = (kTotalObjBits + 7) / 8;
 
     uint8_t obj_bits[kObjBytes] = {};
+    // C7: per-object DSP param dirty mask (bits 0..6; bit 7 unused since width
+    // routes to /adm/obj/N/width). Co-located with obj_bits so the single
+    // clear() resets ALL dirty state (flush-end, no-subscriber early return,
+    // close()) — no separate reset site can be missed.
+    uint8_t dsp_param_dirty[kEchoMaxObjects] = {};
     bool    transport_play      = false;
     bool    transport_stop      = false;
 
     void clear() noexcept {
         std::memset(obj_bits, 0, sizeof(obj_bits));
+        std::memset(dsp_param_dirty, 0, sizeof(dsp_param_dirty));
         transport_play = false;
         transport_stop = false;
     }
@@ -178,6 +191,15 @@ public:
         obj_cache_[obj_id].width_rad = width_rad;
         dirty_.mark(obj_id, EchoAddr::Width);
     }
+    // C7: per-object DSP echo. param 0..6 → /adm/obj/N/dsp ,if param value.
+    // param 7 (Width) is ignored here (no-op): width is single-sourced on
+    // /adm/obj/N/width via markWidth, so the mark site routes p7 there.
+    void markDsp(uint32_t obj_id, uint8_t param, float value) noexcept {
+        if (obj_id >= kEchoMaxObjects || param > 6) return;
+        obj_cache_[obj_id].dsp_value[param] = value;
+        dirty_.dsp_param_dirty[obj_id] |= static_cast<uint8_t>(1u << param);
+        dirty_.mark(obj_id, EchoAddr::Dsp);
+    }
     void markName(uint32_t obj_id, const char* name) noexcept {
         if (obj_id >= kEchoMaxObjects || !name) return;
         const std::size_t n = std::strlen(name) < 31 ? std::strlen(name) : 31;
@@ -192,6 +214,14 @@ public:
     // send_fd: OSCBackend's UDP socket fd (or -1 in tests for no-socket path).
     // now_ms: current wall-clock milliseconds.
     void flush(int64_t now_ms, int send_fd) noexcept;
+
+    // C6 — full-state resync. Re-emits each touched object on the existing echo
+    // addresses (aed/gain/active/width/dsp) to ALL active subscribers via the
+    // existing rate guard, then a single /sys/state ,i <count> completion
+    // sentinel. Does NOT touch the dirty map or the inbound echo obj_cache_
+    // (no coalesce). No-op when there are no subscribers.
+    void emitStateDump(const std::vector<ObjectSnapshot>& objs,
+                       int64_t now_ms, int send_fd) noexcept;
 
     // Accessors for tests.
     std::size_t subscriberCount() const noexcept {

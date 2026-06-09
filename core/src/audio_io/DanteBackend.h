@@ -9,9 +9,15 @@
 
 #pragma once
 
+#include <string>
 #include <vector>
 
 namespace spe::audio_io {
+
+// Enumerate available OUTPUT audio devices as "TypeName: DeviceName" strings.
+// Always declared; returns empty in a JUCE-free build or on a host with no
+// soundcard. (Used by --list-audio-devices.)
+std::vector<std::string> list_output_devices();
 
 /// JACK port → Dante channel mapping entry.
 struct DantePortMap {
@@ -46,10 +52,17 @@ struct DantePortDiscovery {
 
 namespace spe::audio_io {
 
+// DanteBackend is the generic JUCE AudioDeviceManager OUTPUT backend: it opens a
+// real soundcard (the system default, or a named device) and drives the engine
+// callback with the device's live output buffers. "Dante" is the production name
+// (the Dante virtual card is the default device in the lab); `--backend device`
+// + an explicit device name target any soundcard. See make_device_backend().
 class DanteBackend final : public AudioBackend,
                            public juce::AudioIODeviceCallback {
 public:
-    DanteBackend(double sample_rate, int requested_block_size);
+    // device_name: preferred output device (empty = system default).
+    DanteBackend(double sample_rate, int requested_block_size,
+                 std::string device_name = {});
     ~DanteBackend() override;
 
     int    outputChannelCount() const noexcept override { return out_channels_.load(); }
@@ -86,9 +99,16 @@ private:
     AudioCallback*      engine_callback_{nullptr};
     int                 requested_block_size_{64};
     double              requested_sample_rate_{48000.0};
+    std::string         requested_device_name_{};  // empty = system default
 
     util::XrunCounter   xruns_;
 };
+
+// Generic soundcard output backend: opens `device_name` (empty = default).
+// JUCE-only (needs AudioDeviceManager); the JUCE-free bin path falls back to null.
+std::unique_ptr<AudioBackend> make_device_backend(double sample_rate,
+                                                  int requested_block_size,
+                                                  std::string device_name = {});
 
 }  // namespace spe::audio_io
 

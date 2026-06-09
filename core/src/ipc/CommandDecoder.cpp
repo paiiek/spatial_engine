@@ -445,6 +445,13 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         PayloadSysBinauralResetDemote p;
         p.enable = (getInt(0) != 0);
         cmd.payload = p;
+    } else if (addr == "/sys/state_request") {
+        // C6: ,i token — client asks for a full-state resync. A bare ,i token
+        // (no seq/id prefix) decodes token as ints[0]; a no-arg variant → 0.
+        cmd.tag = CommandTag::SysStateRequest;
+        PayloadSysStateRequest p;
+        p.token = static_cast<uint32_t>(getInt(0));
+        cmd.payload = p;
     } else if (addr == "/hb/ping") {
         cmd.tag = CommandTag::HbPing;
         PayloadHbPing p;
@@ -558,6 +565,27 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
             p.obj_id = static_cast<uint32_t>(getInt(0));
             p.param  = static_cast<PayloadObjDsp::Param>(param_int);
             p.value  = getFloat(0);
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
+    } else if (addr == "/obj/input") {
+        // A3 — input→object routing. Native /obj/* command; mirrors /obj/dsp's
+        // ,iif obj_id <int> <float> shape and the same getInt/getFloat (which
+        // honour the seq/id payload_int_offset). Wire payload (after the
+        // optional schema_version+seq prefix): obj_id(i) src_ch(i) gain(f).
+        // Require the full ,iif payload (2 ints + 1 float beyond the prefix) and
+        // src_ch >= -1 (sentinel -1 = reset to default 1:1); gain is unclamped
+        // (negative = phase invert, matching ObjGain). The final src_ch <
+        // live input_channel_count bound is enforced at render time.
+        const int32_t src_ch = getInt(1);
+        if ((args.n_int - payload_int_offset) >= 2 && args.n_float >= 1 &&
+            src_ch >= -1) {
+            cmd.tag = CommandTag::ObjInput;
+            PayloadObjInput p;
+            p.obj_id = static_cast<uint32_t>(getInt(0));
+            p.src_ch = src_ch;
+            p.gain   = getFloat(0);
             cmd.payload = p;
         } else {
             makeUnknown();

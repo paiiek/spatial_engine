@@ -12,6 +12,10 @@ ADDR_HEARTBEAT_MISS = "/sys/heartbeat_miss"
 ADDR_METRICS = "/sys/metrics"
 
 # OSC addresses — UI → core
+# C6 — full-state UDP-loss resync. The client sends ,i token; the engine
+# re-emits every touched object on the /adm/obj/N/* echo addresses, then a
+# single /sys/state ,i <count> completion sentinel (ADDR_STATE above).
+ADDR_STATE_REQUEST = "/sys/state_request"     # ,i token
 ADDR_OBJECT_POS = "/object/{id}/pos"          # ,iff  id x z
 ADDR_OBJECT_SEQ = "/object/{id}/seq"          # appended to pos bundle
 ADDR_NOISE_TYPE = "/noise/{ch}/type"          # ,s  white|pink

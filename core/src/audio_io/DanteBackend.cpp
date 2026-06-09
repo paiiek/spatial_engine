@@ -36,14 +36,18 @@ bool DantePortDiscovery::validateChannelOrder(int /*channelCount*/) {
 
 namespace spe::audio_io {
 
-DanteBackend::DanteBackend(double sample_rate, int requested_block_size)
+DanteBackend::DanteBackend(double sample_rate, int requested_block_size,
+                           std::string device_name)
     : requested_block_size_(requested_block_size),
-      requested_sample_rate_(sample_rate) {}
+      requested_sample_rate_(sample_rate),
+      requested_device_name_(std::move(device_name)) {}
 
 DanteBackend::~DanteBackend() { stop(); }
 
 std::string DanteBackend::description() const {
-    return std::string("DanteBackend(rate=") + std::to_string(static_cast<int>(effective_sample_rate_.load()))
+    return std::string("DeviceBackend(dev=")
+        + (requested_device_name_.empty() ? "default" : requested_device_name_)
+        + ",rate=" + std::to_string(static_cast<int>(effective_sample_rate_.load()))
         + ",ch_out=" + std::to_string(out_channels_.load())
         + ",ch_in="  + std::to_string(in_channels_.load())
         + ",block="  + std::to_string(effective_block_size_.load()) + ")";
@@ -68,7 +72,8 @@ BackendError DanteBackend::start(AudioCallback* callback) {
                                           /*numOutputChannelsNeeded=*/8,
                                           /*savedState=*/nullptr,
                                           /*selectDefaultDeviceOnFailure=*/true,
-                                          /*preferredDefaultDeviceName=*/{},
+                                          /*preferredDefaultDeviceName=*/
+                                          juce::String(requested_device_name_),
                                           &setup);
     if (err.isNotEmpty()) {
         std::fprintf(stderr, "[DanteBackend] device init failed: %s\n", err.toRawUTF8());
@@ -160,6 +165,37 @@ std::unique_ptr<AudioBackend> make_dante_backend(double sample_rate,
     return std::make_unique<DanteBackend>(sample_rate, requested_block_size);
 }
 
+std::unique_ptr<AudioBackend> make_device_backend(double sample_rate,
+                                                  int requested_block_size,
+                                                  std::string device_name) {
+    return std::make_unique<DanteBackend>(sample_rate, requested_block_size,
+                                          std::move(device_name));
+}
+
+std::vector<std::string> list_output_devices() {
+    std::vector<std::string> out;
+    juce::AudioDeviceManager mgr;
+    juce::OwnedArray<juce::AudioIODeviceType> types;
+    mgr.createAudioDeviceTypes(types);
+    for (auto* t : types) {
+        if (t == nullptr) continue;
+        t->scanForDevices();
+        for (const auto& name : t->getDeviceNames(/*wantInputNames=*/false)) {
+            out.push_back((t->getTypeName() + ": " + name).toStdString());
+        }
+    }
+    return out;
+}
+
+}  // namespace spe::audio_io
+
+#else  // !SPE_HAVE_JUCE — no JUCE → no device enumeration / device backend
+
+#include "audio_io/DanteBackend.h"
+#include "audio_io/AudioBackend.h"
+
+namespace spe::audio_io {
+std::vector<std::string> list_output_devices() { return {}; }
 }  // namespace spe::audio_io
 
 #endif  // SPE_HAVE_JUCE

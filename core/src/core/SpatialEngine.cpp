@@ -89,6 +89,27 @@ SpatialEngine::SpatialEngine(int listen_port)
                     qc.obj_id    = p->obj_id;
                     qc.dsp_param = static_cast<uint8_t>(p->param);
                     qc.dsp_value = p->value;
+                    // C7 echo: param 7 (Width) shares c.width_rad with ObjWidth
+                    // (apply case 7 == ObjWidth's field), so route it to
+                    // markWidth → /adm/obj/N/width (the canonical width
+                    // address). params 0..6 echo on /adm/obj/N/dsp. A param-7
+                    // write produces NO /adm/obj/N/dsp packet.
+                    if (p->param == ipc::PayloadObjDsp::Param::Width)
+                        osc_backend_.echoPlane().markWidth(p->obj_id, p->value);
+                    else
+                        osc_backend_.echoPlane().markDsp(
+                            p->obj_id, static_cast<uint8_t>(p->param), p->value);
+                }
+                break;
+            case ipc::CommandTag::ObjInput:
+                // A3 — input→object routing. Mirror ObjDsp's translate: copy the
+                // route (src_ch / gain) into the QueuedCmd for the RT drain.
+                // F-A3-echo: deferred (no live per-change echo plane mark; the
+                // C6 /sys/state_request resync dump carries routing instead).
+                if (auto* p = std::get_if<ipc::PayloadObjInput>(&cmd.payload)) {
+                    qc.obj_id        = p->obj_id;
+                    qc.input_src_ch  = p->src_ch;
+                    qc.input_gain    = p->gain;
                 }
                 break;
             case ipc::CommandTag::SysReset:
@@ -294,6 +315,33 @@ SpatialEngine::SpatialEngine(int listen_port)
                     }
                 }
                 return;
+            case ipc::CommandTag::SysStateRequest: {
+                // C6 — full-state UDP-loss resync. Runs on the OSC IO thread.
+                // No audio FIFO enqueue (early-return group). Requires a prior
+                // echo /sys/handshake; a non-subscriber request is a no-op.
+                if (!osc_backend_.echoPlane().hasSubscribers()) return;
+                using clock = std::chrono::steady_clock;
+                const int64_t now_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        clock::now().time_since_epoch())
+                        .count();
+                // REV2 amendment #4: this GLOBAL debounce is correct ONLY while
+                // the dump is BROADCAST (one serviced request refreshes every
+                // subscriber). If a targeted-unicast emit is ever adopted, this
+                // MUST become per-subscriber or it silently suppresses another
+                // client's resync.
+                if (now_ms - last_state_request_ms_ < kStateRequestDebounceMs)
+                    return;  // Decision 6
+                last_state_request_ms_ = now_ms;
+                // REV4: include_dsp_only=true → pure-DSP inactive objects are
+                // dumped so the client reconciles EXACTLY to obj_cache_.
+                // /scene/save keeps the default false (byte-identical).
+                // Mutex-serialized inside snapshotObjects().
+                snapshotObjects(state_dump_buf_, /*include_dsp_only=*/true);
+                osc_backend_.echoPlane().emitStateDump(
+                    state_dump_buf_, now_ms, osc_backend_.udpFdForEcho());
+                return;
+            }
             default:
                 return;  // not queued
             }
@@ -311,7 +359,11 @@ SpatialEngine::SpatialEngine(int listen_port)
             }
         },
         listen_port)
-{}
+{
+    // C6 (Decision 3) — pre-reserve the resync dump buffer so steady-state
+    // /sys/state_request handling allocates nothing (not the audio thread).
+    state_dump_buf_.reserve(MAX_OBJECTS);
+}
 
 SpatialEngine::~SpatialEngine() {
     osc_backend_.stop();
@@ -325,7 +377,11 @@ void SpatialEngine::setLayout(spe::geometry::SpeakerLayout layout) {
 // F4b — consistent control-thread snapshot of obj_cache_ via the three-buffer
 // published_index_ handshake (retry-until-stable seqlock reader). NOT RT-safe;
 // called from the control loop only. See SpatialEngine.h for the mechanism.
-void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const {
+void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out,
+                                    bool include_dsp_only) const {
+    // C6 (REV2 amendment #1) — serialize the two non-RT readers (scene-save @
+    // control loop + state_request @ OSC IO). The audio writer never locks.
+    std::lock_guard<std::mutex> lk(state_snapshot_mtx_);
     // AC8 — algo enum ↔ ObjectSnapshot.algorithm (int) round-trip is a plain
     // static_cast in both directions; assert each variant survives compile-time.
     static_assert(static_cast<int>(ipc::Algorithm::VBAP)      == 0, "VBAP enum value");
@@ -359,13 +415,30 @@ void SpatialEngine::snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         const ObjCache& c = local[static_cast<std::size_t>(i)];
         // Emit objects driven at least once: any non-default field, or active.
-        const bool touched = c.active || c.az != 0.f || c.el != 0.f || c.dist != 1.f ||
-                             c.gain_lin != 1.f || c.reverb_send != 0.f || c.width_rad != 0.f ||
-                             c.algo != ipc::Algorithm::VBAP;
+        // C6 (REV4): when include_dsp_only, also catch objects whose ONLY
+        // non-default state is a per-object DSP param (EQ band / user delay /
+        // k_hf) so the resync dump reconciles EXACTLY to obj_cache_. The clause
+        // is gated on the flag, so /scene/save (default false) is unchanged.
+        const bool touched =
+            c.active || c.az != 0.f || c.el != 0.f || c.dist != 1.f ||
+            c.gain_lin != 1.f || c.reverb_send != 0.f || c.width_rad != 0.f ||
+            c.algo != ipc::Algorithm::VBAP ||
+            (include_dsp_only &&
+             (c.k_hf != 0.5f || c.user_delay_ms != 0.f ||
+              c.eq_gain_db[0] != 0.f || c.eq_gain_db[1] != 0.f ||
+              c.eq_gain_db[2] != 0.f || c.eq_gain_db[3] != 0.f ||
+              // A3 — a pure-routing object (only a non-default input route) is
+              // dumped on resync so the dump reconciles EXACTLY to obj_cache_;
+              // gated on include_dsp_only so /scene/save stays unchanged.
+              c.input_src_ch != -1 || c.input_gain != 1.f));
         if (!touched) continue;
         out.push_back(ipc::ObjectSnapshot{ /*id*/ i, c.az, c.el, c.dist,
                                            static_cast<int>(c.algo), c.gain_lin,
-                                           /*muted*/ !c.active, c.width_rad, c.reverb_send });
+                                           /*muted*/ !c.active, c.width_rad, c.reverb_send,
+                                           c.k_hf, c.user_delay_ms,
+                                           {c.eq_gain_db[0], c.eq_gain_db[1],
+                                            c.eq_gain_db[2], c.eq_gain_db[3]},
+                                           c.input_src_ch, c.input_gain });
     }
     // Release the claim so the writer may reuse this buffer once it publishes
     // elsewhere. (After this point we no longer touch snap_buf_[idx].)
@@ -554,6 +627,12 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             case ipc::CommandTag::ObjGain:
                 c.gain_lin = qc.gain;
                 break;
+            case ipc::CommandTag::ObjInput:
+                // A3 — apply the input→object route. Direct int32←int32 assign
+                // (no narrowing cast); RT-safe (no alloc/lock/syscall).
+                c.input_src_ch = qc.input_src_ch;
+                c.input_gain   = qc.input_gain;
+                break;
             case ipc::CommandTag::ObjActive:
                 c.active = qc.active;
                 break;
@@ -696,7 +775,24 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         }
     }
 
-    // Generate per-object sine tones (RT-safe: no alloc, uses std::sin)
+    // Per-object dry signal source (RT-safe: no alloc). Default = internal sine
+    // tones; when object-source=input is selected AND the backend supplies input
+    // channels, route an input channel → object i so a real musical source
+    // (e.g. a stem over the shm ring) flows through the per-object DSP + panner.
+    //
+    // A3 — per-object input→object routing: object i reads input channel
+    //   src = (c.input_src_ch >= 0) ? c.input_src_ch : i
+    // (the sentinel -1 keeps the legacy 1:1 mapping), scaled by c.input_gain (a
+    // linear input trim, block-stepped). The default route (-1, 1.0) makes
+    // in[n]*1.0f byte-identical to the old std::copy. An out-of-range/null src
+    // (e.g. a static misconfig) falls through to the object's sine test tone AND
+    // silently ignores input_gain — exactly the legacy fallback semantics. Many-
+    // to-one fan-out is just independent reads of one input pointer. RT-safe:
+    // bounds-checked index + a multiply loop, no alloc/lock/syscall.
+    const bool use_input =
+        object_source_input_.load(std::memory_order_relaxed)
+        && block.input_channels != nullptr
+        && block.input_channel_count > 0;
     const float dt = 1.0f / static_cast<float>(sample_rate_);
     for (int i = 0; i < MAX_OBJECTS; ++i) {
         auto& scratch = dry_scratch_[static_cast<size_t>(i)];
@@ -705,7 +801,20 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
             std::fill(scratch.begin(), scratch.begin() + block.num_frames, 0.0f);
             continue;
         }
-        // Unique frequency per object: 110, 165, 220, 275, 330 ... Hz
+        const int src = (c.input_src_ch >= 0) ? c.input_src_ch : i;
+        if (use_input && src < block.input_channel_count
+                && block.input_channels[src] != nullptr) {
+            // Real source: scaled copy of input channel `src` into object i's dry
+            // buf. Default route (src=i, gain=1) ⇒ in[n]*1.0f == in[n] (the old
+            // std::copy, byte-identical). g is block-stepped (changes only at the
+            // drain), consistent with the ramp_samples=0 per-object gain.
+            const float  g  = c.input_gain;
+            const float* in = block.input_channels[src];
+            for (int n = 0; n < block.num_frames; ++n)
+                scratch[static_cast<size_t>(n)] = in[n] * g;
+            continue;
+        }
+        // Internal sine tone — unique frequency per object: 110, 165, 220, 275 … Hz
         float freq  = 110.0f * (1 + static_cast<float>(i) * 0.5f);
         float omega = 2.0f * static_cast<float>(M_PI) * freq * dt;
         float phase = osc_phases_[static_cast<size_t>(i)];

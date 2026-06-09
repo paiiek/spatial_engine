@@ -29,6 +29,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 namespace spe::core {
@@ -213,6 +214,15 @@ public:
     void setTransportPlay(bool play) noexcept { transport_play_.store(play); }
     bool isTransportPlaying() const noexcept  { return transport_play_.load(); }
 
+    // Object dry-signal source. false (default) = internal per-object sine
+    // tones (preserves historical + test behavior); true = route the input
+    // backend's channel i into object i's dry signal, so a real musical source
+    // (e.g. a stem streamed over the shm ring) flows through the per-object DSP
+    // chain + panner. The per-object active gate still applies (an object is
+    // silent until activated by OSC). Safe to call from any thread.
+    void setObjectSourceInput(bool use_input) noexcept { object_source_input_.store(use_input); }
+    bool objectSourceIsInput() const noexcept { return object_source_input_.load(); }
+
     // ─────────────────────────────────────────────────────────────────────
     // ADR 0018 D-5 — external-player heartbeat liveness.
     //
@@ -338,13 +348,33 @@ public:
     }
     size_t objCacheSize() const noexcept { return obj_cache_.size(); }
 
+    // A3 (test introspection) — per-object input→object route from obj_cache_.
+    // Primary state proof for the routing tests: proves decode→drain→cache
+    // directly. NOT RT-safe; returns the default {-1, 1.0} on OOB.
+    struct InputRoute { int32_t src_ch; float gain; };
+    InputRoute objInputRouteAt(size_t obj) const noexcept {
+        return (obj < obj_cache_.size())
+                   ? InputRoute{obj_cache_[obj].input_src_ch,
+                                obj_cache_[obj].input_gain}
+                   : InputRoute{-1, 1.f};
+    }
+
     // F4b: consistent control-thread snapshot of authoritative object state into
     // scene ObjectSnapshots. Synchronized via the three-buffer published_index_
     // handshake; safe to call from the control loop concurrently with the RT
     // audioBlock. Emits objects driven at least once (touched heuristic). NOT RT.
     // Distinct from objCacheActiveAt (test-only / "Not RT-safe") — this is its
     // own synchronized path.
-    void snapshotObjects(std::vector<ipc::ObjectSnapshot>& out) const;
+    //
+    // C6 (REV4): include_dsp_only extends the "touched" predicate to also emit
+    // objects whose ONLY non-default state is a per-object DSP param (EQ band /
+    // user delay / k_hf). The /sys/state_request resync caller passes true so the
+    // dump reconciles EXACTLY to obj_cache_; /scene/save keeps the default false
+    // → scene-save output stays byte-identical. Both non-RT callers run on
+    // DIFFERENT threads (scene-save @ control loop, state_request @ OSC IO), so
+    // the body is serialized by state_snapshot_mtx_ (the audio writer never locks).
+    void snapshotObjects(std::vector<ipc::ObjectSnapshot>& out,
+                         bool include_dsp_only = false) const;
     std::uint64_t ltcFramesDecoded() const noexcept { return ltc_chase_.framesDecoded(); }
     std::uint64_t ltcRingDrops()     const noexcept { return ltc_chase_.ringDrops(); }
     bool          ltcLocked()        const noexcept { return ltc_chase_.isLocked(); }
@@ -404,6 +434,14 @@ private:
         // 4-band EQ gain (dB) — freq/Q stay at PerObjectChain defaults
         std::array<float, 4> eq_gain_db{0.f, 0.f, 0.f, 0.f};
         float width_rad = 0.f;  // source spread in radians (0 = point source)
+        // A3 — input→object routing. input_src_ch=-1 ⇒ default 1:1 (object i ←
+        // input channel i, byte-identical to the legacy --object-source input);
+        // input_gain is a linear input trim applied at the dry-source copy stage.
+        // int32_t (NOT int16) avoids the wrap mis-route class; both ride the
+        // fixed snap_buf_ copy. /sys/reset → obj_cache_.fill(ObjCache{}) restores
+        // these defaults for free.
+        int32_t input_src_ch = -1;
+        float   input_gain   = 1.f;
     };
     std::array<ObjCache, MAX_OBJECTS> obj_cache_{};
 
@@ -438,6 +476,27 @@ private:
     std::array<std::array<ObjCache, MAX_OBJECTS>, 3> snap_buf_{}; // ~24 KB @128
     std::atomic<int>         snap_published_idx_{-1};   // last index published; -1 = none yet
     mutable std::atomic<int> snap_reader_busy_idx_{-1}; // index reader is reading; -1 = idle
+
+    // C6 (REV2 amendment #1) — serialize the TWO non-RT snapshotObjects() readers
+    // that run on DIFFERENT threads: /scene/save (control loop) + /sys/state_request
+    // (OSC IO). Both stomp the single snap_reader_busy_idx_ claim slot, so without
+    // this lock two concurrent readers break the F4b writer-avoidance invariant →
+    // torn read vs the audio writer. The audio WRITER never takes this mutex —
+    // the RT publish path (two atomic loads + one release store) stays lock-free.
+    // mutable because snapshotObjects() is const.
+    mutable std::mutex state_snapshot_mtx_;
+    // C6 (Decision 3) — pre-reserved dump buffer for the state_request handler so
+    // steady-state resync requests allocate nothing. reserve(MAX_OBJECTS) in ctor.
+    std::vector<ipc::ObjectSnapshot> state_dump_buf_;
+    // C6 (Decision 6) — debounce: ignore a state_request within 500 ms of the last
+    // serviced one. Single-threaded on the OSC IO thread → no locking needed.
+    // NOTE: this inherits the whole-sink "single OSC-IO-thread" contract (shared
+    // with cmd_fifo_ enqueue, echo marks, and flush). If SysStateRequest is ever
+    // delivered concurrently via an in-process injectCommand() path (VST3 host
+    // control plane) AND the UDP IO thread, this plain int64_t + the echo rate
+    // tokens would race — make it atomic / per-source then.
+    int64_t last_state_request_ms_ = 0;
+    static constexpr int64_t kStateRequestDebounceMs = 500; // REV2 amendment #3
 
     // Per-object sine oscillator (RT-safe: no alloc)
     std::array<float, MAX_OBJECTS> osc_phases_{};
@@ -516,6 +575,9 @@ private:
     std::atomic<bool>          render_ready_{false};
     std::atomic<bool>          transport_play_{true};
     std::atomic<bool>          ltc_chase_enable_{false};
+    // false = internal sine tones (default); true = route input_channels[i] →
+    // object i dry signal (real musical source). See setObjectSourceInput().
+    std::atomic<bool>          object_source_input_{false};
 
     // ADR 0018 D-5 — external-player heartbeat liveness state. All accessed
     // from the control / IO thread only (plus a relaxed read for /sys/state).

@@ -13,9 +13,10 @@
 #include "util/RtAssertNoAlloc.h"
 #include "WavWriter.h"
 
-#if defined(SPE_HAVE_JUCE)
+// DanteBackend.h is JUCE-free safe (JUCE parts are guarded inside it); include
+// unconditionally so list_output_devices() / --list-audio-devices works in both
+// builds (returns empty without JUCE).
 #include "audio_io/DanteBackend.h"
-#endif
 
 // ADR 0019 PR3: shm input backend (POSIX shm — Linux/macOS only, JUCE-free).
 #if defined(__linux__) || defined(__APPLE__)
@@ -362,6 +363,14 @@ int main(int argc, char** argv) {
     std::string wav_path;
     std::string layout_path  = resolve_default_layout("lab_8ch.yaml");
     std::string osc_dialect  = "legacy"; // "legacy" or "adm"
+    // Sec H3 — optional shared-secret for the OSC command surface. Empty = no
+    // auth (default). When set, only clients presenting it via /sys/auth are
+    // admitted. Recommended whenever --osc-bind is non-loopback.
+    std::string osc_token;
+    // Object dry-signal source: "sine" (default, internal test tones) or
+    // "input" (route input_channels[i] → object i; pair with --input-backend
+    // shm:<path> to render a real streamed stem through the per-object DSP).
+    std::string object_source = "sine";
     // v0.5.1 Q1 — optional one-shot binaural telemetry exercise. The
     // standalone otherwise never invokes the probe path (only VST3
     // setActive does), so the soak harness has no way to observe the
@@ -393,6 +402,16 @@ int main(int argc, char** argv) {
         else if (a == "--wav")         wav_path     = nexts("");
         else if (a == "--layout")      layout_path  = nexts(layout_path.c_str());
         else if (a == "--osc-dialect") osc_dialect  = nexts("legacy");
+        else if (a == "--osc-token")   osc_token    = nexts("");
+        else if (a == "--object-source") object_source = nexts("sine");
+        else if (a == "--list-audio-devices") {
+            const auto devs = spe::audio_io::list_output_devices();
+            std::printf("Available output audio devices (%zu):\n", devs.size());
+            for (const auto& d : devs) std::printf("  %s\n", d.c_str());
+            if (devs.empty())
+                std::printf("  (none — headless host / no soundcard / JUCE-free build)\n");
+            return 0;
+        }
         else if (a == "--binaural-sofa") binaural_sofa = nexts("");
         else if (a == "--binaural-enable") binaural_enable = true;
         else if (a == "--force-probe") force_probe = true;
@@ -409,20 +428,34 @@ int main(int argc, char** argv) {
             emit_after_ms      = nexti(emit_after_ms);
         }
         else if (a == "--help" || a == "-h") {
-            std::printf("Usage: spatial_engine_core [--backend null|dante] "
+            std::printf("Usage: spatial_engine_core [--backend null|dante|device[:NAME]] "
                         "[--input-backend shm:<path>|null|dante] "
                         "[--seconds N] [--block 64] [--channels 8] [--rate 48000] "
                         "[--osc-port 9100] [--osc-bind 127.0.0.1] "
                         "[--wav OUTPUT.wav] [--layout PATH.yaml] "
-                        "[--osc-dialect legacy|adm] [--binaural-sofa PATH] "
+                        "[--osc-dialect legacy|adm] [--object-source sine|input] "
+                        "[--osc-token SECRET] "
+                        "[--list-audio-devices] [--binaural-sofa PATH] "
                         "[--binaural-enable] [--force-probe] "
                         "[--emit-no-sofa-after-ms N]\n"
                         "\n"
+                        "  --backend X        Output sink. null = discard; device[:NAME] = a real\n"
+                        "                   soundcard via JUCE AudioDeviceManager (default device,\n"
+                        "                   or the named one); dante = device alias (lab default).\n"
+                        "                   --list-audio-devices prints the available outputs.\n"
                         "  --input-backend X  Input source, distinct from --backend (output).\n"
                         "                   shm:<path> = pull PCM from a producer ring (Linux/\n"
                         "                   macOS); pairs with --backend for output. null = a\n"
                         "                   distinct null INPUT source. dante (default) = current\n"
                         "                   behavior (the --backend selection drives I/O).\n"
+                        "  --object-source X  Object dry signal. sine (default) = internal test\n"
+                        "                   tones; input = route input_channels[i] into object i\n"
+                        "                   (pair with --input-backend shm:<path> to render a real\n"
+                        "                   streamed stem through the per-object DSP + panner).\n"
+                        "                   Per-object input routing (channel remap + per-route\n"
+                        "                   gain + fan-out) is set at RUNTIME over OSC — no new\n"
+                        "                   flag: /obj/input ,iif obj_id src_ch gain (src_ch=-1\n"
+                        "                   keeps the default 1:1; out-of-range src → sine tone).\n"
                         "  --osc-bind ADDR  Inbound OSC UDP bind address. Default 127.0.0.1\n"
                         "                   (loopback only — single-host IPC). Pass 0.0.0.0\n"
                         "                   to bind every interface (cross-machine setups).\n"
@@ -446,11 +479,22 @@ int main(int argc, char** argv) {
     // explicit non-loopback opt-in prints a WARNING so operators understand
     // they have just exposed the unauthenticated OSC surface beyond 127.0.0.1.
     engine.oscBackend().setBindAddr(osc_bind);
+    // Sec H3 — apply the OSC auth token (empty = disabled) BEFORE start().
+    engine.oscBackend().setAuthToken(osc_token);
+    if (!osc_token.empty()) {
+        std::printf("  osc-auth: ON (clients must present the token via /sys/auth)\n");
+    }
     if (osc_bind != "127.0.0.1") {
-        std::fprintf(stderr,
-            "WARNING: OSC listener bound to %s. Engine is reachable from LAN; "
-            "OSC commands are unauthenticated. Use only on trusted networks.\n",
-            osc_bind.c_str());
+        if (osc_token.empty()) {
+            std::fprintf(stderr,
+                "WARNING: OSC listener bound to %s with NO --osc-token. The engine "
+                "is reachable from LAN and the command surface is UNAUTHENTICATED. "
+                "Pass --osc-token <secret> or use only on trusted networks.\n",
+                osc_bind.c_str());
+        } else {
+            std::fprintf(stderr,
+                "NOTE: OSC listener bound to %s; token auth is ON.\n", osc_bind.c_str());
+        }
     }
 
     // Apply OSC dialect (--osc-dialect legacy|adm)
@@ -460,6 +504,13 @@ int main(int argc, char** argv) {
     } else {
         std::printf("  osc-dialect: legacy\n");
     }
+
+    // Apply object dry-signal source (--object-source sine|input)
+    const bool object_source_input = (object_source == "input");
+    engine.setObjectSourceInput(object_source_input);
+    std::printf("  object-source: %s\n",
+                object_source_input ? "input (route input_channels[i] → object i)"
+                                    : "sine (internal test tones)");
 
     // Load speaker layout
     auto layout_result = spe::geometry::load_layout(layout_path);
@@ -548,11 +599,21 @@ int main(int argc, char** argv) {
         // from --backend null (output). This drives the loop with a null input.
         backend = spe::audio_io::make_null_backend(sr, channels, block_size,
                                                    /*input_channels=*/channels);
-    } else if (backend_name == "dante") {
+    } else if (backend_name == "dante"
+               || backend_name == "device"
+               || backend_name.rfind("device:", 0) == 0) {
 #if defined(SPE_HAVE_JUCE)
-        backend = spe::audio_io::make_dante_backend(sr, block_size);
+        // Real soundcard output via JUCE AudioDeviceManager. "dante" = default
+        // device (the Dante virtual card in the lab); "device" = default;
+        // "device:<name>" = a specific output device (see --list-audio-devices).
+        std::string dev_name;
+        if (backend_name.rfind("device:", 0) == 0)
+            dev_name = backend_name.substr(std::string("device:").size());
+        backend = spe::audio_io::make_device_backend(sr, block_size, dev_name);
 #else
-        std::fprintf(stderr, "[warn] dante requires JUCE; using null.\n");
+        std::fprintf(stderr,
+            "[warn] '%s' needs a JUCE build (AudioDeviceManager); using null.\n",
+            backend_name.c_str());
         backend = spe::audio_io::make_null_backend(sr, channels, block_size);
         backend_name = "null";
 #endif
@@ -796,5 +857,12 @@ int main(int argc, char** argv) {
     std::printf("  stopped. blocks=%llu xruns=%llu\n",
                 static_cast<unsigned long long>(engine.blocksProcessed()),
                 static_cast<unsigned long long>(driver->xrunCount()));
+    // Sec H3 — audit summary (only meaningful when token auth was enabled).
+    if (engine.oscBackend().authEnabled()) {
+        std::printf("  osc-auth audit: accepted=%llu rejected=%llu rate_dropped=%llu\n",
+                    static_cast<unsigned long long>(engine.oscBackend().authAccepted()),
+                    static_cast<unsigned long long>(engine.oscBackend().authRejected()),
+                    static_cast<unsigned long long>(engine.oscBackend().rateDropped()));
+    }
     return 0;
 }

@@ -9,7 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Post-v0.9.1 follow-ups, not yet released.
 
-- (none yet)
+### Added
+- **A3 — per-object input→object audio routing** (v0.9 Lane 6). Route any
+  input channel into any object with a per-route linear gain (input trim) and
+  many-to-one fan-out, replacing the hardcoded 1:1 `input_channels[i]→object i`
+  mapping. Set at runtime over OSC (no new CLI flag):
+  - **Inbound:** `/obj/input ,iif <obj_id:int> <src_ch:int> <gain:float>` —
+    `src_ch = -1` is the sentinel "default 1:1 route" (object i ← input channel
+    i) and also the reset value; `gain` is linear (unclamped — negative = phase
+    invert, matching `/obj/gain`). Native `/obj/*` commands carry the
+    `schema_version`+`seq` int prefix on the wire (`,iiiif schema seq obj_id
+    src_ch gain`), like `/obj/dsp`.
+  - **Gain semantics:** `gain` is a **block-stepped** input trim applied at the
+    dry-source copy stage (changes only at block boundaries when the command
+    FIFO drains), consistent with the per-object `gain_lin` (no new click class).
+    It composes multiplicatively with `gain_lin`.
+  - **Out-of-range `src_ch`** (>= the live `input_channel_count`, e.g. a static
+    misconfig) falls through to the object's internal **sine** test tone and
+    silently ignores `gain` — the legacy fallback, audible = diagnosable.
+  - **Default route is byte-identical** to the previous behaviour
+    (`in[n]*1.0f == in[n]`); `--object-source sine` is untouched.
+  - **Resync:** the C6 `/sys/state_request` dump now carries routing —
+    **outbound** `/adm/obj/N/input ,if <src_ch:int> <gain:float>` (one packet
+    per object whose route is non-default; type-tag `,if` ⇒ int slot = src_ch,
+    float slot = gain) — so a client still reconciles EXACTLY to `obj_cache_`.
+    `/scene/save` JSON is unchanged.
+  - **Deferred follow-ups:** F-A3-echo (live per-change echo) and F-A3-persist
+    (routing in scene `toJson`/`fromJson` + `/scene/load` rehydrate).
+  - RT-safe (bounds-checked index + multiply inside `audioBlock`; no
+    alloc/lock/syscall). `/sys/reset` clears all routes to the default.
 
 ## [0.9.1] — 2026-06-08
 
