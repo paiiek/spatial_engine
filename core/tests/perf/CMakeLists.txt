@@ -46,6 +46,20 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR SPATIAL_ENGINE_RUN_SOAK)
              CONFIGURATIONS Release)
     set_tests_properties(soak_scene_save_race PROPERTIES TIMEOUT 120)
 
+    # Phase 4.3 Inc 4 — live speaker-layout swap quiescence handshake. An "audio"
+    # thread spins audioBlock() (draining noise/output commands that read
+    # layout_/noise_chans_/spk_limiters_ UNGATED, plus rendering an active object)
+    # while a "control" thread applies a new layout (8ch<->12ch) >=200 times via
+    # applyLayoutLive. Asserts ZERO data races (under -fsanitize=thread) on the
+    # reallocated layout state AND every output sample finite AND non-silent after
+    # settle (the rebuild published correctly).
+    add_executable(soak_layout_swap_race soak_layout_swap_race.cpp)
+    target_link_libraries(soak_layout_swap_race PRIVATE spe_core Threads::Threads)
+    add_test(NAME soak_layout_swap_race
+             COMMAND soak_layout_swap_race
+             CONFIGURATIONS Release)
+    set_tests_properties(soak_layout_swap_race PROPERTIES TIMEOUT 120)
+
     # v0.9 Lane C (C-M3 + C-M4) — RT-budget + memory-footprint measurement.
     # Drives audioBlock() at the heaviest config (8ch + VBAP + B2 binaural
     # Direct per-object) across object counts {8,16,32,64,96,128}; counts above

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>   // Phase 4.3 Inc 4 — std::this_thread::yield in the swap spin
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1152,6 +1153,26 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         return;
     }
 
+    // Phase 4.3 Inc 4 — runtime layout-swap quiescence. The control thread sets
+    // layout_swap_pending_ (release) before reallocating layout_/noise_chans_/
+    // spk_gain_lin_/spk_delays_/spk_delay_samples_/spk_limiters_ in
+    // reprepareForLayout(). Those are read UNGATED by the OSC drain below
+    // (layout_.channelToIndex / noise_chans_[idx] / spk_limiters_[idx]), so we
+    // retire the callback for the swap window: publish silence, ACK via
+    // layout_swap_quiesced_ (release), and early-return BEFORE the drain and the
+    // CPU-meter start. The single sequential callback acking proves no block is
+    // mid-drain. RT-safe: std::fill_n over the output bus only — no alloc/lock/
+    // syscall (same primitive already used inside this SPE_RT_NO_ALLOC_SCOPE).
+    if (layout_swap_pending_.load(std::memory_order_acquire)) {
+        if (block.output_channels != nullptr) {
+            for (int c = 0; c < block.output_channel_count; ++c)
+                if (block.output_channels[c] != nullptr)
+                    std::fill_n(block.output_channels[c], block.num_frames, 0.0f);
+        }
+        layout_swap_quiesced_.store(true, std::memory_order_release);
+        return;
+    }
+
     // v0.9 Lane A (A-M1) — stamp block-entry AFTER the overrun guard so a
     // refused (oversized) block never enters the wall-time sample stream.
     // Clock read only (alloc/lock/syscall-free; vDSO on Linux).
@@ -2182,6 +2203,77 @@ static std::string defaultLayoutLibraryDir()
     return base + "/spatial_engine/layouts";
 }
 
+// Phase 4.3 Inc 4 — apply a new layout to the RUNNING engine via the quiescence
+// handshake. Control-thread only (driven from Op::Load on the 1 Hz tick). The
+// audio callback is single-threaded and non-reentrant, so one block acking from
+// its silence early-return proves no block is in the OSC drain; we then mutate
+// layout_ + reprepareForLayout() in place and release the callback. Mirrors the
+// control-tick threading of applyPendingBinauralSofa(); the handshake itself is
+// net-new (the AmbiDecoder/SOFA idioms are publish-on-tick double-buffers, which
+// cannot cover a swap that reallocates the whole renderer set in place).
+bool SpatialEngine::applyLayoutLive(const spe::geometry::SpeakerLayout& new_layout)
+{
+    // Fast path: no audio callback can be running → swap directly. sample_rate_/
+    // max_block_size_ are not yet valid until prepareToPlay, which will run
+    // reprepareForLayout() for us at start; just stage layout_.
+    // NOTE: this prepared_ read (and the whole handshake) assumes applyLayoutLive
+    // runs on the SAME lane as prepareToPlay/releaseResources (the control tick).
+    // If a host retired the callback on another thread mid-spin, the swap simply
+    // times out (no acker) and fails safe — benign.
+    if (!prepared_.load(std::memory_order_acquire)) {
+        layout_     = new_layout;
+        has_layout_ = true;
+        return true;
+    }
+
+    // 1) Arm. Reset the ack BEFORE publishing the request so the first ack we
+    //    observe is necessarily fresh (stored by a block that saw THIS request),
+    //    never a stale leftover. render_ready_=false gates the render section as
+    //    defense-in-depth (the drain reads are covered by the quiesce check).
+    layout_swap_quiesced_.store(false, std::memory_order_relaxed);
+    render_ready_.store(false, std::memory_order_release);
+    layout_swap_pending_.store(true, std::memory_order_release);
+
+    // 2) Bounded spin for the callback's quiesced ack (control MAY block; this is
+    //    not the audio thread). ~250 ms ≈ 150+ blocks @64/48k.
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds(250);
+    bool acked = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (layout_swap_quiesced_.load(std::memory_order_acquire)) { acked = true; break; }
+        std::this_thread::yield();
+    }
+    if (!acked) {
+        // Audio thread not acking within budget (stalled/xrun storm). Fail SAFE:
+        // abort, restore the prior render gate, leave layout_ untouched.
+        layout_swap_pending_.store(false, std::memory_order_release);
+        render_ready_.store(true, std::memory_order_release);
+        return false;
+    }
+
+    // 3) Callback retired. Mutate + rebuild OFF the audio thread. reprepareForLayout
+    //    store-releases render_ready_=true once all new state is built.
+    layout_     = new_layout;
+    has_layout_ = true;
+    try {
+        reprepareForLayout();
+    } catch (...) {
+        // reprepareForLayout (vector realloc / renderer prepare) threw — almost
+        // certainly bad_alloc. Clear pending_ FIRST so the audio callback is never
+        // wedged into permanent silence; render_ready_ stays false so the
+        // bounds-checked OSC drain resumes safely while the render section stays
+        // gated until a future successful prepare. Then propagate: OOM is fatal
+        // per engine convention, but we re-armed the callback safely either way.
+        layout_swap_pending_.store(false, std::memory_order_release);
+        throw;
+    }
+
+    // 4) Release the callback. All new state is published-before this release, so
+    //    the first resumed block (acquire-loads false) sees the rebuilt vectors.
+    layout_swap_pending_.store(false, std::memory_order_release);
+    return true;
+}
+
 // Phase 4.3 Inc 2b — control-tick layout-slot apply. Runs on the ~1 Hz control
 // tick (same thread + cadence as applyPendingBinauralSofa). This function is the
 // SOLE owner of layout_library_: it lazily constructs it and performs ALL slot
@@ -2211,16 +2303,26 @@ void SpatialEngine::applyPendingLayoutSlotOp()
         break;
     }
     case Op::Load: {
-        // Inc 2b: validate + (notionally) stage ONLY — NO live layout swap. The
-        // running layout is left untouched; live application is deferred to Inc 4.
-        // We decode + invoke LayoutLibrary::load() to validate the slot and report
-        // success (with the loaded layout name) or the parse-error string.
+        // Inc 4: validate, then LIVE-apply behind the quiescence handshake. The
+        // load failure path is unchanged (parse-error string, status 0); on a
+        // valid layout we now swap it into the running engine via applyLayoutLive
+        // (control-thread, retires the audio callback, reprepareForLayout off the
+        // audio thread). status: 1=applied, 0=swap aborted (ack timeout).
         geometry::LayoutResult res = lib.load(op.slot);
-        const bool ok = geometry::is_ok(res);
-        const std::string detail = ok ? std::get<geometry::SpeakerLayout>(res).name
-                                      : std::get<std::string>(res);
+        if (!geometry::is_ok(res)) {
+            osc_backend_.sendReply("/layout/slot/load", ",iiss",
+                                   op.slot, 0, std::get<std::string>(res).c_str(), "");
+            break;
+        }
+        const geometry::SpeakerLayout& loaded = std::get<geometry::SpeakerLayout>(res);
+        const std::string name = loaded.name;
+        const bool applied = applyLayoutLive(loaded);
+        // On a swap timeout the layout is NOT live, so blank the name slot (s0)
+        // for symmetry with the parse-error path — a client reading s0 on failure
+        // must not see the name of a layout that never went live.
         osc_backend_.sendReply("/layout/slot/load", ",iiss",
-                               op.slot, ok ? 1 : 0, detail.c_str(), "");
+                               op.slot, applied ? 1 : 0,
+                               applied ? name.c_str() : "", applied ? "applied" : "swap_timeout");
         break;
     }
     case Op::Clear: {

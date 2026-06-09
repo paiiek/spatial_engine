@@ -590,6 +590,14 @@ private:
     void computeLateFdnGains(const iae::Vec3& opp, float lateDiffuse01,
                              int n_spk) noexcept;
 
+    // Phase 4.3 Inc 4 — apply a new speaker layout to the RUNNING engine behind
+    // the quiescence handshake. Control-thread only (the 1 Hz tick / Op::Load):
+    // arms layout_swap_pending_, bounded-spins for the audio callback's quiesced
+    // ack, then swaps layout_ + reprepareForLayout() off the audio thread and
+    // releases the callback. When !prepared_ (no callback yet) it swaps directly.
+    // Returns false (layout untouched) if the ack times out. NOT RT-safe (spins).
+    bool applyLayoutLive(const spe::geometry::SpeakerLayout& new_layout);
+
     // ⑥d Shoebox early reflections — per-object first-order image-source taps.
     // Each active object's send-scaled dry signal is delayed through 6 per-image
     // ring buffers and panned (width-spread VBAP) onto the bus. Predelay /
@@ -819,6 +827,15 @@ private:
 
     std::atomic<bool>          prepared_{false};
     std::atomic<bool>          render_ready_{false};
+    // Phase 4.3 Inc 4 — runtime layout-swap quiescence handshake (control↔audio).
+    // Control store-releases _pending=true before mutating layout_/noise_chans_/
+    // spk_gain_lin_/spk_delays_/spk_delay_samples_/spk_limiters_ in
+    // reprepareForLayout(); audioBlock() acks via _quiesced (release) from its
+    // silence early-return, proving the single sequential callback is not in the
+    // OSC drain (which reads those ungated). No double-buffer — the swap mutates
+    // in place after the callback retires. See applyLayoutLive().
+    std::atomic<bool>          layout_swap_pending_{false};
+    std::atomic<bool>          layout_swap_quiesced_{false};
     std::atomic<bool>          transport_play_{true};
     std::atomic<bool>          ltc_chase_enable_{false};
 

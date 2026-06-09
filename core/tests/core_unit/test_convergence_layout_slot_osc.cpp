@@ -12,9 +12,9 @@
 //   (1) save -> file actually written (verified by an independent LayoutLibrary
 //       opened on the same dir) + ,iiss success reply.
 //   (2) list / current replies (occupied slots + labels + summary terminator).
-//   (3) load = validate/stage ONLY — the RUNNING engine layout is left
-//       untouched (Inc 2b defers live apply to Inc 4); reply carries the loaded
-//       layout's name.
+//   (3) load = LIVE apply (Inc 4) behind the quiescence handshake — a concurrent
+//       audio thread acks; the running layout is swapped (pre_swap -> running_rt)
+//       and the reply carries the loaded layout's name + status applied.
 //   (4) clear -> file removed + success reply.
 //   (5) error paths: load empty slot, save out-of-range slot -> status 0.
 //
@@ -22,6 +22,7 @@
 // accumulate in the SPSC ring and are read back via outboundPeek/Pending.
 
 #include "core/SpatialEngine.h"
+#include "audio_io/AudioCallback.h"
 #include "geometry/LayoutLibrary.h"
 #include "geometry/SpeakerLayout.h"
 
@@ -30,12 +31,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 static int failures = 0;
@@ -200,17 +203,45 @@ int main() {
     }
     drainAll();
 
-    // (4) load slot 3 = validate/stage ONLY (no live apply) -----------------
-    const std::string running_before = engine.currentLayout().name;
-    drive(oscSlotI("/layout/slot/load", 3));
+    // (4) load slot 3 = LIVE apply (Inc 4) behind the quiescence handshake -----
+    // The swap needs the audio callback to ack, so spin a concurrent audio
+    // thread for the duration of the load. We first set a DISTINCT current layout
+    // ("pre_swap", same 3-spk geometry → buffers stay valid) BEFORE starting the
+    // audio thread (so this unguarded setLayout does not race a render), then
+    // prove the load swaps it to the slot's "running_rt".
+    // NB: setLayout swaps layout_ WITHOUT re-running reprepareForLayout, so the
+    // pre_swap window renders with stale "running_rt" triangulation — harmless
+    // here since this test asserts only the swap (name) + the quiesce ack, not
+    // render correctness.
+    engine.setLayout(makeLayout("pre_swap"));
+    CHECK(engine.currentLayout().name == "pre_swap", "precondition: current layout is pre_swap");
+    {
+        std::atomic<bool> astop{false};
+        std::thread audio([&] {
+            std::vector<std::vector<float>> b(8, std::vector<float>(64, 0.f));
+            std::vector<float*> p(8);
+            for (int c = 0; c < 8; ++c) p[c] = b[static_cast<size_t>(c)].data();
+            while (!astop.load(std::memory_order_relaxed)) {
+                spe::audio_io::AudioBlock blk;
+                blk.output_channels = p.data();
+                blk.output_channel_count = 8;
+                blk.num_frames = 64;
+                blk.sample_rate = 48000.0;
+                engine.audioBlock(blk);   // acks the quiesce request → swap proceeds
+            }
+        });
+        drive(oscSlotI("/layout/slot/load", 3));   // applyLayoutLive spins for the ack
+        astop.store(true, std::memory_order_relaxed);
+        audio.join();
+    }
     {
         Reply r = reply(0);
         CHECK(r.addr == "/layout/slot/load", "load reply addr");
-        CHECK(r.i0 == 3 && r.i1 == 1, "load reply slot 3 status success");
-        CHECK(r.s0 == "running_rt", "load reply carries saved layout name");
+        CHECK(r.i0 == 3 && r.i1 == 1, "load slot 3 -> status applied (Inc 4 live swap)");
+        CHECK(r.s0 == "running_rt", "load reply carries loaded layout name");
     }
-    CHECK(engine.currentLayout().name == running_before,
-          "load does NOT mutate the running layout (Inc 2b: stage only)");
+    CHECK(engine.currentLayout().name == "running_rt",
+          "load APPLIES the layout live (Inc 4): pre_swap -> running_rt");
     drainAll();
 
     // (5) clear slot 3 ------------------------------------------------------

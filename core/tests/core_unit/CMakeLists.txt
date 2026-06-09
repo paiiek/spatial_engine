@@ -113,7 +113,7 @@ add_test(NAME convergence_layout_library COMMAND test_convergence_layout_library
 # decode -> pending op -> applyPendingLayoutSlotOp() -> LayoutLibrary file I/O +
 # ,iiss replies, plus the control-thread-only / load-stages-only contract.
 add_executable(test_convergence_layout_slot_osc test_convergence_layout_slot_osc.cpp)
-target_link_libraries(test_convergence_layout_slot_osc PRIVATE spe_core)
+target_link_libraries(test_convergence_layout_slot_osc PRIVATE spe_core Threads::Threads)
 add_test(NAME convergence_layout_slot_osc COMMAND test_convergence_layout_slot_osc)
 
 # Phase 4.3 Inc 3 — reprepareForLayout() is a byte-identical extraction of
