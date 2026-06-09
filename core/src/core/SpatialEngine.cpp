@@ -1703,6 +1703,12 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
         // Deinterleave mix_buf_ → planar output_channels (speaker bus)
         // Apply per-speaker delay (DelayLine) and gain during deinterleave.
         const int out_ch = std::min(block.output_channel_count, n_spk);
+        // Phase 4.3 Inc 5 — channel-count guard. The physical output bus is fixed
+        // at backend start; a layout with more speakers than physical channels has
+        // its tail speakers [out_ch, n_spk) silently unrouted. Publish that count
+        // (relaxed) so the control tick can emit a one-shot /sys/warning.
+        unrouted_speakers_.store(std::max(0, n_spk - block.output_channel_count),
+                                 std::memory_order_relaxed);
         for (int spk = 0; spk < out_ch; ++spk) {
             if (block.output_channels && block.output_channels[spk]) {
                 const float g = (spk < static_cast<int>(spk_gain_lin_.size()))
@@ -1782,6 +1788,15 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
                 block.output_channels[spk][n] = lim.processSample(block.output_channels[spk][n]);
             }
         }
+
+        // Phase 4.3 Inc 5 — zero-fill the physical output channels the current
+        // layout does NOT drive ([out_ch, output_channel_count)). The render
+        // loops above only write [0, out_ch); without this, a swap to a SMALLER
+        // layout leaves stale audio lingering on the now-orphaned channels (and
+        // not every backend zeroes its buffer per block). RT-safe: std::fill_n.
+        for (int c = out_ch; c < block.output_channel_count; ++c)
+            if (block.output_channels && block.output_channels[c])
+                std::fill_n(block.output_channels[c], block.num_frames, 0.0f);
 
         // v0.5 P3: B1 per-object HRTF summation. Always render into the
         // internal binaural_l_buf_/binaural_r_buf_ when an HRTF is loaded;
@@ -2423,6 +2438,29 @@ bool SpatialEngine::checkPlayerHeartbeatStale(int64_t now_unix_ms) noexcept
     osc_backend_.sendReply("/sys/warning", ",iis", 0, 0,
                            "player_heartbeat_stale", seconds_str);
     return true;
+}
+
+// Phase 4.3 Inc 5 — control-thread one-shot warning when the live layout has
+// more speakers than the fixed physical output bus (the tail speakers are
+// silently unrouted). Latched so it emits once per overflow episode and re-arms
+// when a later layout fits. Mirrors checkPlayerHeartbeatStale's latch idiom.
+// Called from the bin's ~1 Hz control tick. The audio thread publishes the count
+// (unrouted_speakers_, relaxed) from the render output stage.
+void SpatialEngine::emitLayoutOverflowWarning() noexcept
+{
+    const int unrouted = unrouted_speakers_.load(std::memory_order_relaxed);
+    if (unrouted <= 0) {
+        layout_overflow_latched_.store(false, std::memory_order_relaxed);  // re-arm
+        return;
+    }
+    if (layout_overflow_latched_.load(std::memory_order_relaxed))
+        return;  // already warned for this episode
+    layout_overflow_latched_.store(true, std::memory_order_relaxed);
+
+    char detail[24];
+    std::snprintf(detail, sizeof(detail), "%d", unrouted);
+    osc_backend_.sendReply("/sys/warning", ",iis", 0, 0,
+                           "layout_exceeds_output", detail);
 }
 
 }  // namespace spe::core

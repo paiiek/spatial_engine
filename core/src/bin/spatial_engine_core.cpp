@@ -858,6 +858,7 @@ int main(int argc, char** argv) {
             engine.applyPendingAmbiDecoderChange();
             engine.applyPendingBinauralSofa(); // B-M3: live SOFA swap on ~1 Hz control tick
             engine.applyPendingLayoutSlotOp(); // Phase 4.3 Inc 2b: layout-slot file I/O off the audio thread
+            engine.emitLayoutOverflowWarning(); // Phase 4.3 Inc 5: warn if layout speakers > physical output bus
         }
 
         // v0.9 Lane A (A-M1) — ~1 Hz /sys/metrics emit. UNCONDITIONAL (every

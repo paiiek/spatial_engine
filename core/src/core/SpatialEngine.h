@@ -305,6 +305,12 @@ public:
     // seen yet (last_player_ping_unix_ms_ == 0).
     bool checkPlayerHeartbeatStale(int64_t now_unix_ms) noexcept;
 
+    // Phase 4.3 Inc 5 — control-thread one-shot /sys/warning when the live layout
+    // has more speakers than the fixed physical output bus (tail speakers silently
+    // unrouted). Reads the audio-thread-published unrouted_speakers_ count;
+    // latched per overflow episode. Called from the bin's ~1 Hz control tick.
+    void emitLayoutOverflowWarning() noexcept;
+
     // Test-only: deterministically record an external player ping at a given
     // wall-clock and clear the staleness latch (mirrors the control-thread
     // HbPing-from-external path without needing a UDP round-trip).
@@ -848,6 +854,13 @@ private:
     std::atomic<int64_t>       last_player_ping_unix_ms_{0};
     int64_t                    last_stale_warning_unix_ms_{0};
     std::atomic<bool>          player_stale_latched_{false};
+    // Phase 4.3 Inc 5 — channel-count guard. The audio render stage publishes the
+    // number of layout speakers beyond the physical output bus (max(0, n_spk -
+    // output_channel_count)); the control tick reads it and emits a latched
+    // one-shot /sys/warning "layout_exceeds_output". Audio writes (relaxed),
+    // control reads/latches — no torn state (a single scalar).
+    std::atomic<int>           unrouted_speakers_{0};
+    std::atomic<bool>          layout_overflow_latched_{false};
     // v0.4 — control-thread storage for runtime path injection. Audio path
     // does NOT read these directly; consumed by prepareToPlay() / VST3
     // setupProcessing() at block boundaries.

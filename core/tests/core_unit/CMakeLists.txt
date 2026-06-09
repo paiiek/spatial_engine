@@ -122,6 +122,12 @@ add_executable(test_convergence_reprepare_identical test_convergence_reprepare_i
 target_link_libraries(test_convergence_reprepare_identical PRIVATE spe_core)
 add_test(NAME convergence_reprepare_identical COMMAND test_convergence_reprepare_identical)
 
+# Phase 4.3 Inc 5 — physical-output channel-count guard: orphaned channels are
+# zero-filled, and a layout exceeding the physical bus emits a latched warning.
+add_executable(test_convergence_layout_channel_guard test_convergence_layout_channel_guard.cpp)
+target_link_libraries(test_convergence_layout_channel_guard PRIVATE spe_core)
+add_test(NAME convergence_layout_channel_guard COMMAND test_convergence_layout_channel_guard)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)
