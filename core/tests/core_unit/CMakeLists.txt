@@ -109,6 +109,13 @@ add_executable(test_convergence_layout_library test_convergence_layout_library.c
 target_link_libraries(test_convergence_layout_library PRIVATE spe_core)
 add_test(NAME convergence_layout_library COMMAND test_convergence_layout_library)
 
+# Dreamscape Convergence Phase 4.3 inc 2b — /layout/slot/* OSC wiring:
+# decode -> pending op -> applyPendingLayoutSlotOp() -> LayoutLibrary file I/O +
+# ,iiss replies, plus the control-thread-only / load-stages-only contract.
+add_executable(test_convergence_layout_slot_osc test_convergence_layout_slot_osc.cpp)
+target_link_libraries(test_convergence_layout_slot_osc PRIVATE spe_core)
+add_test(NAME convergence_layout_slot_osc COMMAND test_convergence_layout_slot_osc)
+
 # Dreamscape Convergence ④ — WFS full modes (ported computeWavefieldSynthesisDriving
 # + WFSRenderer): plane wave / curvature / obliquity / gain+delay shaping / VBAP blend.
 add_executable(test_convergence_wfs test_convergence_wfs.cpp)

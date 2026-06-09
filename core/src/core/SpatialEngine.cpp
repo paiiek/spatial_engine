@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace spe::core {
@@ -276,10 +277,31 @@ SpatialEngine::SpatialEngine(int listen_port)
                     const auto* entry = hrtf_catalog_.find(p->name);
                     if (entry && !entry->speh_path.empty()) {
                         pending_binaural_sofa_path_ = entry->speh_path;
-                        pending_binaural_sofa_flag_.store(true, std::memory_order_relaxed);
+                        // release/acquire (paired with applyPendingBinauralSofa's
+                        // acquire-load): publish pending_binaural_sofa_path_ before
+                        // the flag so the control tick never sees a torn std::string.
+                        pending_binaural_sofa_flag_.store(true, std::memory_order_release);
                         state_model_.setPendingSofaName(p->name);
                     }
                     // Out-of-catalog name → safe no-op (no crash).
+                }
+                return;
+            case ipc::CommandTag::LayoutSlot:
+                // Phase 4.3 Inc 2b — stash the layout-slot op for the ~1 Hz
+                // control tick (applyPendingLayoutSlotOp), mirroring the
+                // SysBinauralSofaSelect early-return above. The payload carries a
+                // std::string label; the copy here runs on the OSC-IO/control
+                // thread (alloc is FINE — NOT the audio drain). The control tick
+                // is the SOLE owner of the LayoutLibrary and performs all file
+                // I/O + replies. Audio thread is NOT involved — early-return path
+                // (no QueuedCmd is enqueued).
+                if (auto* p = std::get_if<ipc::PayloadLayoutSlot>(&cmd.payload)) {
+                    pending_layout_op_ = *p;
+                    // release: publish the pending_layout_op_ payload (incl. its
+                    // std::string label) BEFORE the flag flips, so the control
+                    // tick's acquire-load observes a fully-written op (no torn
+                    // std::string read across the UDP-IO → control-tick handoff).
+                    pending_layout_op_flag_.store(true, std::memory_order_release);
                 }
                 return;
             case ipc::CommandTag::SysBinauralResetDemote:
@@ -2117,7 +2139,7 @@ void SpatialEngine::audioBlock(const spe::audio_io::AudioBlock& block) {
 // never touches pending_binaural_sofa_path_ or pending_binaural_sofa_flag_.
 void SpatialEngine::applyPendingBinauralSofa()
 {
-    if (!pending_binaural_sofa_flag_.load(std::memory_order_relaxed))
+    if (!pending_binaural_sofa_flag_.load(std::memory_order_acquire))
         return;
     pending_binaural_sofa_flag_.store(false, std::memory_order_relaxed);
     const std::string path = pending_binaural_sofa_path_;
@@ -2127,6 +2149,100 @@ void SpatialEngine::applyPendingBinauralSofa()
     // the audio thread and publish via lock-free double-buffer.
     binaural_.loadPendingSofa(path);
     binaural_.applyPendingSofaChange();
+}
+
+// Phase 4.3 Inc 2b — XDG/HOME-derived default layout-library directory. Used
+// only as a fallback when setLayoutLibraryDir() was never called (production
+// wires an explicit path from the bin; tests pass a tmp dir). Control-thread.
+static std::string defaultLayoutLibraryDir()
+{
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base;
+    if (xdg && xdg[0] != '\0') {
+        base = xdg;
+    } else {
+        const char* home = std::getenv("HOME");
+        base = std::string(home ? home : "/tmp") + "/.config";
+    }
+    return base + "/spatial_engine/layouts";
+}
+
+// Phase 4.3 Inc 2b — control-tick layout-slot apply. Runs on the ~1 Hz control
+// tick (same thread + cadence as applyPendingBinauralSofa). This function is the
+// SOLE owner of layout_library_: it lazily constructs it and performs ALL slot
+// file I/O (save/load/clear) + the sendReply emissions here. The audio thread
+// never touches pending_layout_op_ or the LayoutLibrary. Replies use the ,iiss
+// shape (slot, status, detail1, detail2) via the existing IIS sendReply overload.
+void SpatialEngine::applyPendingLayoutSlotOp()
+{
+    if (!pending_layout_op_flag_.load(std::memory_order_acquire))
+        return;
+    pending_layout_op_flag_.store(false, std::memory_order_relaxed);
+    const ipc::PayloadLayoutSlot op = pending_layout_op_;  // copy out (control thread)
+
+    if (!layout_library_) {
+        const std::string dir =
+            layout_library_dir_.empty() ? defaultLayoutLibraryDir() : layout_library_dir_;
+        layout_library_ = std::make_unique<geometry::LayoutLibrary>(dir);
+    }
+    geometry::LayoutLibrary& lib = *layout_library_;
+
+    using Op = ipc::PayloadLayoutSlot::Op;
+    switch (op.op) {
+    case Op::Save: {
+        const bool ok = lib.save(op.slot, currentLayout(), op.label);
+        osc_backend_.sendReply("/layout/slot/save", ",iiss",
+                               op.slot, ok ? 1 : 0, op.label.c_str(), "");
+        break;
+    }
+    case Op::Load: {
+        // Inc 2b: validate + (notionally) stage ONLY — NO live layout swap. The
+        // running layout is left untouched; live application is deferred to Inc 4.
+        // We decode + invoke LayoutLibrary::load() to validate the slot and report
+        // success (with the loaded layout name) or the parse-error string.
+        geometry::LayoutResult res = lib.load(op.slot);
+        const bool ok = geometry::is_ok(res);
+        const std::string detail = ok ? std::get<geometry::SpeakerLayout>(res).name
+                                      : std::get<std::string>(res);
+        osc_backend_.sendReply("/layout/slot/load", ",iiss",
+                               op.slot, ok ? 1 : 0, detail.c_str(), "");
+        break;
+    }
+    case Op::Clear: {
+        const bool ok = lib.clear(op.slot);
+        osc_backend_.sendReply("/layout/slot/clear", ",iiss",
+                               op.slot, ok ? 1 : 0, "", "");
+        break;
+    }
+    case Op::List: {
+        // One reply per occupied slot (slot, occupied_count, label, ""), then a
+        // summary terminator with slot=-1 carrying the count (so a client knows
+        // the listing is complete even when zero slots are occupied).
+        const int count = lib.occupiedCount();
+        for (int s = 0; s < geometry::LayoutLibrary::kSlotCount; ++s) {
+            if (!lib.occupied(s)) continue;
+            const std::string lbl = lib.label(s);
+            osc_backend_.sendReply("/layout/slot/list", ",iiss",
+                                   s, count, lbl.c_str(), "");
+        }
+        osc_backend_.sendReply("/layout/slot/list", ",iiss", -1, count, "", "");
+        break;
+    }
+    case Op::Current: {
+        const int count = lib.occupiedCount();
+        if (op.slot < 0) {
+            // Summary form: -1 + total occupied count.
+            osc_backend_.sendReply("/layout/slot/current", ",iiss",
+                                   -1, count, "", "");
+        } else {
+            const bool occ = lib.occupied(op.slot);
+            const std::string lbl = lib.label(op.slot);
+            osc_backend_.sendReply("/layout/slot/current", ",iiss",
+                                   op.slot, occ ? 1 : 0, lbl.c_str(), "");
+        }
+        break;
+    }
+    }
 }
 
 // v0.5 P4.1 (A6) / v0.5.1 Q1 — moved from header to avoid per-TU duplication.

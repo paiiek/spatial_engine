@@ -9,6 +9,7 @@
 #include "dsp/LogSweep.h"
 #include "dsp/PerObjectChain.h"
 #include "dsp/PinkNoise.h"
+#include "geometry/LayoutLibrary.h"
 #include "geometry/SpeakerLayout.h"
 #include "ipc/Command.h"
 #include "ipc/OSCBackend.h"
@@ -40,6 +41,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace spe::core {
@@ -362,6 +365,25 @@ public:
     // pending path, perform the actual load + swap off the audio thread.
     // Mirrors applyPendingAmbiDecoderChange() in cadence and threading contract.
     void applyPendingBinauralSofa();
+
+    // Phase 4.3 Inc 2b — root directory for the 50-slot layout library. Set
+    // BEFORE start() (mirrors setLayoutPath); the bin derives an XDG path, tests
+    // pass a tmp dir. When unset (empty) applyPendingLayoutSlotOp() falls back to
+    // an XDG/HOME-derived default at first use. Control-thread only.
+    void setLayoutLibraryDir(std::string dir) { layout_library_dir_ = std::move(dir); }
+
+    // Phase 4.3 Inc 2b — control-thread accessor for the CURRENT engine layout,
+    // so /layout/slot/save can capture it. layout_ is written only on the setup
+    // path (setLayout / prepareToPlay); the audio thread never mutates it, so
+    // reading it on the control tick is race-free.
+    const spe::geometry::SpeakerLayout& currentLayout() const noexcept { return layout_; }
+
+    // Phase 4.3 Inc 2b — ~1 Hz control-tick: if a /layout/slot/* command set a
+    // pending op, perform the LayoutLibrary file I/O (save/load/clear) and emit
+    // the reply (list/current/result) off the audio thread. Mirrors
+    // applyPendingBinauralSofa() in cadence and threading contract. The audio
+    // thread NEVER touches pending_layout_op_ / the LayoutLibrary.
+    void applyPendingLayoutSlotOp();
 
     bool getLtcCurrentTimecode(spe::sync::Timecode& out) const noexcept {
         return ltc_chase_.getCurrentTimecode(out);
@@ -840,6 +862,18 @@ private:
     // the audio thread.
     std::string                pending_binaural_sofa_path_;
     std::atomic<bool>          pending_binaural_sofa_flag_{false};
+    // Phase 4.3 Inc 2b — 50-slot speaker-layout library. The OSC command
+    // callback (control/OSC-IO thread) stashes one pending op + sets the flag
+    // and early-returns; applyPendingLayoutSlotOp() on the ~1 Hz control tick is
+    // the SOLE owner of layout_library_ — it lazily constructs it and performs
+    // all file I/O + sendReply there. Single producer (OSC callback) → single
+    // consumer (control tick); the flag uses relaxed stores/loads like the SOFA
+    // pending fields above. Like SysBinauralSofaSelect, only the most-recent
+    // pending op survives a tick window (slow-cadence ops, benign coalescing).
+    ipc::PayloadLayoutSlot                  pending_layout_op_;
+    std::atomic<bool>                       pending_layout_op_flag_{false};
+    std::string                             layout_library_dir_;     // "" → derive default
+    std::unique_ptr<geometry::LayoutLibrary> layout_library_;        // lazy (control tick)
     spe::sync::LtcChase        ltc_chase_;
     std::atomic<std::uint64_t> blocks_processed_{0};
     double                     sample_rate_{48000.0};

@@ -107,6 +107,11 @@ enum class CommandTag : uint8_t {
     // Per-object DSP parameter (EQ band gain, user delay, HF rolloff, reverb send)
     ObjDsp        = 0x60, // /obj/dsp ,iif obj_id param_id value
 
+    // Phase 4.3 Inc 2b — 50-slot speaker-layout library OSC control. One tag,
+    // op-selected payload. Carries a std::string label → control-thread-only
+    // (routed like SysBinauralSofaSelect / RoomPreset, NEVER the POD audio FIFO).
+    LayoutSlot    = 0x61, // /layout/slot/{save,load,clear,list,current}
+
     // Unknown / malformed placeholder
     Unknown       = 0xFF,
 };
@@ -397,6 +402,32 @@ struct PayloadObjDsp {
     float    value  = 0.f;
 };
 
+// Phase 4.3 Inc 2b — 50-slot speaker-layout library control. A single tag with
+// an op selector and a control-thread-only std::string label (Save only). The
+// engine's OSC command callback stashes this as a pending op + atomic flag and
+// early-returns (mirroring SysBinauralSofaSelect); the actual LayoutLibrary file
+// I/O + sendReply happen on the ~1 Hz control-tick (applyPendingLayoutSlotOp).
+// So the std::string never touches the audio thread.
+//
+// Address → op mapping (wire format — NO ,ii seq/id envelope; see note):
+//   /layout/slot/save    ,is  slot label   Save    (slot, label)
+//   /layout/slot/load    ,i   slot         Load    (slot)  — Inc 2b: validate/stage only
+//   /layout/slot/clear   ,i   slot         Clear   (slot)
+//   /layout/slot/list    (no args)         List
+//   /layout/slot/current ,i   slot | none  Current (slot, or summary when absent)
+//
+// Envelope: the decoder's seq/id trap fires ONLY when the first TWO type tags
+// are both 'i' (",ii…"). These verbs lead with a single int followed by a
+// non-int (",is", ",i", "") so the trap never fires — payload_int_offset stays
+// 0 and getInt(0) reads the slot directly. No [seq,id] envelope is required
+// (same single-leading-int convention as /room/enable, /sys/binaural_eq/band).
+struct PayloadLayoutSlot {
+    enum class Op : uint8_t { Save = 0, Load = 1, Clear = 2, List = 3, Current = 4 };
+    Op          op    = Op::List;
+    int32_t     slot  = -1;   // -1 = unspecified (List, or Current summary)
+    std::string label;        // Save only; empty otherwise
+};
+
 struct PayloadOutputGain {
     uint32_t channel = 0;
     float    gain_db = 0.f;
@@ -521,6 +552,7 @@ using CommandPayload = std::variant<
     PayloadTransportPlay,
     PayloadTransportStop,
     PayloadObjDsp,
+    PayloadLayoutSlot,
     PayloadReverbSelect,
     PayloadRoomCtl,
     PayloadRoomPreset,

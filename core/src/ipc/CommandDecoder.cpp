@@ -766,6 +766,42 @@ Command CommandDecoder::buildCommand(const OscArgs& args, uint32_t& reject_count
         } else {
             makeUnknown();
         }
+    } else if (addr.size() > 13 && addr.compare(0, 13, "/layout/slot/") == 0) {
+        // Phase 4.3 Inc 2b — 50-slot speaker-layout library control. Single-
+        // leading-int wire format (no ,ii seq/id header): the second type tag
+        // is 's'/absent, so the seq/id trap above never fires and getInt(0)
+        // reads the slot positionally. The std::string label rides the control
+        // thread (LayoutSlot carries a std::string → never the POD audio FIFO).
+        using LOp = PayloadLayoutSlot::Op;
+        PayloadLayoutSlot p;
+        bool ok = true;
+        if (addr == "/layout/slot/save") {
+            // ,is slot label — empty/missing label is allowed (stored as "").
+            p.op    = LOp::Save;
+            p.slot  = getInt(0);
+            p.label = (args.n_str > 0) ? args.strings[0] : std::string{};
+        } else if (addr == "/layout/slot/load") {
+            p.op   = LOp::Load;
+            p.slot = getInt(0);
+        } else if (addr == "/layout/slot/clear") {
+            p.op   = LOp::Clear;
+            p.slot = getInt(0);
+        } else if (addr == "/layout/slot/list") {
+            p.op   = LOp::List;
+            p.slot = -1;
+        } else if (addr == "/layout/slot/current") {
+            // ,i slot → report that slot; no-arg → report library summary.
+            p.op   = LOp::Current;
+            p.slot = (args.n_int > 0) ? getInt(0) : -1;
+        } else {
+            ok = false;
+        }
+        if (ok) {
+            cmd.tag = CommandTag::LayoutSlot;
+            cmd.payload = p;
+        } else {
+            makeUnknown();
+        }
     } else if (addr.size() > 7 && addr.compare(0, 7, "/noise/") == 0) {
         // Noise generator: /noise/{ch}/{type|gain}
         int ch = -1;

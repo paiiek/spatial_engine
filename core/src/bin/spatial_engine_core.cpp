@@ -90,6 +90,22 @@ static std::string scenes_dir_path()
     return base + "/spatial_engine/scenes";
 }
 
+// Phase 4.3 Inc 2b — 50-slot speaker-layout library directory. Same XDG
+// derivation as scenes_dir_path(); the engine's LayoutLibrary owns one
+// speaker_layout_NN.yaml per slot here.
+static std::string layout_library_dir_path()
+{
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base;
+    if (xdg && xdg[0] != '\0') {
+        base = xdg;
+    } else {
+        const char* home = std::getenv("HOME");
+        base = std::string(home ? home : "/tmp") + "/.config";
+    }
+    return base + "/spatial_engine/layouts";
+}
+
 // Current boot_id (cached on first call; empty string on error).
 static std::string read_boot_id()
 {
@@ -559,6 +575,11 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(scenes_dir, ec);
     }
     spe::ipc::SceneController scene_ctrl(scenes_dir);
+    // Phase 4.3 Inc 2b — root the engine's 50-slot layout library. The engine
+    // lazily constructs the LayoutLibrary on the control tick at first /layout/
+    // slot/* op; setting the dir here (before the control loop runs) gives it a
+    // stable XDG path. Control-thread only.
+    engine.setLayoutLibraryDir(layout_library_dir_path());
     // F4b — wire the live object-state provider so /scene/save captures the
     // authoritative per-object state from the engine (consistent three-buffer
     // snapshot of obj_cache_), instead of writing an empty objects vector.
@@ -836,6 +857,7 @@ int main(int argc, char** argv) {
             last_ambi_decoder_apply = now;
             engine.applyPendingAmbiDecoderChange();
             engine.applyPendingBinauralSofa(); // B-M3: live SOFA swap on ~1 Hz control tick
+            engine.applyPendingLayoutSlotOp(); // Phase 4.3 Inc 2b: layout-slot file I/O off the audio thread
         }
 
         // v0.9 Lane A (A-M1) — ~1 Hz /sys/metrics emit. UNCONDITIONAL (every
